@@ -27,6 +27,7 @@
 		2B1821F62DEB579E00550CD1 /* WhisperNotes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperNotes.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822072DEB579F00550CD1 /* WhisperNotesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhisperNotesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822112DEB579F00550CD1 /* WhisperNotesUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhisperNotesUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2B1822252DEB5A0000550CD1 /* WhisperKit */ = {isa = PBXSwiftPackageProductDependency; package = 2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */; productName = WhisperKit; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -125,6 +126,7 @@
 			);
 			name = WhisperNotes;
 			packageProductDependencies = (
+				2B1822252DEB5A0000550CD1 /* WhisperKit */,
 			);
 			productName = WhisperNotes;
 			productReference = 2B1821F62DEB579E00550CD1 /* WhisperNotes.app */;
@@ -208,6 +210,9 @@
 			);
 			mainGroup = 2B1821ED2DEB579E00550CD1;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2B1821F72DEB579E00550CD1 /* Products */;
 			projectDirPath = "";
@@ -575,6 +580,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2B1822252DEB5A0000550CD1 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2B1821EE2DEB579E00550CD1 /* Project object */;
 }

@@ -27,27 +27,23 @@ class TranscriptionService: ObservableObject {
     private var isWhisperLoaded = false
     
     init() {
-        currentEngine = speechRecognizer?.isAvailable == true ? .speechFramework : .notAvailable
+        Task {
+            await loadWhisperModel()
+        }
     }
     
-    func loadWhisperModel(modelName: String = "base") async -> Bool {
+    private func loadWhisperModel() async {
         loadingProgress = 0.1
         do {
-            whisperKit = try await WhisperKit(
-                model: modelName,
-                verbose: false
-            )
+            whisperKit = try await WhisperKit()
             isWhisperLoaded = true
             currentEngine = .whisperKit
             loadingProgress = 1.0
-            print("WhisperKit loaded successfully with model: \(modelName)")
-            return true
+            print("WhisperKit loaded successfully")
         } catch {
             print("Failed to load WhisperKit: \(error)")
             isWhisperLoaded = false
             currentEngine = speechRecognizer?.isAvailable == true ? .speechFramework : .notAvailable
-            loadingProgress = 0.0
-            return false
         }
     }
     
@@ -126,25 +122,6 @@ class TranscriptionService: ObservableObject {
     
     func isWhisperAvailable() -> Bool {
         return isWhisperLoaded
-    }
-    
-    func unloadWhisperModel() {
-        whisperKit = nil
-        isWhisperLoaded = false
-        currentEngine = speechRecognizer?.isAvailable == true ? .speechFramework : .notAvailable
-        loadingProgress = 0.0
-        print("WhisperKit model unloaded")
-    }
-    
-    func getAvailableModels() -> [String] {
-        return [
-            "tiny",
-            "tiny.en",
-            "base",
-            "base.en",
-            "small",
-            "small.en"
-        ]
     }
     
     func getCurrentEngineDescription() -> String {

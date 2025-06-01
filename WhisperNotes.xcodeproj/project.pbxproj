@@ -6,10 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		2B1822292DEC6CC000550CD1 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 2B1822252DEB5A0000550CD1 /* WhisperKit */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		2B1822082DEB579F00550CD1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -31,6 +27,7 @@
 		2B1821F62DEB579E00550CD1 /* WhisperNotes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperNotes.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822072DEB579F00550CD1 /* WhisperNotesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhisperNotesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822112DEB579F00550CD1 /* WhisperNotesUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhisperNotesUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2B1822252DEB5A0000550CD1 /* WhisperKit */ = {isa = PBXSwiftPackageProductDependency; package = 2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */; productName = WhisperKit; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -69,7 +66,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2B1822292DEC6CC000550CD1 /* WhisperKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

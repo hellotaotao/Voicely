@@ -14,7 +14,6 @@ struct ContentView: View {
     @StateObject private var audioService = AudioRecordingService()
     @StateObject private var transcriptionService = TranscriptionService()
     @State private var selectedNote: VoiceNote?
-    @State private var showingSettings = false
     
     var body: some View {
         NavigationSplitView {
@@ -39,17 +38,9 @@ struct ContentView: View {
             }
             .navigationTitle("Voice Notes")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: { showingSettings = true }) {
-                        Image(systemName: "gear")
-                    }
-                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     EditButton()
                 }
-            }
-            .sheet(isPresented: $showingSettings) {
-                SettingsView()
             }
         } detail: {
             if let selectedNote = selectedNote {

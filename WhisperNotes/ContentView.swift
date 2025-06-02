@@ -42,6 +42,9 @@ struct ContentView: View {
                     EditButton()
                 }
             }
+            .task {
+                await loadDefaultModel()
+            }
         } detail: {
             if let selectedNote = selectedNote {
                 VoiceNoteDetailView(note: selectedNote)
@@ -50,6 +53,11 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+    
+    private func loadDefaultModel() async {
+        guard !transcriptionService.isWhisperAvailable() else { return }
+        let _ = await transcriptionService.loadWhisperModel()
     }
     
     private func deleteNotes(offsets: IndexSet) {

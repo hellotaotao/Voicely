@@ -6,13 +6,11 @@
 //
 
 import Foundation
-import Speech
 import WhisperKit
 import AVFoundation
 
 enum TranscriptionEngine {
     case whisperKit
-    case speechFramework
     case notAvailable
 }
 
@@ -23,27 +21,28 @@ class TranscriptionService: ObservableObject {
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     
     private var whisperKit: WhisperKit?
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var isWhisperLoaded = false
     
     init() {
-        Task {
-            await loadWhisperModel()
-        }
+        currentEngine = .notAvailable
     }
     
-    private func loadWhisperModel() async {
+    func loadWhisperModel(modelName: String = "base") async -> Bool {
         loadingProgress = 0.1
         do {
-            whisperKit = try await WhisperKit()
+            whisperKit = try await WhisperKit(
+            )
             isWhisperLoaded = true
             currentEngine = .whisperKit
             loadingProgress = 1.0
-            print("WhisperKit loaded successfully")
+            print("WhisperKit loaded successfully with model: \(modelName)")
+            return true
         } catch {
             print("Failed to load WhisperKit: \(error)")
             isWhisperLoaded = false
-            currentEngine = speechRecognizer?.isAvailable == true ? .speechFramework : .notAvailable
+            currentEngine = .notAvailable
+            loadingProgress = 0.0
+            return false
         }
     }
     
@@ -54,15 +53,15 @@ class TranscriptionService: ObservableObject {
         if isWhisperLoaded {
             return await transcribeWithWhisper(filePath: filePath)
         } else {
-            return await transcribeWithSpeechFramework(filePath: filePath)
+            return "WhisperKit not loaded. Please load a model first."
         }
     }
     
     private func transcribeWithWhisper(filePath: String) async -> String {
         guard let whisperKit = whisperKit else {
-            print("WhisperKit not available, falling back to Speech Framework")
-            currentEngine = .speechFramework
-            return await transcribeWithSpeechFramework(filePath: filePath)
+            print("WhisperKit not available")
+            currentEngine = .notAvailable
+            return "WhisperKit not loaded"
         }
         
         do {
@@ -85,39 +84,29 @@ class TranscriptionService: ObservableObject {
             return result.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
             
         } catch {
-            print("WhisperKit transcription error: \(error), falling back to Speech Framework")
-            currentEngine = .speechFramework
-            return await transcribeWithSpeechFramework(filePath: filePath)
+            print("WhisperKit transcription error: \(error)")
+            currentEngine = .notAvailable
+            return "Transcription failed: \(error.localizedDescription)"
         }
     }
     
-    private func transcribeWithSpeechFramework(filePath: String) async -> String {
-        guard let speechRecognizer = speechRecognizer,
-              speechRecognizer.isAvailable else {
-            currentEngine = .notAvailable
-            return "Speech recognition not available"
-        }
-        
-        currentEngine = .speechFramework
-        print("Using iOS Speech Framework for transcription")
-        
-        return await withCheckedContinuation { continuation in
-            let url = URL(fileURLWithPath: filePath)
-            let request = SFSpeechURLRecognitionRequest(url: url)
-            request.shouldReportPartialResults = false
-            
-            speechRecognizer.recognitionTask(with: request) { result, error in
-                if let error = error {
-                    print("Speech recognition error: \(error)")
-                    continuation.resume(returning: "Transcription failed: \(error.localizedDescription)")
-                    return
-                }
-                
-                if let result = result, result.isFinal {
-                    continuation.resume(returning: result.bestTranscription.formattedString)
-                }
-            }
-        }
+    func unloadWhisperModel() {
+        whisperKit = nil
+        isWhisperLoaded = false
+        currentEngine = .notAvailable
+        loadingProgress = 0.0
+        print("WhisperKit model unloaded")
+    }
+    
+    func getAvailableModels() -> [String] {
+        return [
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en"
+        ]
     }
     
     func isWhisperAvailable() -> Bool {
@@ -128,8 +117,6 @@ class TranscriptionService: ObservableObject {
         switch currentEngine {
         case .whisperKit:
             return "WhisperKit (Local AI)"
-        case .speechFramework:
-            return "iOS Speech Framework"
         case .notAvailable:
             return "No transcription available"
         }
@@ -139,10 +126,8 @@ class TranscriptionService: ObservableObject {
         switch currentEngine {
         case .whisperKit:
             return "Using WhisperKit for high-quality offline transcription"
-        case .speechFramework:
-            return "Using iOS Speech Framework (requires internet connection)"
         case .notAvailable:
-            return "Speech recognition not available on this device"
+            return "WhisperKit not loaded. Please load a model first."
         }
     }
 }

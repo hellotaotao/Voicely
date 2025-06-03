@@ -20,29 +20,48 @@ class TranscriptionService: ObservableObject {
     @Published var loadingProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     
-    private var whisperKit: WhisperKit?
+    private var modelManager: ModelManager?
     private var isWhisperLoaded = false
     
-    init() {
+    init(modelManager: ModelManager? = nil) {
+        self.modelManager = modelManager
         currentEngine = .notAvailable
     }
     
+    func setModelManager(_ manager: ModelManager) {
+        self.modelManager = manager
+        updateEngineStatus()
+    }
+    
     func loadWhisperModel(modelName: String = "base") async -> Bool {
+        guard let modelManager = modelManager else {
+            print("ModelManager not available")
+            return false
+        }
+        
         loadingProgress = 0.1
-        do {
-            whisperKit = try await WhisperKit(
-            )
+        modelManager.selectedModel = modelName
+        await modelManager.loadModel(modelName)
+        
+        updateEngineStatus()
+        loadingProgress = modelManager.loadingProgressValue
+        
+        let success = modelManager.isModelLoaded()
+        if success {
+            print("WhisperKit loaded successfully with model: \(modelName)")
+        } else {
+            print("Failed to load WhisperKit model: \(modelName)")
+        }
+        return success
+    }
+    
+    private func updateEngineStatus() {
+        if let modelManager = modelManager, modelManager.isModelLoaded() {
             isWhisperLoaded = true
             currentEngine = .whisperKit
-            loadingProgress = 1.0
-            print("WhisperKit loaded successfully with model: \(modelName)")
-            return true
-        } catch {
-            print("Failed to load WhisperKit: \(error)")
+        } else {
             isWhisperLoaded = false
             currentEngine = .notAvailable
-            loadingProgress = 0.0
-            return false
         }
     }
     
@@ -58,7 +77,8 @@ class TranscriptionService: ObservableObject {
     }
     
     private func transcribeWithWhisper(filePath: String) async -> String {
-        guard let whisperKit = whisperKit else {
+        guard let modelManager = modelManager,
+              let whisperKit = modelManager.getWhisperKit() else {
             print("WhisperKit not available")
             currentEngine = .notAvailable
             return "WhisperKit not loaded"
@@ -91,7 +111,10 @@ class TranscriptionService: ObservableObject {
     }
     
     func unloadWhisperModel() {
-        whisperKit = nil
+        if let modelManager = modelManager {
+            modelManager.whisperKit = nil
+            modelManager.modelState = .unloaded
+        }
         isWhisperLoaded = false
         currentEngine = .notAvailable
         loadingProgress = 0.0

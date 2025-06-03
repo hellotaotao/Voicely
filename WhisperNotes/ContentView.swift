@@ -12,8 +12,10 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \VoiceNote.timestamp, order: .reverse) private var voiceNotes: [VoiceNote]
     @StateObject private var audioService = AudioRecordingService()
+    @StateObject private var modelManager = ModelManager()
     @StateObject private var transcriptionService = TranscriptionService()
     @State private var selectedNote: VoiceNote?
+    @State private var showingSettings = false
     
     var body: some View {
         NavigationSplitView {
@@ -38,12 +40,23 @@ struct ContentView: View {
             }
             .navigationTitle("Voice Notes")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gear")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     EditButton()
                 }
             }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
+                    .environmentObject(modelManager)
+            }
             .task {
-                await loadDefaultModel()
+                await setupServices()
             }
         } detail: {
             if let selectedNote = selectedNote {
@@ -55,7 +68,10 @@ struct ContentView: View {
         }
     }
     
-    private func loadDefaultModel() async {
+    private func setupServices() async {
+        transcriptionService.setModelManager(modelManager)
+        await modelManager.fetchModels()
+        
         guard !transcriptionService.isWhisperAvailable() else { return }
         let _ = await transcriptionService.loadWhisperModel()
     }

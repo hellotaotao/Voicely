@@ -9,10 +9,142 @@ import SwiftUI
 import WhisperKit
 import CoreML
 
+// Language constants similar to WhisperKit demo
+struct LanguageConstants {
+    static let languages: [String: String] = [
+        "auto": "auto",
+        "english": "en",
+        "chinese": "zh",
+        "german": "de",
+        "spanish": "es",
+        "russian": "ru",
+        "korean": "ko",
+        "french": "fr",
+        "japanese": "ja",
+        "portuguese": "pt",
+        "turkish": "tr",
+        "polish": "pl",
+        "catalan": "ca",
+        "dutch": "nl",
+        "arabic": "ar",
+        "swedish": "sv",
+        "italian": "it",
+        "indonesian": "id",
+        "hindi": "hi",
+        "finnish": "fi",
+        "vietnamese": "vi",
+        "hebrew": "he",
+        "ukrainian": "uk",
+        "greek": "el",
+        "malay": "ms",
+        "czech": "cs",
+        "romanian": "ro",
+        "danish": "da",
+        "hungarian": "hu",
+        "tamil": "ta",
+        "norwegian": "no",
+        "thai": "th",
+        "urdu": "ur",
+        "croatian": "hr",
+        "bulgarian": "bg",
+        "lithuanian": "lt",
+        "latin": "la",
+        "maori": "mi",
+        "malayalam": "ml",
+        "welsh": "cy",
+        "slovak": "sk",
+        "telugu": "te",
+        "persian": "fa",
+        "latvian": "lv",
+        "bengali": "bn",
+        "serbian": "sr",
+        "azerbaijani": "az",
+        "slovenian": "sl",
+        "kannada": "kn",
+        "estonian": "et",
+        "macedonian": "mk",
+        "breton": "br",
+        "basque": "eu",
+        "icelandic": "is",
+        "armenian": "hy",
+        "nepali": "ne",
+        "mongolian": "mn",
+        "bosnian": "bs",
+        "kazakh": "kk",
+        "albanian": "sq",
+        "swahili": "sw",
+        "galician": "gl",
+        "marathi": "mr",
+        "punjabi": "pa",
+        "sinhala": "si",
+        "khmer": "km",
+        "shona": "sn",
+        "yoruba": "yo",
+        "somali": "so",
+        "afrikaans": "af",
+        "occitan": "oc",
+        "georgian": "ka",
+        "belarusian": "be",
+        "tajik": "tg",
+        "sindhi": "sd",
+        "gujarati": "gu",
+        "amharic": "am",
+        "yiddish": "yi",
+        "lao": "lo",
+        "uzbek": "uz",
+        "faroese": "fo",
+        "haitian creole": "ht",
+        "pashto": "ps",
+        "turkmen": "tk",
+        "nynorsk": "nn",
+        "maltese": "mt",
+        "sanskrit": "sa",
+        "luxembourgish": "lb",
+        "myanmar": "my",
+        "tibetan": "bo",
+        "tagalog": "tl",
+        "malagasy": "mg",
+        "assamese": "as",
+        "tatar": "tt",
+        "hawaiian": "haw",
+        "lingala": "ln",
+        "hausa": "ha",
+        "bashkir": "ba",
+        "javanese": "jw",
+        "sundanese": "su"
+    ]
+    
+    static let defaultLanguageCode = "en"
+    
+    static var availableLanguages: [String] {
+        // Auto detect first, then most common languages, then the rest alphabetically
+        let topLanguages = [
+            "auto",
+            "english",
+            "chinese", 
+            "spanish",
+            "french",
+            "german",
+            "japanese",
+            "korean",
+            "portuguese",
+            "russian",
+            "arabic",
+            "hindi",
+            "italian"
+        ]
+        
+        let remainingLanguages = languages.keys.filter { !topLanguages.contains($0) }.sorted()
+        
+        return topLanguages + remainingLanguages
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
     @State private var showingModelDeletion = false
     @State private var showComputeUnits = false
+    @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     
     var body: some View {
         NavigationView {
@@ -21,6 +153,10 @@ struct SettingsView: View {
                     modelStatusView
                     modelSelectorView
                     modelActionsView
+                }
+                
+                Section("Language Settings") {
+                    languageSelectorView
                 }
                 
                 Section("Compute Settings") {
@@ -159,6 +295,25 @@ struct SettingsView: View {
                     Label("View Models", systemImage: "link.circle")
                 }
             }
+        }
+    }
+    
+    private var languageSelectorView: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text("Speech Language")
+                    .font(.headline)
+                Text("Select the expected speech language")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Picker("Language", selection: $selectedLanguage) {
+                ForEach(LanguageConstants.availableLanguages, id: \.self) { language in
+                    Text(language == "auto" ? "Auto Detect" : language.capitalized).tag(language)
+                }
+            }
+            .pickerStyle(MenuPickerStyle())
         }
     }
     

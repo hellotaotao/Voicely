@@ -93,16 +93,25 @@ class TranscriptionService: ObservableObject {
                 return "Audio file not found"
             }
             
-            // First detect the language
-            let languageDetection = try await whisperKit.detectLanguage(audioPath: audioURL.path())
-            let detectedLanguage = languageDetection.language
-            print("Detected language: \(detectedLanguage)")
+            // Use language from settings
+            let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
+            let languageCode: String?
+            
+            if selectedLanguageKey == "auto" {
+                // Use automatic language detection
+                let languageDetection = try await whisperKit.detectLanguage(audioPath: audioURL.path())
+                languageCode = languageDetection.language
+                print("Auto-detected language: \(languageCode ?? "unknown")")
+            } else {
+                languageCode = LanguageConstants.languages[selectedLanguageKey]
+                print("Using selected language code: \(languageCode ?? "nil")")
+            }
             
             let transcriptionResults = try await whisperKit.transcribe(
                 audioPath: audioURL.path(),
                 decodeOptions: DecodingOptions(
                     task: .transcribe,
-                    language: detectedLanguage,
+                    language: languageCode,
                     temperature: 0.0,
                     temperatureFallbackCount: 5,
                     sampleLength: 224,

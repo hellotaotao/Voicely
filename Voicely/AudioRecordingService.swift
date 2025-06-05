@@ -9,6 +9,10 @@ import Foundation
 import AVFoundation
 import Combine
 
+#if os(macOS)
+import AVFoundation
+#endif
+
 @MainActor
 class AudioRecordingService: NSObject, ObservableObject {
     @Published var isRecording = false
@@ -17,7 +21,9 @@ class AudioRecordingService: NSObject, ObservableObject {
     
     private var audioRecorder: AVAudioRecorder?
     private var recordingTimer: Timer?
+    #if !os(macOS)
     private var audioSession = AVAudioSession.sharedInstance()
+    #endif
     
     override init() {
         super.init()
@@ -25,13 +31,14 @@ class AudioRecordingService: NSObject, ObservableObject {
     }
     
     func checkPermission() {
-        switch audioSession.recordPermission {
-        case .granted:
+        #if os(macOS)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
             hasPermission = true
-        case .denied:
+        case .denied, .restricted:
             hasPermission = false
-        case .undetermined:
-            audioSession.requestRecordPermission { [weak self] allowed in
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] allowed in
                 DispatchQueue.main.async {
                     self?.hasPermission = allowed
                 }
@@ -39,6 +46,39 @@ class AudioRecordingService: NSObject, ObservableObject {
         @unknown default:
             hasPermission = false
         }
+        #else
+        if #available(iOS 17.0, *) {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted:
+                hasPermission = true
+            case .denied:
+                hasPermission = false
+            case .undetermined:
+                AVAudioApplication.requestRecordPermission { [weak self] allowed in
+                    DispatchQueue.main.async {
+                        self?.hasPermission = allowed
+                    }
+                }
+            @unknown default:
+                hasPermission = false
+            }
+        } else {
+            switch audioSession.recordPermission {
+            case .granted:
+                hasPermission = true
+            case .denied:
+                hasPermission = false
+            case .undetermined:
+                audioSession.requestRecordPermission { [weak self] allowed in
+                    DispatchQueue.main.async {
+                        self?.hasPermission = allowed
+                    }
+                }
+            @unknown default:
+                hasPermission = false
+            }
+        }
+        #endif
     }
     
     func startRecording() -> String? {
@@ -47,6 +87,7 @@ class AudioRecordingService: NSObject, ObservableObject {
             return nil
         }
         
+        #if !os(macOS)
         do {
             try audioSession.setCategory(.record, mode: .default)
             try audioSession.setActive(true)
@@ -54,6 +95,7 @@ class AudioRecordingService: NSObject, ObservableObject {
             print("Failed to set up audio session: \(error)")
             return nil
         }
+        #endif
         
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let audioFilename = documentsPath.appendingPathComponent("recording_\(Date().timeIntervalSince1970).wav")
@@ -76,7 +118,9 @@ class AudioRecordingService: NSObject, ObservableObject {
             recordingDuration = 0
             
             recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                self?.updateRecordingDuration()
+                Task { @MainActor in
+                    self?.updateRecordingDuration()
+                }
             }
             
             return audioFilename.path
@@ -99,11 +143,13 @@ class AudioRecordingService: NSObject, ObservableObject {
         let filePath = recorder.url.path
         let duration = recordingDuration
         
+        #if !os(macOS)
         do {
             try audioSession.setActive(false)
         } catch {
             print("Failed to deactivate audio session: \(error)")
         }
+        #endif
         
         return (filePath, duration)
     }
@@ -115,13 +161,13 @@ class AudioRecordingService: NSObject, ObservableObject {
 }
 
 extension AudioRecordingService: AVAudioRecorderDelegate {
-    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         if !flag {
             print("Recording failed")
         }
     }
     
-    func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
         if let error = error {
             print("Recording encode error: \(error)")
         }

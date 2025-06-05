@@ -16,14 +16,14 @@
 			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 2B1821F52DEB579E00550CD1;
-			remoteInfo = WhisperNotes;
+			remoteInfo = Voicely;
 		};
 		2B1822122DEB579F00550CD1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 2B1821F52DEB579E00550CD1;
-			remoteInfo = WhisperNotes;
+			remoteInfo = Voicely;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -132,7 +132,7 @@
 			packageProductDependencies = (
 				2B1822252DEB5A0000550CD1 /* WhisperKit */,
 			);
-			productName = WhisperNotes;
+			productName = Voicely;
 			productReference = 2B1821F62DEB579E00550CD1 /* Voicely.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -155,7 +155,7 @@
 			name = VoicelyTests;
 			packageProductDependencies = (
 			);
-			productName = WhisperNotesTests;
+			productName = VoicelyTests;
 			productReference = 2B1822072DEB579F00550CD1 /* VoicelyTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
@@ -178,7 +178,7 @@
 			name = VoicelyUITests;
 			packageProductDependencies = (
 			);
-			productName = WhisperNotesUITests;
+			productName = VoicelyUITests;
 			productReference = 2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
@@ -301,8 +301,10 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				ENABLE_PREVIEWS = YES;
+				EXTRACT_APPINTENTS_METADATA = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Voicely/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs access to your microphone to record voice notes for transcription.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "This app uses speech recognition to transcribe your voice notes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -310,11 +312,12 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -333,8 +336,10 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				ENABLE_PREVIEWS = YES;
+				EXTRACT_APPINTENTS_METADATA = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Voicely/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs access to your microphone to record voice notes for transcription.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "This app uses speech recognition to transcribe your voice notes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -342,11 +347,12 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -527,7 +533,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = WhisperNotes;
+				TEST_TARGET_NAME = Voicely;
 			};
 			name = Debug;
 		};
@@ -544,7 +550,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = WhisperNotes;
+				TEST_TARGET_NAME = Voicely;
 			};
 			name = Release;
 		};

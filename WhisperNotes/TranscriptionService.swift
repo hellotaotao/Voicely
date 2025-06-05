@@ -93,8 +93,26 @@ class TranscriptionService: ObservableObject {
                 return "Audio file not found"
             }
             
+            // First detect the language
+            let languageDetection = try await whisperKit.detectLanguage(audioPath: audioURL.path())
+            let detectedLanguage = languageDetection.language
+            print("Detected language: \(detectedLanguage)")
+            
             let transcriptionResults = try await whisperKit.transcribe(
-                audioPath: audioURL.path()
+                audioPath: audioURL.path(),
+                decodeOptions: DecodingOptions(
+                    task: .transcribe,
+                    language: detectedLanguage,
+                    temperature: 0.0,
+                    temperatureFallbackCount: 5,
+                    sampleLength: 224,
+                    usePrefillPrompt: true,
+                    usePrefillCache: true,
+                    skipSpecialTokens: true,
+                    withoutTimestamps: false,
+                    wordTimestamps: false,
+                    clipTimestamps: [0.0]
+                )
             )
             
             guard let result = transcriptionResults.first else {
@@ -124,11 +142,8 @@ class TranscriptionService: ObservableObject {
     func getAvailableModels() -> [String] {
         return [
             "tiny",
-            "tiny.en",
             "base",
-            "base.en",
-            "small",
-            "small.en"
+            "small"
         ]
     }
     

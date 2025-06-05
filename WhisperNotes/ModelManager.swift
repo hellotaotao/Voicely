@@ -79,8 +79,8 @@ class ModelManager: ObservableObject {
             }
         }
         
+        print("recommendedRemoteModels: \(remoteModelSupport.supported)")
         print("Available models: \(availableModels)")
-        print("Local models: \(localModels)")
     }
     
     private func checkLocalModels() async {
@@ -95,7 +95,7 @@ class ModelManager: ObservableObject {
             do {
                 let downloadedModels = try FileManager.default.contentsOfDirectory(atPath: modelPath)
                 localModels = WhisperKit.formatModelFiles(downloadedModels)
-                print("Found locally: \(localModels)")
+                print("Found local models: \(localModels)")
             } catch {
                 print("Error enumerating files at \(modelPath): \(error.localizedDescription)")
             }

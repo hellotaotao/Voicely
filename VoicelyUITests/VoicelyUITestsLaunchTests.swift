@@ -1,13 +1,13 @@
 //
-//  WhisperNotesUITestsLaunchTests.swift
-//  WhisperNotesUITests
+//  VoicelyUITestsLaunchTests.swift
+//  VoicelyUITests
 //
 //  Created by Tao Wang on 1/6/2025.
 //
 
 import XCTest
 
-final class WhisperNotesUITestsLaunchTests: XCTestCase {
+final class VoicelyUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

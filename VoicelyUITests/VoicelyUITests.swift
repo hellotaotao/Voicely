@@ -1,13 +1,13 @@
 //
-//  WhisperNotesUITests.swift
-//  WhisperNotesUITests
+//  VoicelyUITests.swift
+//  VoicelyUITests
 //
 //  Created by Tao Wang on 1/6/2025.
 //
 
 import XCTest
 
-final class WhisperNotesUITests: XCTestCase {
+final class VoicelyUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.

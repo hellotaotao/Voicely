@@ -1,6 +1,6 @@
 //
 //  ModelManager.swift
-//  WhisperNotes
+//  Voicely
 //
 //  Created by Tao Wang on 1/6/2025.
 //

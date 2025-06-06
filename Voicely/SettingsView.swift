@@ -200,7 +200,7 @@ struct SettingsView: View {
                     Text("Selected Model")
                         .font(.headline)
                     Spacer()
-                    Picker("Model", selection: $modelManager.selectedModel) {
+                    Picker("", selection: $modelManager.selectedModel) {
                         ForEach(modelManager.availableModels, id: \.self) { model in
                             HStack {
                                 let isLocal = modelManager.localModels.contains(model)
@@ -308,7 +308,7 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            Picker("Language", selection: $selectedLanguage) {
+            Picker("", selection: $selectedLanguage) {
                 ForEach(LanguageConstants.availableLanguages, id: \.self) { language in
                     Text(language == "auto" ? "Auto Detect" : language.capitalized).tag(language)
                 }

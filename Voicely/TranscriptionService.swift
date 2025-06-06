@@ -18,6 +18,7 @@ enum TranscriptionEngine {
 class TranscriptionService: ObservableObject {
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
+    @Published var transcriptionProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     
     private var modelManager: ModelManager?
@@ -65,18 +66,22 @@ class TranscriptionService: ObservableObject {
         }
     }
     
-    func transcribeAudio(filePath: String) async -> String {
+    func transcribeAudio(filePath: String, progressCallback: @escaping (Float) -> Void = { _ in }) async -> String {
         isTranscribing = true
-        defer { isTranscribing = false }
+        transcriptionProgress = 0.0
+        defer { 
+            isTranscribing = false
+            transcriptionProgress = 0.0
+        }
         
         if isWhisperLoaded {
-            return await transcribeWithWhisper(filePath: filePath)
+            return await transcribeWithWhisper(filePath: filePath, progressCallback: progressCallback)
         } else {
             return "WhisperKit not loaded. Please load a model first."
         }
     }
     
-    private func transcribeWithWhisper(filePath: String) async -> String {
+    private func transcribeWithWhisper(filePath: String, progressCallback: @escaping (Float) -> Void) async -> String {
         guard let modelManager = modelManager,
               let whisperKit = modelManager.getWhisperKit() else {
             print("WhisperKit not available")
@@ -93,19 +98,34 @@ class TranscriptionService: ObservableObject {
                 return "Audio file not found"
             }
             
+            // Start progress simulation
+            let progressTask = Task {
+                await simulateTranscriptionProgress(progressCallback: progressCallback)
+            }
+            
             // Use language from settings
             let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
             let languageCode: String?
+            
+            progressCallback(0.1)
+            transcriptionProgress = 0.1
             
             if selectedLanguageKey == "auto" {
                 // Use automatic language detection
                 let languageDetection = try await whisperKit.detectLanguage(audioPath: audioURL.path())
                 languageCode = languageDetection.language
                 print("Auto-detected language: \(languageCode ?? "unknown")")
+                progressCallback(0.2)
+                transcriptionProgress = 0.2
             } else {
                 languageCode = LanguageConstants.languages[selectedLanguageKey]
                 print("Using selected language code: \(languageCode ?? "nil")")
+                progressCallback(0.15)
+                transcriptionProgress = 0.15
             }
+            
+            progressCallback(0.3)
+            transcriptionProgress = 0.3
             
             let transcriptionResults = try await whisperKit.transcribe(
                 audioPath: audioURL.path(),
@@ -124,6 +144,10 @@ class TranscriptionService: ObservableObject {
                 )
             )
             
+            progressTask.cancel()
+            progressCallback(1.0)
+            transcriptionProgress = 1.0
+            
             guard let result = transcriptionResults.first else {
                 return "No transcription result"
             }
@@ -134,6 +158,25 @@ class TranscriptionService: ObservableObject {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
             return "Transcription failed: \(error.localizedDescription)"
+        }
+    }
+    
+    private func simulateTranscriptionProgress(progressCallback: @escaping (Float) -> Void) async {
+        let startProgress: Float = 0.3
+        let endProgress: Float = 0.9
+        let duration: TimeInterval = 5.0 // Simulate 5 seconds of progress
+        let steps = 50
+        
+        for i in 0...steps {
+            let progress = startProgress + (endProgress - startProgress) * Float(i) / Float(steps)
+            progressCallback(progress)
+            transcriptionProgress = progress
+            
+            do {
+                try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000 / Double(steps)))
+            } catch {
+                break
+            }
         }
     }
     

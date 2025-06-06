@@ -113,12 +113,22 @@ struct VoiceNoteRow: View {
                     .font(.body)
                     .lineLimit(3)
             } else if note.isTranscribing {
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Transcribing...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Transcribing...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(Int(note.transcriptionProgress * 100))%")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    ProgressView(value: note.transcriptionProgress)
+                        .progressViewStyle(LinearProgressViewStyle())
+                        .scaleEffect(y: 0.5)
                 }
             }
         }
@@ -204,10 +214,15 @@ struct RecordingControls: View {
         onRecordingComplete(note)
         
         Task {
-            let transcription = await transcriptionService.transcribeAudio(filePath: filePath)
+            let transcription = await transcriptionService.transcribeAudio(filePath: filePath) { progress in
+                Task { @MainActor in
+                    note.transcriptionProgress = progress
+                }
+            }
             await MainActor.run {
                 note.transcription = transcription
                 note.isTranscribing = false
+                note.transcriptionProgress = 0.0
             }
         }
     }
@@ -246,10 +261,20 @@ struct VoiceNoteDetailView: View {
                 Divider()
                 
                 if note.isTranscribing {
-                    HStack {
-                        ProgressView()
-                        Text("Transcribing audio...")
-                            .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            ProgressView()
+                            Text("Transcribing audio...")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("\(Int(note.transcriptionProgress * 100))%")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                        
+                        ProgressView(value: note.transcriptionProgress)
+                            .progressViewStyle(LinearProgressViewStyle())
+                            .frame(height: 8)
                     }
                 } else if !note.transcription.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {

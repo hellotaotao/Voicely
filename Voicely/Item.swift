@@ -17,6 +17,7 @@ final class VoiceNote {
     var audioFilePath: String
     var transcription: String
     var isTranscribing: Bool
+    var transcriptionProgress: Float = 0.0
     
     init(title: String = "", audioFilePath: String = "", transcription: String = "") {
         self.id = UUID()
@@ -26,5 +27,6 @@ final class VoiceNote {
         self.audioFilePath = audioFilePath
         self.transcription = transcription
         self.isTranscribing = false
+        self.transcriptionProgress = 0.0
     }
 }

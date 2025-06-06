@@ -22,10 +22,9 @@ struct ContentView: View {
             VStack {
                 List {
                     ForEach(voiceNotes) { note in
-                        VoiceNoteRow(note: note)
-                            .onTapGesture {
-                                selectedNote = note
-                            }
+                        NavigationLink(destination: VoiceNoteDetailView(note: note)) {
+                            VoiceNoteRow(note: note)
+                        }
                     }
                     .onDelete(perform: deleteNotes)
                 }
@@ -133,6 +132,7 @@ struct VoiceNoteRow: View {
             }
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
     
     private func formatDuration(_ duration: TimeInterval) -> String {

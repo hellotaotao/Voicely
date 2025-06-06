@@ -38,7 +38,7 @@ class ModelManager: ObservableObject {
     @Published var modelState: ModelState = .unloaded
     @Published var localModels: [String] = []
     @Published var availableModels: [String] = []
-    @Published var selectedModel: String = "base"
+    @Published var selectedModel: String = "small"
     @Published var loadingProgressValue: Float = 0.0
     @Published var encoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
     @Published var decoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
@@ -50,18 +50,25 @@ class ModelManager: ObservableObject {
     private let specializationProgressRatio: Float = 0.7
     
     init() {
-        selectedModel = WhisperKit.recommendedModels().default
+        let defaultModel = WhisperKit.recommendedModels().default
+        // Use the default model if it passes our filter, otherwise use small model
+        selectedModel = shouldIncludeModel(defaultModel) ? defaultModel : selectedModel
     }
     
     func fetchModels() async {
-        availableModels = [selectedModel]
+        availableModels = []
+        
+        // Add selected model only if it passes filter
+        if shouldIncludeModel(selectedModel) {
+            availableModels.append(selectedModel)
+        }
         
         // Check what's already downloaded locally
         await checkLocalModels()
         
         // Add local models to available models
         for model in localModels {
-            if !availableModels.contains(model) {
+            if !availableModels.contains(model) && shouldIncludeModel(model) {
                 availableModels.append(model)
             }
         }
@@ -69,7 +76,7 @@ class ModelManager: ObservableObject {
         // Fetch remote models
         let remoteModelSupport = await WhisperKit.recommendedRemoteModels()
         for model in remoteModelSupport.supported {
-            if !availableModels.contains(model) {
+            if !availableModels.contains(model) && shouldIncludeModel(model) {
                 availableModels.append(model)
             }
         }
@@ -249,5 +256,26 @@ class ModelManager: ObservableObject {
     
     func isModelLoaded() -> Bool {
         return modelState == .loaded && whisperKit != nil
+    }
+    
+    private func shouldIncludeModel(_ model: String) -> Bool {
+        let modelLower = model.lowercased()
+        
+        // Remove all English models
+        if modelLower.contains("english") || modelLower.contains(".en") {
+            return false
+        }
+        
+        // Remove tiny models
+        if modelLower.contains("tiny") {
+            return false
+        }
+        
+        // For large models, remove v2
+        if modelLower.contains("large") && modelLower.contains("v2") {
+            return false
+        }
+        
+        return true
     }
 }

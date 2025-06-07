@@ -35,7 +35,14 @@ enum ModelState: CustomStringConvertible {
 @MainActor
 class ModelManager: ObservableObject {
     @Published var whisperKit: WhisperKit?
-    @Published var modelState: ModelState = .unloaded
+    @Published var modelState: ModelState = .unloaded {
+        didSet {
+            if modelState == .loaded && oldValue != .loaded {
+                // Send notification when model is loaded successfully
+                NotificationCenter.default.post(name: .modelLoadedNotification, object: nil)
+            }
+        }
+    }
     @Published var localModels: [String] = []
     @Published var availableModels: [String] = []
     @Published var selectedModel: String = "small"
@@ -278,4 +285,9 @@ class ModelManager: ObservableObject {
         
         return true
     }
+}
+
+// Add notification name extension
+extension Notification.Name {
+    static let modelLoadedNotification = Notification.Name("ModelLoadedNotification")
 }

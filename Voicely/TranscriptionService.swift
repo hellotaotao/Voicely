@@ -21,7 +21,7 @@ class TranscriptionService: ObservableObject {
     @Published var transcriptionProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     
-    private var modelManager: ModelManager?
+    var modelManager: ModelManager?
     private var isWhisperLoaded = false
     
     init(modelManager: ModelManager? = nil) {
@@ -66,7 +66,7 @@ class TranscriptionService: ObservableObject {
         }
     }
     
-    func transcribeAudio(filePath: String, progressCallback: @escaping (Float) -> Void = { _ in }) async -> String {
+    func transcribeAudio(filePath: String, progressCallback: @escaping (Float) -> Void = { _ in }) async -> String? {
         isTranscribing = true
         transcriptionProgress = 0.0
         defer { 
@@ -77,16 +77,16 @@ class TranscriptionService: ObservableObject {
         if isWhisperLoaded {
             return await transcribeWithWhisper(filePath: filePath, progressCallback: progressCallback)
         } else {
-            return "WhisperKit not loaded. Please load a model first."
+            return nil
         }
     }
     
-    private func transcribeWithWhisper(filePath: String, progressCallback: @escaping (Float) -> Void) async -> String {
+    private func transcribeWithWhisper(filePath: String, progressCallback: @escaping (Float) -> Void) async -> String? {
         guard let modelManager = modelManager,
               let whisperKit = modelManager.getWhisperKit() else {
             print("WhisperKit not available")
             currentEngine = .notAvailable
-            return "WhisperKit not loaded"
+            return nil
         }
         
         do {
@@ -218,6 +218,45 @@ class TranscriptionService: ObservableObject {
             return "Using WhisperKit for high-quality offline transcription"
         case .notAvailable:
             return "WhisperKit not loaded. Please load a model first."
+        }
+    }
+    
+    // New method: Process all pending transcription notes
+    @MainActor
+    func processPendingTranscriptions(notes: [VoiceNote]) async {
+        guard isWhisperLoaded else { 
+            print("Model not loaded, cannot process pending transcriptions")
+            return 
+        }
+        
+        print("Processing \(notes.count) pending transcriptions")
+        for note in notes where note.pendingTranscription && !note.audioFilePath.isEmpty {
+            // Avoid processing multiple transcriptions simultaneously, which might consume too many resources
+            guard !isTranscribing else {
+                print("Another transcription is in progress, waiting...")
+                try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                continue
+            }
+            
+            print("Transcribing note: \(note.title)")
+            note.isTranscribing = true
+            
+            let transcription = await transcribeAudio(filePath: note.audioFilePath) { progress in
+                Task { @MainActor in
+                    note.transcriptionProgress = progress
+                }
+            }
+            
+            if let transcription = transcription {
+                note.transcription = transcription
+                note.pendingTranscription = false
+            }
+            
+            note.isTranscribing = false
+            note.transcriptionProgress = 0.0
+            
+            // Add a brief delay between transcriptions to avoid system overload
+            try? await Task.sleep(nanoseconds: 200_000_000)
         }
     }
 }

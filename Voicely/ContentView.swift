@@ -22,7 +22,7 @@ struct ContentView: View {
             VStack {
                 List {
                     ForEach(voiceNotes) { note in
-                        NavigationLink(destination: VoiceNoteDetailView(note: note)) {
+                        NavigationLink(destination: VoiceNoteDetailView(note: note).environmentObject(transcriptionService)) {
                             VoiceNoteRow(note: note)
                         }
                     }
@@ -60,6 +60,7 @@ struct ContentView: View {
         } detail: {
             if let selectedNote = selectedNote {
                 VoiceNoteDetailView(note: selectedNote)
+                    .environmentObject(transcriptionService)
             } else {
                 Text("Select a voice note")
                     .foregroundColor(.secondary)
@@ -71,8 +72,28 @@ struct ContentView: View {
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels()
         
+        // Add model loading notification observer
+        NotificationCenter.default.addObserver(
+            forName: .modelLoadedNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor [self] in
+                await self.processPendingTranscriptionsIfNeeded()
+            }
+        }
+        
         guard !transcriptionService.isWhisperAvailable() else { return }
         let _ = await transcriptionService.loadWhisperModel()
+    }
+    
+    private func processPendingTranscriptionsIfNeeded() async {
+        // Find all notes pending transcription
+        let pendingNotes = voiceNotes.filter { $0.pendingTranscription }
+        if !pendingNotes.isEmpty {
+            print("Found \(pendingNotes.count) pending transcriptions to process")
+            await transcriptionService.processPendingTranscriptions(notes: pendingNotes)
+        }
     }
     
     private func deleteNotes(offsets: IndexSet) {
@@ -129,6 +150,14 @@ struct VoiceNoteRow: View {
                         .progressViewStyle(LinearProgressViewStyle())
                         .scaleEffect(y: 0.5)
                 }
+            } else if note.pendingTranscription {
+                HStack {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundColor(.orange)
+                    Text("Waiting for model to load")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
         }
         .padding(.vertical, 2)
@@ -149,6 +178,35 @@ struct RecordingControls: View {
     let onRecordingComplete: (VoiceNote) -> Void
     
     @State private var currentRecordingPath: String?
+    
+    // Computed properties to check model state
+    private var isModelLoading: Bool {
+        guard let modelManager = transcriptionService.modelManager else { return false }
+        return modelManager.modelState == .loading || 
+               modelManager.modelState == .downloading || 
+               modelManager.modelState == .prewarming
+    }
+    
+    private var isModelLoaded: Bool {
+        guard let modelManager = transcriptionService.modelManager else { return false }
+        return modelManager.modelState == .loaded
+    }
+    
+    private var modelLoadingMessage: String {
+        guard let modelManager = transcriptionService.modelManager else { return "Model not available" }
+        switch modelManager.modelState {
+        case .loading:
+            return "Loading model..."
+        case .downloading:
+            return "Downloading model (\(Int(modelManager.loadingProgressValue * 100))%)..."
+        case .prewarming:
+            return "Optimizing model..."
+        case .unloaded:
+            return "Model not loaded"
+        case .loaded:
+            return ""
+        }
+    }
     
     var body: some View {
         VStack(spacing: 16) {
@@ -172,15 +230,24 @@ struct RecordingControls: View {
                     }
                 }
             } else {
-                Button(action: startRecording) {
-                    Image(systemName: "mic.fill")
-                        .font(.title)
-                        .foregroundColor(.white)
-                        .frame(width: 60, height: 60)
-                        .background(audioService.hasPermission ? Color.blue : Color.gray)
-                        .clipShape(Circle())
+                HStack(spacing: 12) {
+                    if !isModelLoaded {
+                        Text(modelLoadingMessage)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .lineLimit(1)
+                    }
+                    
+                    Button(action: startRecording) {
+                        Image(systemName: "mic.fill")
+                            .font(.title)
+                            .foregroundColor(.white)
+                            .frame(width: 60, height: 60)
+                            .background(audioService.hasPermission ? Color.blue : Color.gray)
+                            .clipShape(Circle())
+                    }
+                    .disabled(!audioService.hasPermission)
                 }
-                .disabled(!audioService.hasPermission)
                 
                 if !audioService.hasPermission {
                     Text("Microphone permission required")
@@ -209,21 +276,38 @@ struct RecordingControls: View {
             audioFilePath: filePath
         )
         note.duration = duration
-        note.isTranscribing = true
         
-        onRecordingComplete(note)
-        
-        Task {
-            let transcription = await transcriptionService.transcribeAudio(filePath: filePath) { progress in
-                Task { @MainActor in
-                    note.transcriptionProgress = progress
+        // Check if model is loaded
+        if isModelLoaded {
+            note.isTranscribing = true
+            
+            onRecordingComplete(note)
+            
+            Task {
+                let transcription = await transcriptionService.transcribeAudio(filePath: filePath) { progress in
+                    Task { @MainActor in
+                        note.transcriptionProgress = progress
+                    }
+                }
+                
+                await MainActor.run {
+                    if let transcription = transcription {
+                        note.transcription = transcription
+                    } else {
+                        note.transcription = ""
+                    }
+                    note.isTranscribing = false
+                    note.transcriptionProgress = 0.0
                 }
             }
-            await MainActor.run {
-                note.transcription = transcription
-                note.isTranscribing = false
-                note.transcriptionProgress = 0.0
-            }
+        } else {
+            // If model not loaded, save note without transcription
+            note.isTranscribing = false
+            note.transcription = ""
+            let modelState = transcriptionService.modelManager?.modelState.description ?? "Not Loaded"
+            note.pendingTranscription = true
+            
+            onRecordingComplete(note)
         }
     }
     
@@ -236,6 +320,19 @@ struct RecordingControls: View {
 
 struct VoiceNoteDetailView: View {
     let note: VoiceNote
+    @EnvironmentObject var transcriptionService: TranscriptionService
+    @State private var isTranscribing = false
+    @State private var showLoadModelPrompt = false
+    
+    private var isModelLoaded: Bool {
+        guard let modelManager = transcriptionService.modelManager else { return false }
+        return modelManager.modelState == .loaded
+    }
+    
+    // Monitor model loading state changes
+    private var modelLoadingState: ModelState {
+        return transcriptionService.modelManager?.modelState ?? .unloaded
+    }
     
     var body: some View {
         ScrollView {
@@ -260,7 +357,7 @@ struct VoiceNoteDetailView: View {
                 
                 Divider()
                 
-                if note.isTranscribing {
+                if note.isTranscribing || isTranscribing {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             ProgressView()
@@ -285,6 +382,37 @@ struct VoiceNoteDetailView: View {
                             .font(.body)
                             .textSelection(.enabled)
                     }
+                } else if note.pendingTranscription {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Transcription pending")
+                            .font(.headline)
+                            .foregroundColor(.orange)
+                        
+                        Text("This recording needs to be transcribed")
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                        
+                        if isModelLoaded {
+                            Button(action: transcribeAudio) {
+                                Label("Transcribe Now", systemImage: "wand.and.stars")
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                            .padding(.top, 8)
+                        } else {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundColor(.orange)
+                                Text("Please load a model in Settings first")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                            .padding(.top, 8)
+                        }
+                    }
                 } else {
                     Text("No transcription available")
                         .foregroundColor(.secondary)
@@ -296,6 +424,48 @@ struct VoiceNoteDetailView: View {
             .padding()
         }
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: modelLoadingState) { oldValue, newValue in
+            if newValue == .loaded && note.pendingTranscription {
+                // Model just loaded and note needs transcription
+                transcribeAudio()
+            }
+        }
+        .alert("Model Not Loaded", isPresented: $showLoadModelPrompt) {
+            Button("Cancel", role: .cancel) {}
+            Button("Go to Settings") {
+                // Logic to open settings in detail view needs to be implemented
+            }
+        } message: {
+            Text("Please load a model in Settings first to transcribe this recording.")
+        }
+    }
+    
+    private func transcribeAudio() {
+        guard isModelLoaded, note.pendingTranscription, !note.audioFilePath.isEmpty else { return }
+        
+        isTranscribing = true
+        note.isTranscribing = true
+        
+        Task {
+            let transcription = await transcriptionService.transcribeAudio(filePath: note.audioFilePath) { progress in
+                Task { @MainActor in
+                    note.transcriptionProgress = progress
+                }
+            }
+            
+            await MainActor.run {
+                isTranscribing = false
+                note.isTranscribing = false
+                
+                if let transcription = transcription {
+                    note.transcription = transcription
+                    note.pendingTranscription = false
+                } else {
+                    note.transcriptionProgress = 0.0
+                    // Keep pendingTranscription as true since we failed
+                }
+            }
+        }
     }
     
     private func formatDuration(_ duration: TimeInterval) -> String {

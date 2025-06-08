@@ -45,7 +45,12 @@ class ModelManager: ObservableObject {
     }
     @Published var localModels: [String] = []
     @Published var availableModels: [String] = []
-    @Published var selectedModel: String = "small"
+    @Published var selectedModel: String = "small" {
+        didSet {
+            // Save selected model to UserDefaults
+            UserDefaults.standard.set(selectedModel, forKey: .selectedModelKey)
+        }
+    }
     @Published var loadingProgressValue: Float = 0.0
     @Published var encoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
     @Published var decoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
@@ -57,9 +62,22 @@ class ModelManager: ObservableObject {
     private let specializationProgressRatio: Float = 0.7
     
     init() {
-        let defaultModel = WhisperKit.recommendedModels().default
-        // Use the default model if it passes our filter, otherwise use small model
-        selectedModel = shouldIncludeModel(defaultModel) ? defaultModel : selectedModel
+        // Read selected model from UserDefaults if available
+        if let savedModel = UserDefaults.standard.string(forKey: .selectedModelKey) {
+            selectedModel = savedModel
+            print("Loaded saved model selection from UserDefaults: \(savedModel)")
+        } else {
+            var defaultModel = WhisperKit.recommendedModels().default
+            // If recommended default contains "base", use "openai_whisper-small" instead
+            if defaultModel.contains("base") {
+                defaultModel = "openai_whisper-small"
+            }
+            // Use the default model if it passes our filter, otherwise use small model
+            selectedModel = shouldIncludeModel(defaultModel) ? defaultModel : selectedModel
+            print("Using default model: \(selectedModel)")
+            // On initialization, save the selected model to UserDefaults
+            UserDefaults.standard.set(selectedModel, forKey: .selectedModelKey)
+        }
     }
     
     func fetchModels() async {
@@ -222,6 +240,14 @@ class ModelManager: ObservableObject {
             }
             
             if selectedModel == model {
+                // If deleting the currently selected model, default to an available model
+                if !availableModels.isEmpty {
+                    // Choose the first non-local model, or default back to "small"
+                    let newModel = availableModels.first(where: { $0 != model }) ?? "small"
+                    selectedModel = newModel // This triggers didSet to persist to UserDefaults
+                    print("Changed selected model to \(newModel) after deletion")
+                }
+                
                 modelState = .unloaded
                 whisperKit = nil
             }
@@ -290,4 +316,9 @@ class ModelManager: ObservableObject {
 // Add notification name extension
 extension Notification.Name {
     static let modelLoadedNotification = Notification.Name("ModelLoadedNotification")
+}
+
+// UserDefaults keys
+private extension String {
+    static let selectedModelKey = "selectedModel"
 }

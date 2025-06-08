@@ -34,14 +34,15 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
     }
     
-    func loadWhisperModel(modelName: String = "base") async -> Bool {
+    func loadWhisperModel() async -> Bool {
         guard let modelManager = modelManager else {
             print("ModelManager not available")
             return false
         }
+
+        var modelName = modelManager.selectedModel
         
         loadingProgress = 0.1
-        modelManager.selectedModel = modelName
         await modelManager.loadModel(modelName)
         
         updateEngineStatus()

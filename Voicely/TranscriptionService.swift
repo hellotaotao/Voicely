@@ -40,7 +40,7 @@ class TranscriptionService: ObservableObject {
             return false
         }
 
-        var modelName = modelManager.selectedModel
+        let modelName = modelManager.selectedModel
         
         loadingProgress = 0.1
         await modelManager.loadModel(modelName)
@@ -150,10 +150,9 @@ class TranscriptionService: ObservableObject {
             if !customPrompt.isEmpty {
                 if let tokenizer = whisperKit.tokenizer {
                     let promptText = " " + customPrompt.trimmingCharacters(in: .whitespaces)
-                    if let encoded = try? tokenizer.encode(text: promptText) {
-                        decodeOptions.promptTokens = encoded
-                        print("Using custom prompt: \(customPrompt)")
-                    }
+                    let encoded = tokenizer.encode(text: promptText)
+                    decodeOptions.promptTokens = encoded
+                    print("Using custom prompt: \(customPrompt)")
                 }
             }
             

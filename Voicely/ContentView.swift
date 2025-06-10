@@ -304,7 +304,6 @@ struct RecordingControls: View {
             // If model not loaded, save note without transcription
             note.isTranscribing = false
             note.transcription = ""
-            let modelState = transcriptionService.modelManager?.modelState.description ?? "Not Loaded"
             note.pendingTranscription = true
             
             onRecordingComplete(note)

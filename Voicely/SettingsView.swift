@@ -145,6 +145,7 @@ struct SettingsView: View {
     @State private var showingModelDeletion = false
     @State private var showComputeUnits = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
+    @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
     
     var body: some View {
         NavigationView {
@@ -157,6 +158,21 @@ struct SettingsView: View {
                 
                 Section("Language Settings") {
                     languageSelectorView
+                }
+                
+                Section("Transcription Settings") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Custom Prompt")
+                            .font(.headline)
+                        Text("Provide context to help with transcription accuracy")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        TextField("Optional prompt for transcription", text: $transcriptionPrompt)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .padding(.top, 4)
+                    }
+                    .padding(.vertical, 4)
                 }
                 
                 Section("Compute Settings") {

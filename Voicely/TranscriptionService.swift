@@ -108,6 +108,9 @@ class TranscriptionService: ObservableObject {
             let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
             let languageCode: String?
             
+            // Get custom prompt from settings
+            let customPrompt = UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? ""
+            
             progressCallback(0.1)
             transcriptionProgress = 0.1
             
@@ -128,21 +131,35 @@ class TranscriptionService: ObservableObject {
             progressCallback(0.3)
             transcriptionProgress = 0.3
             
+            // Create decode options and include custom prompt if available
+            var decodeOptions = DecodingOptions(
+                task: .transcribe,
+                language: languageCode,
+                temperature: 0.0,
+                temperatureFallbackCount: 5,
+                sampleLength: 224,
+                usePrefillPrompt: true,
+                usePrefillCache: true,
+                skipSpecialTokens: true,
+                withoutTimestamps: false,
+                wordTimestamps: false,
+                clipTimestamps: [0.0]
+            )
+            
+            // Add custom prompt if provided
+            if !customPrompt.isEmpty {
+                if let tokenizer = whisperKit.tokenizer {
+                    let promptText = " " + customPrompt.trimmingCharacters(in: .whitespaces)
+                    if let encoded = try? tokenizer.encode(text: promptText) {
+                        decodeOptions.promptTokens = encoded
+                        print("Using custom prompt: \(customPrompt)")
+                    }
+                }
+            }
+            
             let transcriptionResults = try await whisperKit.transcribe(
                 audioPath: audioURL.path(),
-                decodeOptions: DecodingOptions(
-                    task: .transcribe,
-                    language: languageCode,
-                    temperature: 0.0,
-                    temperatureFallbackCount: 5,
-                    sampleLength: 224,
-                    usePrefillPrompt: true,
-                    usePrefillCache: true,
-                    skipSpecialTokens: true,
-                    withoutTimestamps: false,
-                    wordTimestamps: false,
-                    clipTimestamps: [0.0]
-                )
+                decodeOptions: decodeOptions
             )
             
             progressTask.cancel()

@@ -139,7 +139,7 @@ class TranscriptionService: ObservableObject {
                 temperatureFallbackCount: 5,
                 sampleLength: 224,
                 usePrefillPrompt: true,
-                usePrefillCache: true,
+                usePrefillCache: false,
                 skipSpecialTokens: true,
                 withoutTimestamps: false,
                 wordTimestamps: false,

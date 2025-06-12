@@ -227,7 +227,7 @@ struct RecordingControls: View {
                             isAnimating: $waveformAnimation,
                             audioService: audioService
                         )
-                        .frame(width: 140, height: 30)
+                        .frame(width: 180, height: 30)
                         
                         Text(formatDuration(audioService.recordingDuration))
                             .font(.title2)
@@ -487,18 +487,18 @@ struct VoiceNoteDetailView: View {
 struct AudioWaveformView: View {
     @Binding var isAnimating: Bool
     @ObservedObject var audioService: AudioRecordingService
-    @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 12)
+    @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 18)
     
     var body: some View {
         if isAnimating {
-            TimelineView(.animation(minimumInterval: 0.08)) { timeline in
+            TimelineView(.animation(minimumInterval: 0.05)) { timeline in
                 HStack(alignment: .center, spacing: 2) {
-                    ForEach(0..<12, id: \.self) { index in
+                    ForEach(0..<18, id: \.self) { index in
                         RoundedRectangle(cornerRadius: 1.5)
                             .fill(Color.blue)
                             .frame(width: 2.5)
                             .scaleEffect(y: waveHeights[index], anchor: .center)
-                            .animation(.easeInOut(duration: 0.08), value: waveHeights[index])
+                            .animation(.easeInOut(duration: 0.05), value: waveHeights[index])
                     }
                 }
                 .frame(height: 30)
@@ -511,7 +511,7 @@ struct AudioWaveformView: View {
             }
         } else {
             HStack(alignment: .center, spacing: 2) {
-                ForEach(0..<12, id: \.self) { index in
+                ForEach(0..<18, id: \.self) { index in
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(Color.blue)
                         .frame(width: 2.5)
@@ -532,8 +532,8 @@ struct AudioWaveformView: View {
         let adjusted = pow(base, 0.6)
         let variation = CGFloat.random(in: 0.9...1.1)
         let level = adjusted * variation
-        let minH: CGFloat = 0.2
-        let maxH: CGFloat = 1.0
+        let minH: CGFloat = 0.15  // Slightly lower minimum
+        let maxH: CGFloat = 1.2   // Slightly higher maximum
         let newH = minH + (maxH - minH) * level
         newHeights.append(max(minH, min(maxH, newH)))
         // Update state

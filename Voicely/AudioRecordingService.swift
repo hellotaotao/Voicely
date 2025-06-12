@@ -183,7 +183,7 @@ class AudioRecordingService: NSObject, ObservableObject {
         // Apply different smoothing based on whether sound is increasing or decreasing
         if normalizedLevel > audioLevel {
             // Fast response when sound increases
-            let fastSmoothingFactor: Float = 0.7
+            let fastSmoothingFactor: Float = 0.9
             audioLevel = audioLevel * (1.0 - fastSmoothingFactor) + normalizedLevel * fastSmoothingFactor
         } else {
             // Very fast decay when sound decreases
@@ -191,8 +191,8 @@ class AudioRecordingService: NSObject, ObservableObject {
             audioLevel = audioLevel * (1.0 - decaySmoothingFactor) + normalizedLevel * decaySmoothingFactor
         }
         
-        // Apply a minimum threshold to quickly go to zero when very quiet
-        if audioLevel < 0.05 {
+        // Quick cutoff for very quiet sounds
+        if audioLevel < 0.04 {
             audioLevel = 0.0
         }
     }

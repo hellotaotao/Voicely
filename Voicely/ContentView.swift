@@ -225,9 +225,9 @@ struct RecordingControls: View {
                     VStack(spacing: 8) {
                         AudioWaveformView(
                             isAnimating: $waveformAnimation,
-                            audioLevel: audioService.audioLevel
+                            audioService: audioService
                         )
-                        .frame(width: 120, height: 30)
+                        .frame(width: 140, height: 30)
                         
                         Text(formatDuration(audioService.recordingDuration))
                             .font(.title2)
@@ -483,69 +483,61 @@ struct VoiceNoteDetailView: View {
     }
 }
 
+// Replace custom waveform implementation with WaveformData-driven view
 struct AudioWaveformView: View {
     @Binding var isAnimating: Bool
-    let audioLevel: Float
-    @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 8)
+    @ObservedObject var audioService: AudioRecordingService
+    @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 12)
     
     var body: some View {
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(0..<8, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.blue)
-                    .frame(width: 3)
-                    .scaleEffect(y: waveHeights[index], anchor: .center)
-                    .animation(.easeInOut(duration: 0.05), value: waveHeights[index])
-            }
-        }
-        .frame(height: 30)
-        .onChange(of: audioLevel) { _, newLevel in
-            updateWaveform(level: newLevel)
-        }
-        .onChange(of: isAnimating) { _, newValue in
-            if !newValue {
-                // Immediately reset to quiet state when not recording
-                withAnimation(.easeOut(duration: 0.1)) {
-                    for index in 0..<8 {
-                        waveHeights[index] = 0.2
+        if isAnimating {
+            TimelineView(.animation(minimumInterval: 0.08)) { timeline in
+                HStack(alignment: .center, spacing: 2) {
+                    ForEach(0..<12, id: \.self) { index in
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Color.blue)
+                            .frame(width: 2.5)
+                            .scaleEffect(y: waveHeights[index], anchor: .center)
+                            .animation(.easeInOut(duration: 0.08), value: waveHeights[index])
                     }
                 }
+                .frame(height: 30)
+                .onAppear {
+                    updateWaveHeights()
+                }
+                .onChange(of: timeline.date) { _, _ in
+                    updateWaveHeights()
+                }
             }
+        } else {
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(0..<12, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.blue)
+                        .frame(width: 2.5)
+                        .scaleEffect(y: 0.2, anchor: .center)
+                }
+            }
+            .frame(height: 30)
         }
     }
     
-    private func updateWaveform(level: Float) {
-        guard isAnimating else { return }
-        
-        let baseLevel = CGFloat(level)
-        
-        // Apply non-linear scaling for better visual responsiveness
-        let enhancedLevel = pow(baseLevel, 0.6)  // Makes small changes more visible
-        
-        // Create variation for each bar with some randomness for natural look
-        for index in 0..<8 {
-            let variation = CGFloat.random(in: 0.85...1.15)
-            let heightMultiplier = enhancedLevel * variation
-            
-            // Set minimum and maximum heights
-            let minHeight: CGFloat = 0.2
-            let maxHeight: CGFloat = 1.0
-            
-            // Apply some delay effect across bars for wave-like appearance
-            let delayFactor = CGFloat(abs(4 - index)) / 4.0  // Center bars respond more
-            let adjustedLevel = minHeight + (maxHeight - minHeight) * heightMultiplier * (0.8 + delayFactor * 0.2)
-            
-            let finalHeight = max(minHeight, min(maxHeight, adjustedLevel))
-            
-            // Apply different response speeds for increasing vs decreasing
-            if finalHeight > waveHeights[index] {
-                // Fast response when increasing
-                waveHeights[index] = finalHeight
-            } else {
-                // Immediate response when decreasing
-                waveHeights[index] = finalHeight
-            }
-        }
+    private func updateWaveHeights() {
+        // Create new array
+        var newHeights = waveHeights
+        // Shift left
+        newHeights.removeFirst()
+        // Compute new height based on current audio level
+        let base = CGFloat(max(0, min(1, audioService.audioLevel)))
+        let adjusted = pow(base, 0.6)
+        let variation = CGFloat.random(in: 0.9...1.1)
+        let level = adjusted * variation
+        let minH: CGFloat = 0.2
+        let maxH: CGFloat = 1.0
+        let newH = minH + (maxH - minH) * level
+        newHeights.append(max(minH, min(maxH, newH)))
+        // Update state
+        waveHeights = newHeights
     }
 }
 

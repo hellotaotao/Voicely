@@ -211,15 +211,7 @@ struct RecordingControls: View {
     var body: some View {
         VStack(spacing: 16) {
             if audioService.isRecording {
-                VStack(spacing: 8) {
-                    Text("Recording...")
-                        .font(.headline)
-                        .foregroundColor(.red)
-                    
-                    Text(formatDuration(audioService.recordingDuration))
-                        .font(.title2)
-                        .monospacedDigit()
-                    
+                HStack(spacing: 16) {
                     Button(action: stopRecording) {
                         Image(systemName: "stop.fill")
                             .font(.title)
@@ -228,6 +220,11 @@ struct RecordingControls: View {
                             .background(Color.red)
                             .clipShape(Circle())
                     }
+                    
+                    Text(formatDuration(audioService.recordingDuration))
+                        .font(.title2)
+                        .monospacedDigit()
+                        .foregroundColor(.red)
                 }
             } else {
                 HStack(spacing: 12) {

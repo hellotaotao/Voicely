@@ -178,6 +178,7 @@ struct RecordingControls: View {
     let onRecordingComplete: (VoiceNote) -> Void
     
     @State private var currentRecordingPath: String?
+    @State private var waveformAnimation = false
     
     // Computed properties to check model state
     private var isModelLoading: Bool {
@@ -221,10 +222,18 @@ struct RecordingControls: View {
                             .clipShape(Circle())
                     }
                     
-                    Text(formatDuration(audioService.recordingDuration))
-                        .font(.title2)
-                        .monospacedDigit()
-                        .foregroundColor(.red)
+                    VStack(spacing: 8) {
+                        AudioWaveformView(
+                            isAnimating: $waveformAnimation,
+                            audioLevel: audioService.audioLevel
+                        )
+                        .frame(width: 120, height: 30)
+                        
+                        Text(formatDuration(audioService.recordingDuration))
+                            .font(.title2)
+                            .monospacedDigit()
+                            .foregroundColor(.primary)
+                    }
                 }
             } else {
                 HStack(spacing: 12) {
@@ -261,9 +270,11 @@ struct RecordingControls: View {
     
     private func startRecording() {
         currentRecordingPath = audioService.startRecording()
+        waveformAnimation = true
     }
     
     private func stopRecording() {
+        waveformAnimation = false
         let (filePath, duration) = audioService.stopRecording()
         
         guard let filePath = filePath else { return }
@@ -469,6 +480,72 @@ struct VoiceNoteDetailView: View {
         formatter.allowedUnits = [.minute, .second]
         formatter.unitsStyle = .full
         return formatter.string(from: duration) ?? "0 seconds"
+    }
+}
+
+struct AudioWaveformView: View {
+    @Binding var isAnimating: Bool
+    let audioLevel: Float
+    @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 8)
+    
+    var body: some View {
+        HStack(alignment: .center, spacing: 3) {
+            ForEach(0..<8, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.blue)
+                    .frame(width: 3)
+                    .scaleEffect(y: waveHeights[index], anchor: .center)
+                    .animation(.easeInOut(duration: 0.05), value: waveHeights[index])
+            }
+        }
+        .frame(height: 30)
+        .onChange(of: audioLevel) { _, newLevel in
+            updateWaveform(level: newLevel)
+        }
+        .onChange(of: isAnimating) { _, newValue in
+            if !newValue {
+                // Immediately reset to quiet state when not recording
+                withAnimation(.easeOut(duration: 0.1)) {
+                    for index in 0..<8 {
+                        waveHeights[index] = 0.2
+                    }
+                }
+            }
+        }
+    }
+    
+    private func updateWaveform(level: Float) {
+        guard isAnimating else { return }
+        
+        let baseLevel = CGFloat(level)
+        
+        // Apply non-linear scaling for better visual responsiveness
+        let enhancedLevel = pow(baseLevel, 0.6)  // Makes small changes more visible
+        
+        // Create variation for each bar with some randomness for natural look
+        for index in 0..<8 {
+            let variation = CGFloat.random(in: 0.85...1.15)
+            let heightMultiplier = enhancedLevel * variation
+            
+            // Set minimum and maximum heights
+            let minHeight: CGFloat = 0.2
+            let maxHeight: CGFloat = 1.0
+            
+            // Apply some delay effect across bars for wave-like appearance
+            let delayFactor = CGFloat(abs(4 - index)) / 4.0  // Center bars respond more
+            let adjustedLevel = minHeight + (maxHeight - minHeight) * heightMultiplier * (0.8 + delayFactor * 0.2)
+            
+            let finalHeight = max(minHeight, min(maxHeight, adjustedLevel))
+            
+            // Apply different response speeds for increasing vs decreasing
+            if finalHeight > waveHeights[index] {
+                // Fast response when increasing
+                waveHeights[index] = finalHeight
+            } else {
+                // Immediate response when decreasing
+                waveHeights[index] = finalHeight
+            }
+        }
     }
 }
 

@@ -18,6 +18,7 @@ class AudioRecordingService: NSObject, ObservableObject {
     @Published var isRecording = false
     @Published var recordingDuration: TimeInterval = 0
     @Published var hasPermission = false
+    @Published var audioLevel: Float = 0.0  // Audio level for waveform visualization
     
     private var audioRecorder: AVAudioRecorder?
     private var recordingTimer: Timer?
@@ -112,14 +113,17 @@ class AudioRecordingService: NSObject, ObservableObject {
         do {
             audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
             audioRecorder?.delegate = self
+            audioRecorder?.isMeteringEnabled = true  // Enable audio level metering
             audioRecorder?.record()
             
             isRecording = true
             recordingDuration = 0
+            audioLevel = 0.0
             
-            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     self?.updateRecordingDuration()
+                    self?.updateAudioLevel()
                 }
             }
             
@@ -139,6 +143,7 @@ class AudioRecordingService: NSObject, ObservableObject {
         isRecording = false
         recordingTimer?.invalidate()
         recordingTimer = nil
+        audioLevel = 0.0
         
         let filePath = recorder.url.path
         let duration = recordingDuration
@@ -157,6 +162,39 @@ class AudioRecordingService: NSObject, ObservableObject {
     private func updateRecordingDuration() {
         guard let recorder = audioRecorder, recorder.isRecording else { return }
         recordingDuration = recorder.currentTime
+    }
+    
+    private func updateAudioLevel() {
+        guard let recorder = audioRecorder, recorder.isRecording else { 
+            audioLevel = 0.0
+            return 
+        }
+        
+        recorder.updateMeters()
+        let level = recorder.averagePower(forChannel: 0)
+        
+        // Convert dB to linear scale (0.0 to 1.0)
+        // Use a more sensitive threshold for better responsiveness
+        let minDb: Float = -50.0  // More sensitive threshold
+        let maxDb: Float = 0.0
+        
+        let normalizedLevel = max(0.0, min(1.0, (level - minDb) / (maxDb - minDb)))
+        
+        // Apply different smoothing based on whether sound is increasing or decreasing
+        if normalizedLevel > audioLevel {
+            // Fast response when sound increases
+            let fastSmoothingFactor: Float = 0.7
+            audioLevel = audioLevel * (1.0 - fastSmoothingFactor) + normalizedLevel * fastSmoothingFactor
+        } else {
+            // Very fast decay when sound decreases
+            let decaySmoothingFactor: Float = 0.9
+            audioLevel = audioLevel * (1.0 - decaySmoothingFactor) + normalizedLevel * decaySmoothingFactor
+        }
+        
+        // Apply a minimum threshold to quickly go to zero when very quiet
+        if audioLevel < 0.05 {
+            audioLevel = 0.0
+        }
     }
 }
 

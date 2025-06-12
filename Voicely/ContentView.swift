@@ -83,8 +83,11 @@ struct ContentView: View {
             }
         }
         
-        guard !transcriptionService.isWhisperAvailable() else { return }
-        let _ = await transcriptionService.loadWhisperModel()
+        // Check if user wants to preload model on startup
+        let preloadOnStartup = UserDefaults.standard.bool(forKey: "preloadModelOnStartup")
+        if preloadOnStartup && !transcriptionService.isWhisperAvailable() {
+            let _ = await transcriptionService.loadWhisperModel()
+        }
     }
     
     private func processPendingTranscriptionsIfNeeded() async {
@@ -203,7 +206,11 @@ struct RecordingControls: View {
         case .prewarming:
             return "Optimizing model..."
         case .unloaded:
-            return "Model not loaded"
+            if modelManager.isSelectedModelDownloaded() {
+                return "Ready to record"
+            } else {
+                return "Model needs download"
+            }
         case .loaded:
             return ""
         }
@@ -236,11 +243,20 @@ struct RecordingControls: View {
                     }
                 }
             } else {
-                HStack(spacing: 12) {
-                    if !isModelLoaded {
+                VStack(spacing: 8) {
+                    if isModelLoading {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text(modelLoadingMessage)
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .lineLimit(1)
+                        }
+                    } else if !isModelLoaded && !(transcriptionService.modelManager?.isSelectedModelDownloaded() ?? true) {
                         Text(modelLoadingMessage)
                             .font(.caption)
-                            .foregroundColor(.orange)
+                            .foregroundColor(.red)
                             .lineLimit(1)
                     }
                     
@@ -269,6 +285,13 @@ struct RecordingControls: View {
     }
     
     private func startRecording() {
+        // Load model if not already loaded (lazy loading)
+        if !transcriptionService.isWhisperAvailable() {
+            Task {
+                await transcriptionService.loadWhisperModel()
+            }
+        }
+        
         currentRecordingPath = audioService.startRecording()
         waveformAnimation = true
     }

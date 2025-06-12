@@ -291,6 +291,10 @@ class ModelManager: ObservableObject {
         return modelState == .loaded && whisperKit != nil
     }
     
+    func isSelectedModelDownloaded() -> Bool {
+        return localModels.contains(selectedModel)
+    }
+    
     private func shouldIncludeModel(_ model: String) -> Bool {
         let modelLower = model.lowercased()
         

@@ -83,10 +83,11 @@ struct ContentView: View {
             }
         }
         
-        // Check if user wants to preload model on startup
-        let preloadOnStartup = UserDefaults.standard.bool(forKey: "preloadModelOnStartup")
-        if preloadOnStartup && !transcriptionService.isWhisperAvailable() {
-            let _ = await transcriptionService.loadWhisperModel()
+        // Always preload model on startup to optimize user experience
+        if !transcriptionService.isWhisperAvailable() {
+            Task {
+                let _ = await transcriptionService.loadWhisperModel()
+            }
         }
     }
     
@@ -262,30 +263,24 @@ struct RecordingControls: View {
                 }
             } else {
                 VStack(spacing: 8) {
-                    if isModelLoading {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text(modelLoadingMessage)
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                                .lineLimit(1)
-                        }
-                    } else if !isModelLoaded && !(transcriptionService.modelManager?.isSelectedModelDownloaded() ?? true) {
-                        Text(modelLoadingMessage)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .lineLimit(1)
-                    }
-                    
-                    // Center - Start button
+                    // Center - Start button with optional loading indicator
                     Button(action: startRecording) {
-                        Image(systemName: "mic.fill")
-                            .font(.title)
-                            .foregroundColor(.white)
-                            .frame(width: 60, height: 60)
-                            .background(audioService.hasPermission ? Color.blue : Color.gray)
-                            .clipShape(Circle())
+                        ZStack {
+                            Image(systemName: "mic.fill")
+                                .font(.title)
+                                .foregroundColor(.white)
+                                .frame(width: 60, height: 60)
+                                .background(audioService.hasPermission ? Color.blue : Color.gray)
+                                .clipShape(Circle())
+                            
+                            // Small orange dot indicator when model is loading
+                            if isModelLoading {
+                                Circle()
+                                    .fill(Color.orange)
+                                    .frame(width: 8, height: 8)
+                                    .offset(x: -20, y: 0)
+                            }
+                        }
                     }
                     .disabled(!audioService.hasPermission)
                 }
@@ -304,13 +299,7 @@ struct RecordingControls: View {
     }
     
     private func startRecording() {
-        // Load model if not already loaded (lazy loading)
-        if !transcriptionService.isWhisperAvailable() {
-            Task {
-                await transcriptionService.loadWhisperModel()
-            }
-        }
-        
+        // Start recording immediately - model should already be loaded or loading
         currentRecordingPath = audioService.startRecording()
         waveformAnimation = true
     }

@@ -146,7 +146,6 @@ struct SettingsView: View {
     @State private var showComputeUnits = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
-    @AppStorage("preloadModelOnStartup") private var preloadModelOnStartup: Bool = false
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -173,21 +172,6 @@ struct SettingsView: View {
                         TextField("Optional prompt for transcription", text: $transcriptionPrompt)
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .padding(.top, 4)
-                    }
-                    .padding(.vertical, 4)
-                }
-                
-                Section("Performance Settings") {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Preload Model on Startup")
-                                .font(.headline)
-                            Text("Load model when app starts for instant recording (slower startup)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $preloadModelOnStartup)
                     }
                     .padding(.vertical, 4)
                 }

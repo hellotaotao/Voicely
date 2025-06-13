@@ -22,7 +22,7 @@ class AudioRecordingService: NSObject, ObservableObject {
     
     private var audioRecorder: AVAudioRecorder?
     private var recordingTimer: Timer?
-    #if !os(macOS)
+    #if !os(macOS) || targetEnvironment(macCatalyst)
     private var audioSession = AVAudioSession.sharedInstance()
     #endif
     
@@ -32,7 +32,23 @@ class AudioRecordingService: NSObject, ObservableObject {
     }
     
     func checkPermission() {
-        #if os(macOS)
+        #if targetEnvironment(macCatalyst)
+        // For Mac Catalyst, we need to request microphone permission
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            hasPermission = true
+        case .denied:
+            hasPermission = false
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { [weak self] allowed in
+                DispatchQueue.main.async {
+                    self?.hasPermission = allowed
+                }
+            }
+        @unknown default:
+            hasPermission = false
+        }
+        #elseif os(macOS)
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             hasPermission = true
@@ -88,12 +104,21 @@ class AudioRecordingService: NSObject, ObservableObject {
             return nil
         }
         
-        #if !os(macOS)
+        #if !os(macOS) && !targetEnvironment(macCatalyst)
         do {
             try audioSession.setCategory(.record, mode: .default)
             try audioSession.setActive(true)
         } catch {
             print("Failed to set up audio session: \(error)")
+            return nil
+        }
+        #elseif targetEnvironment(macCatalyst)
+        // For Mac Catalyst, we need to set up audio session differently
+        do {
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try audioSession.setActive(true)
+        } catch {
+            print("Failed to set up audio session for Mac Catalyst: \(error)")
             return nil
         }
         #endif
@@ -114,7 +139,12 @@ class AudioRecordingService: NSObject, ObservableObject {
             audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
             audioRecorder?.delegate = self
             audioRecorder?.isMeteringEnabled = true  // Enable audio level metering
-            audioRecorder?.record()
+            
+            let success = audioRecorder?.record() ?? false
+            if !success {
+                print("Failed to start recording")
+                return nil
+            }
             
             isRecording = true
             recordingDuration = 0
@@ -127,6 +157,7 @@ class AudioRecordingService: NSObject, ObservableObject {
                 }
             }
             
+            print("Recording started successfully at: \(audioFilename.path)")
             return audioFilename.path
         } catch {
             print("Failed to start recording: \(error)")
@@ -148,14 +179,21 @@ class AudioRecordingService: NSObject, ObservableObject {
         let filePath = recorder.url.path
         let duration = recordingDuration
         
-        #if !os(macOS)
+        #if !os(macOS) && !targetEnvironment(macCatalyst)
         do {
             try audioSession.setActive(false)
         } catch {
             print("Failed to deactivate audio session: \(error)")
         }
+        #elseif targetEnvironment(macCatalyst)
+        do {
+            try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("Failed to deactivate audio session for Mac Catalyst: \(error)")
+        }
         #endif
         
+        print("Recording stopped. File saved at: \(filePath)")
         return (filePath, duration)
     }
     

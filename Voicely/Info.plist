@@ -7,5 +7,7 @@
 		<string>remote-notification</string>
 		<string>audio</string>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

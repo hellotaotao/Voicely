@@ -382,6 +382,7 @@ struct VoiceNoteDetailView: View {
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var isTranscribing = false
     @State private var showLoadModelPrompt = false
+    @State private var showingShareSheet = false
     
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -434,8 +435,26 @@ struct VoiceNoteDetailView: View {
                     }
                 } else if !note.transcription.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Transcription")
-                            .font(.headline)
+                        HStack {
+                            Text("Transcription")
+                                .font(.headline)
+                            
+                            Spacer()
+                            
+                            HStack(spacing: 12) {
+                                Button(action: { copyTranscription() }) {
+                                    Image(systemName: "square.on.square")
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                
+                                Button(action: { shareTranscription() }) {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
                         
                         Text(note.transcription)
                             .font(.body)
@@ -483,6 +502,9 @@ struct VoiceNoteDetailView: View {
             .padding()
         }
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingShareSheet) {
+            ShareSheet(activityItems: [note.transcription])
+        }
         .onChange(of: modelLoadingState) { oldValue, newValue in
             if newValue == .loaded && note.pendingTranscription {
                 // Model just loaded and note needs transcription
@@ -497,6 +519,14 @@ struct VoiceNoteDetailView: View {
         } message: {
             Text("Please load a model in Settings first to transcribe this recording.")
         }
+    }
+    
+    private func copyTranscription() {
+        UIPasteboard.general.string = note.transcription
+    }
+    
+    private func shareTranscription() {
+        showingShareSheet = true
     }
     
     private func transcribeAudio() {
@@ -591,6 +621,25 @@ struct AudioWaveformView: View {
         // Update state
         waveHeights = newHeights
     }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    let applicationActivities: [UIActivity]? = nil
+    
+    func makeUIViewController(context: UIViewControllerRepresentableContext<ShareSheet>) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
+        
+        // For iPad and Mac Catalyst, we need to configure the popover presentation
+        if let popover = controller.popoverPresentationController {
+            popover.sourceView = UIView()
+            popover.sourceRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+        }
+        
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: UIViewControllerRepresentableContext<ShareSheet>) {}
 }
 
 #Preview {

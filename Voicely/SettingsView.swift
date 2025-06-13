@@ -147,6 +147,7 @@ struct SettingsView: View {
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
     @AppStorage("preloadModelOnStartup") private var preloadModelOnStartup: Bool = false
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationView {
@@ -201,6 +202,13 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
         }
         .task {
             await modelManager.fetchModels()

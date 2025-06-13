@@ -219,7 +219,16 @@ struct RecordingControls: View {
     var body: some View {
         VStack(spacing: 16) {
             if audioService.isRecording {
+                // Recording layout: waveform on left, button in center, time on right
                 HStack(spacing: 16) {
+                    // Left side - Waveform
+                    AudioWaveformView(
+                        isAnimating: $waveformAnimation,
+                        audioService: audioService
+                    )
+                    .frame(width: 80, height: 30)
+                    
+                    // Center - Stop button (same position as start button)
                     Button(action: stopRecording) {
                         Image(systemName: "stop.fill")
                             .font(.title)
@@ -229,18 +238,18 @@ struct RecordingControls: View {
                             .clipShape(Circle())
                     }
                     
-                    VStack(spacing: 8) {
-                        AudioWaveformView(
-                            isAnimating: $waveformAnimation,
-                            audioService: audioService
-                        )
-                        .frame(width: 180, height: 30)
-                        
+                    // Right side - Recording time
+                    VStack(spacing: 4) {
                         Text(formatDuration(audioService.recordingDuration))
                             .font(.title2)
                             .monospacedDigit()
                             .foregroundColor(.primary)
+                        Text("REC")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .fontWeight(.semibold)
                     }
+                    .frame(width: 80)
                 }
             } else {
                 VStack(spacing: 8) {
@@ -260,6 +269,7 @@ struct RecordingControls: View {
                             .lineLimit(1)
                     }
                     
+                    // Center - Start button
                     Button(action: startRecording) {
                         Image(systemName: "mic.fill")
                             .font(.title)

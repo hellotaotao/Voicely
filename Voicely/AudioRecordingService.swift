@@ -16,6 +16,7 @@ import AVFoundation
 @MainActor
 class AudioRecordingService: NSObject, ObservableObject {
     @Published var isRecording = false
+    @Published var isPaused = false
     @Published var recordingDuration: TimeInterval = 0
     @Published var hasPermission = false
     @Published var audioLevel: Float = 0.0  // Audio level for waveform visualization
@@ -147,6 +148,7 @@ class AudioRecordingService: NSObject, ObservableObject {
             }
             
             isRecording = true
+            isPaused = false
             recordingDuration = 0
             audioLevel = 0.0
             
@@ -172,6 +174,7 @@ class AudioRecordingService: NSObject, ObservableObject {
         
         recorder.stop()
         isRecording = false
+        isPaused = false
         recordingTimer?.invalidate()
         recordingTimer = nil
         audioLevel = 0.0
@@ -197,13 +200,45 @@ class AudioRecordingService: NSObject, ObservableObject {
         return (filePath, duration)
     }
     
+    func pauseRecording() {
+        guard isRecording, !isPaused, let recorder = audioRecorder else { return }
+        
+        recorder.pause()
+        isPaused = true
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        audioLevel = 0.0
+        
+        print("Recording paused")
+    }
+    
+    func resumeRecording() {
+        guard isRecording, isPaused, let recorder = audioRecorder else { return }
+        
+        let success = recorder.record()
+        if success {
+            isPaused = false
+            
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    self?.updateRecordingDuration()
+                    self?.updateAudioLevel()
+                }
+            }
+            
+            print("Recording resumed")
+        } else {
+            print("Failed to resume recording")
+        }
+    }
+    
     private func updateRecordingDuration() {
         guard let recorder = audioRecorder, recorder.isRecording else { return }
         recordingDuration = recorder.currentTime
     }
     
     private func updateAudioLevel() {
-        guard let recorder = audioRecorder, recorder.isRecording else { 
+        guard let recorder = audioRecorder, recorder.isRecording, !isPaused else { 
             audioLevel = 0.0
             return 
         }

@@ -227,6 +227,9 @@ struct RecordingControls: View {
                         audioService: audioService
                     )
                     .frame(width: 80, height: 30)
+                    .onChange(of: audioService.isPaused) { _, isPaused in
+                        waveformAnimation = !isPaused
+                    }
                     
                     // Center - Stop button (same position as start button)
                     Button(action: stopRecording) {
@@ -238,16 +241,22 @@ struct RecordingControls: View {
                             .clipShape(Circle())
                     }
                     
-                    // Right side - Recording time
+                    // Right side - Recording time and pause button
                     VStack(spacing: 4) {
                         Text(formatDuration(audioService.recordingDuration))
-                            .font(.title2)
+                            .font(.subheadline)
                             .monospacedDigit()
                             .foregroundColor(.primary)
-                        Text("REC")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .fontWeight(.semibold)
+                        
+                        Button(action: togglePauseResume) {
+                            Image(systemName: audioService.isPaused ? "play.fill" : "pause.fill")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .frame(width: 30, height: 30)
+                                .background(audioService.isPaused ? Color.green : Color.orange)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
                     .frame(width: 80)
                 }
@@ -304,6 +313,16 @@ struct RecordingControls: View {
         
         currentRecordingPath = audioService.startRecording()
         waveformAnimation = true
+    }
+    
+    private func togglePauseResume() {
+        if audioService.isPaused {
+            audioService.resumeRecording()
+            waveformAnimation = true
+        } else {
+            audioService.pauseRecording()
+            waveformAnimation = false
+        }
     }
     
     private func stopRecording() {

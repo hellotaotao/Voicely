@@ -220,24 +220,12 @@ struct SettingsView: View {
     private var modelSelectorView: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !modelManager.availableModels.isEmpty {
-                HStack {
-                    Text("Selected Model")
-                        .font(.headline)
-                    Spacer()
-                    Picker("", selection: $modelManager.selectedModel) {
-                        ForEach(modelManager.availableModels, id: \.self) { model in
-                            HStack {
-                                let isLocal = modelManager.localModels.contains(model)
-                                let modelIcon = isLocal ? "checkmark.circle" : "arrow.down.circle.dotted"
-                                Text("\(Image(systemName: modelIcon)) \(model.replacingOccurrences(of: "_", with: " ").capitalized)")
-                                    .tag(model)
-                            }
-                        }
-                    }
-                    .pickerStyle(MenuPickerStyle())
-                    .onChange(of: modelManager.selectedModel) { _, _ in
-                        modelManager.modelState = .unloaded
-                    }
+                Text("Available Models")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+                
+                ForEach(modelManager.availableModels, id: \.self) { model in
+                    modelItemView(model: model)
                 }
                 
                 if modelManager.loadingProgressValue > 0 && modelManager.loadingProgressValue < 1.0 {
@@ -261,6 +249,7 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    .padding(.top, 8)
                 }
             } else {
                 HStack {
@@ -271,6 +260,48 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+    
+    private func modelItemView(model: String) -> some View {
+        let isLocal = modelManager.localModels.contains(model)
+        let isSelected = modelManager.selectedModel == model
+        let isActive = isSelected && modelManager.modelState == .loaded
+        
+        return Button {
+            if modelManager.selectedModel != model {
+                modelManager.selectedModel = model
+                modelManager.modelState = .unloaded
+            }
+        } label: {
+            HStack {
+                Image(systemName: isLocal ? "checkmark.circle.fill" : "square.and.arrow.down")
+                    .foregroundStyle(isLocal ? .green : .gray)
+                    .font(.title3)
+                
+                Text(model.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.blue)
+                        .font(.body.bold())
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.blue.opacity(0.1) : Color.gray.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.blue.opacity(0.3) : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
     }
     
     private var modelActionsView: some View {

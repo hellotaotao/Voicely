@@ -319,26 +319,27 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
             }
             
-            HStack {
-                Button {
-                    showingModelDeletion = true
-                } label: {
-                    Label("Delete Model", systemImage: "trash")
+            // Buttons side by side
+            HStack(spacing: 12) {
+                // Delete button section
+                if modelManager.localModels.contains(modelManager.selectedModel) {
+                    Button {
+                        showingModelDeletion = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "trash")
+                            Text("Delete Model")
+                        }
                         .foregroundColor(.red)
-                }
-                .disabled(!modelManager.localModels.contains(modelManager.selectedModel))
-                .confirmationDialog("Delete Model", isPresented: $showingModelDeletion) {
-                    Button("Delete", role: .destructive) {
-                        modelManager.deleteModel(modelManager.selectedModel)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                     }
-                    Button("Cancel", role: .cancel) { }
-                } message: {
-                    Text("Are you sure you want to delete the model '\(modelManager.selectedModel)'?")
+                    .buttonStyle(.bordered)
                 }
                 
-                Spacer()
-                
+                // View models button section - completely separate
                 Button {
+                    print("Opening Hugging Face URL...")
                     if let url = URL(string: "https://huggingface.co/argmaxinc/whisperkit-coreml") {
                         #if os(iOS)
                         UIApplication.shared.open(url)
@@ -347,9 +348,27 @@ struct SettingsView: View {
                         #endif
                     }
                 } label: {
-                    Label("View Models", systemImage: "link.circle")
+                    HStack {
+                        Image(systemName: "link.circle")
+                        Text("View Models")
+                    }
+                    .foregroundColor(.blue)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                 }
+                .buttonStyle(.bordered)
             }
+        }
+        .alert("Delete Model", isPresented: $showingModelDeletion) {
+            Button("Delete", role: .destructive) {
+                print("Deleting model: \(modelManager.selectedModel)")
+                modelManager.deleteModel(modelManager.selectedModel)
+            }
+            Button("Cancel", role: .cancel) {
+                print("Cancelled deletion")
+            }
+        } message: {
+            Text("Are you sure you want to delete the model '\(modelManager.selectedModel)'?")
         }
     }
     

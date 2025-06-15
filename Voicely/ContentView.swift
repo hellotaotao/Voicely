@@ -18,6 +18,95 @@ struct ContentView: View {
     @State private var showingSettings = false
     
     var body: some View {
+        GeometryReader { geometry in
+            if shouldUseHorizontalLayout(geometry: geometry) {
+                horizontalSplitView
+            } else {
+                defaultNavigationView
+            }
+        }
+    }
+    
+    private func shouldUseHorizontalLayout(geometry: GeometryProxy) -> Bool {
+        // Use horizontal split layout when iPhone is in landscape
+        return geometry.size.width > geometry.size.height && 
+               UIDevice.current.userInterfaceIdiom == .phone
+    }
+    
+    private var horizontalSplitView: some View {
+        HStack(spacing: 0) {
+            // Left side - Note list
+            VStack {
+                List {
+                    ForEach(voiceNotes) { note in
+                        Button(action: {
+                            selectedNote = note
+                        }) {
+                            VoiceNoteRow(note: note)
+                                .foregroundColor(.primary)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(
+                            selectedNote?.id == note.id ? 
+                            Color.accentColor.opacity(0.1) : 
+                            Color.clear
+                        )
+                    }
+                    .onDelete(perform: deleteNotes)
+                }
+                
+                RecordingControls(
+                    audioService: audioService,
+                    transcriptionService: transcriptionService,
+                    onRecordingComplete: { note in
+                        modelContext.insert(note)
+                    }
+                )
+            }
+            .frame(width: UIScreen.main.bounds.width * 0.4)
+            .navigationTitle("Voice Notes")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gear")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    EditButton()
+                }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
+                    .environmentObject(modelManager)
+            }
+            .task {
+                await setupServices()
+            }
+            
+            Divider()
+            
+            // Right side - Note detail
+            if let selectedNote = selectedNote {
+                VoiceNoteDetailView(note: selectedNote)
+                    .environmentObject(transcriptionService)
+            } else {
+                VStack {
+                    Image(systemName: "note.text")
+                        .font(.system(size: 60))
+                        .foregroundColor(.gray)
+                    Text("Select a voice note")
+                        .font(.title2)
+                        .foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+    
+    private var defaultNavigationView: some View {
         NavigationSplitView {
             VStack {
                 List {

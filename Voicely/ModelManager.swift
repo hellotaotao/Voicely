@@ -308,6 +308,11 @@ class ModelManager: ObservableObject {
             return false
         }
         
+        // Remove all distill models
+        if modelLower.contains("distil") {
+            return false
+        }
+        
         // For large models, remove v2
         if modelLower.contains("large") && modelLower.contains("v2") {
             return false

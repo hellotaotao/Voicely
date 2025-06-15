@@ -265,7 +265,6 @@ struct SettingsView: View {
     private func modelItemView(model: String) -> some View {
         let isLocal = modelManager.localModels.contains(model)
         let isSelected = modelManager.selectedModel == model
-        let isActive = isSelected && modelManager.modelState == .loaded
         
         return Button {
             if modelManager.selectedModel != model {

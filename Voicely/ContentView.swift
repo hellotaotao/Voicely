@@ -25,6 +25,7 @@ struct ContentView: View {
                         NavigationLink(destination: VoiceNoteDetailView(note: note).environmentObject(transcriptionService)) {
                             VoiceNoteRow(note: note)
                         }
+                        .listRowSeparator(.hidden)
                     }
                     .onDelete(perform: deleteNotes)
                 }

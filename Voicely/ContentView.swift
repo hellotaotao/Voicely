@@ -14,6 +14,7 @@ struct ContentView: View {
     @StateObject private var audioService = AudioRecordingService()
     @StateObject private var modelManager = ModelManager()
     @StateObject private var transcriptionService = TranscriptionService()
+    @StateObject private var cloudManager = CloudStorageManager.shared
     @State private var selectedNote: VoiceNote?
     @State private var showingSettings = false
     
@@ -73,6 +74,11 @@ struct ContentView: View {
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels()
         
+        // Migrate local files to iCloud if available
+        if cloudManager.isCloudEnabled {
+            await cloudManager.migrateLocalFilesToCloud()
+        }
+        
         // Add model loading notification observer
         NotificationCenter.default.addObserver(
             forName: .modelLoadedNotification,
@@ -105,9 +111,9 @@ struct ContentView: View {
         withAnimation {
             for index in offsets {
                 let note = voiceNotes[index]
-                // Delete audio file
+                // Delete audio file using CloudStorageManager
                 if !note.audioFilePath.isEmpty {
-                    try? FileManager.default.removeItem(atPath: note.audioFilePath)
+                    cloudManager.deleteFile(at: note.audioFilePath)
                 }
                 modelContext.delete(note)
             }

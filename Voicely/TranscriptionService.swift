@@ -93,9 +93,20 @@ class TranscriptionService: ObservableObject {
         do {
             currentEngine = .whisperKit
             print("Using WhisperKit for transcription")
-            let audioURL = URL(fileURLWithPath: filePath)
             
-            guard FileManager.default.fileExists(atPath: filePath) else {
+            guard let audioURL = CloudStorageManager.shared.getFileURL(for: filePath) else {
+                print("Failed to get file URL for: \(filePath)")
+                return "Audio file not found"
+            }
+            
+            // Start downloading from iCloud if needed
+            CloudStorageManager.shared.startDownloadingFromCloud(url: audioURL)
+            
+            // Wait a bit for the download to start if needed
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            
+            guard FileManager.default.fileExists(atPath: audioURL.path) else {
+                print("Audio file not found at: \(audioURL.path)")
                 return "Audio file not found"
             }
             

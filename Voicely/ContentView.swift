@@ -372,6 +372,10 @@ struct VoiceNoteDetailView: View {
     @State private var isTranscribing = false
     @State private var showLoadModelPrompt = false
     @State private var showingShareSheet = false
+    @State private var isEditing = false
+    @State private var editedTitle = ""
+    @State private var editedTranscription = ""
+    @StateObject private var audioPlayer = AudioPlayerService()
     
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -386,22 +390,126 @@ struct VoiceNoteDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                // Title and Edit Button
                 HStack {
-                    VStack(alignment: .leading) {
-                        Text(note.title)
+                    if isEditing {
+                        TextField("Note title", text: $editedTitle)
                             .font(.title2)
-                            .bold()
-                        
-                        Text(note.timestamp, format: Date.FormatStyle(date: .complete, time: .shortened))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                    } else {
+                        VStack(alignment: .leading) {
+                            Text(note.title)
+                                .font(.title2)
+                                .bold()
+                            
+                            Text(note.timestamp, format: Date.FormatStyle(date: .complete, time: .shortened))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     
                     Spacer()
                     
+                    Button(action: toggleEdit) {
+                        Text(isEditing ? "Done" : "Edit")
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                // Duration
+                HStack {
+                    Text("Duration: ")
+                        .foregroundColor(.secondary)
                     Text(formatDuration(note.duration))
                         .font(.headline)
-                        .foregroundColor(.secondary)
+                }
+                
+                Divider()
+                
+                // Audio Player Controls - Compact Design
+                if !note.audioFilePath.isEmpty {
+                    VStack(spacing: 12) {
+                        // Progress Bar
+                        VStack(spacing: 4) {
+                            ProgressView(value: audioPlayer.currentTime, total: audioPlayer.duration)
+                                .progressViewStyle(LinearProgressViewStyle())
+                                .frame(height: 4)
+                            
+                            HStack {
+                                Text(formatTime(audioPlayer.currentTime))
+                                    .font(.caption)
+                                    .monospacedDigit()
+                                Spacer()
+                                Text(formatTime(audioPlayer.duration))
+                                    .font(.caption)
+                                    .monospacedDigit()
+                            }
+                        }
+                        
+                        // Control Buttons centered with speed on the right
+                        HStack {
+                            Spacer()
+                            
+                            HStack(spacing: 20) {
+                                // Backward 5 seconds
+                                Button(action: { audioPlayer.seekBackward() }) {
+                                    Image(systemName: "gobackward.5")
+                                        .font(.title3)
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                
+                                // Play/Pause
+                                Button(action: { audioPlayer.togglePlayPause() }) {
+                                    Image(systemName: audioPlayer.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                        .font(.system(size: 44))
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                
+                                // Forward 5 seconds
+                                Button(action: { audioPlayer.seekForward() }) {
+                                    Image(systemName: "goforward.5")
+                                        .font(.title3)
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                            
+                            Spacer()
+                            
+                            // Compact Speed Control - positioned absolutely on the right
+                            Menu {
+                                Picker("Speed", selection: $audioPlayer.playbackRate) {
+                                    Text("0.5x").tag(Float(0.5))
+                                    Text("0.75x").tag(Float(0.75))
+                                    Text("1x").tag(Float(1.0))
+                                    Text("1.25x").tag(Float(1.25))
+                                    Text("1.5x").tag(Float(1.5))
+                                    Text("2x").tag(Float(2.0))
+                                }
+                                .onChange(of: audioPlayer.playbackRate) { _, newRate in
+                                    audioPlayer.setPlaybackRate(newRate)
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(String(format: "%.2gx", audioPlayer.playbackRate))
+                                        .font(.footnote)
+                                        .foregroundColor(.blue)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.caption2)
+                                        .foregroundColor(.blue)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(.systemGray5))
+                                .cornerRadius(6)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
                 }
                 
                 Divider()
@@ -445,9 +553,18 @@ struct VoiceNoteDetailView: View {
                             }
                         }
                         
-                        Text(note.transcription)
-                            .font(.body)
-                            .textSelection(.enabled)
+                        if isEditing {
+                            TextEditor(text: $editedTranscription)
+                                .font(.body)
+                                .frame(minHeight: 200)
+                                .padding(8)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(8)
+                        } else {
+                            Text(note.transcription)
+                                .font(.body)
+                                .textSelection(.enabled)
+                        }
                     }
                 } else if note.pendingTranscription {
                     VStack(alignment: .leading, spacing: 12) {
@@ -508,6 +625,41 @@ struct VoiceNoteDetailView: View {
         } message: {
             Text("Please load a model in Settings first to transcribe this recording.")
         }
+        .onAppear {
+            loadAudioFile()
+            editedTitle = note.title
+            editedTranscription = note.transcription
+        }
+        .onChange(of: note.id) { _, _ in
+            loadAudioFile()
+            editedTitle = note.title
+            editedTranscription = note.transcription
+        }
+    }
+    
+    private func loadAudioFile() {
+        if !note.audioFilePath.isEmpty {
+            audioPlayer.loadAudio(from: note.audioFilePath)
+        }
+    }
+    
+    private func toggleEdit() {
+        if isEditing {
+            // Save changes
+            note.title = editedTitle
+            note.transcription = editedTranscription
+        } else {
+            // Enter edit mode
+            editedTitle = note.title
+            editedTranscription = note.transcription
+        }
+        isEditing.toggle()
+    }
+    
+    private func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
     }
     
     private func copyTranscription() {

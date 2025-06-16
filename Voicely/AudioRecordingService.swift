@@ -124,8 +124,7 @@ class AudioRecordingService: NSObject, ObservableObject {
         }
         #endif
         
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let audioFilename = documentsPath.appendingPathComponent("recording_\(Date().timeIntervalSince1970).wav")
+        let audioFilename = CloudStorageManager.shared.generateAudioFilename()
         
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatLinearPCM),

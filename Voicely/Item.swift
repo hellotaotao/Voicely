@@ -10,13 +10,13 @@ import SwiftData
 
 @Model
 final class VoiceNote {
-    var id: UUID
-    var title: String
-    var timestamp: Date
-    var duration: TimeInterval
-    var audioFilePath: String
-    var transcription: String
-    var isTranscribing: Bool
+    var id: UUID = UUID()
+    var title: String = "Voice Note"
+    var timestamp: Date = Date()
+    var duration: TimeInterval = 0
+    var audioFilePath: String = ""
+    var transcription: String = ""
+    var isTranscribing: Bool = false
     var transcriptionProgress: Float = 0.0
     var pendingTranscription: Bool = false // Mark if waiting for transcription
     

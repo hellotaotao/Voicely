@@ -32,8 +32,15 @@ class AudioPlayerService: NSObject, ObservableObject {
         }
     }
     
+    @MainActor
     func loadAudio(from filePath: String) {
-        let url = URL(fileURLWithPath: filePath)
+        guard let url = CloudStorageManager.shared.getFileURL(for: filePath) else {
+            print("Failed to get file URL for: \(filePath)")
+            return
+        }
+        
+        // Start downloading from iCloud if needed
+        CloudStorageManager.shared.startDownloadingFromCloud(url: url)
         
         do {
             audioPlayer = try AVAudioPlayer(contentsOf: url)

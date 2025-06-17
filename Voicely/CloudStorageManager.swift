@@ -23,7 +23,10 @@ class CloudStorageManager: ObservableObject {
     }
     
     private func setupCloudContainer() {
-        if let url = fileManager.url(forUbiquityContainerIdentifier: nil) {
+        // Use explicit container identifier for iCloud Documents
+        let containerIdentifier = "iCloud.com.hellotaotao.Voicely"
+        
+        if let url = fileManager.url(forUbiquityContainerIdentifier: containerIdentifier) {
             containerURL = url.appendingPathComponent("Documents/AudioRecordings")
             isCloudEnabled = true
             
@@ -31,13 +34,16 @@ class CloudStorageManager: ObservableObject {
             if !fileManager.fileExists(atPath: containerURL!.path) {
                 do {
                     try fileManager.createDirectory(at: containerURL!, withIntermediateDirectories: true, attributes: nil)
-                    print("Created iCloud audio directory")
+                    print("Created iCloud audio directory: \(containerURL!.path)")
                 } catch {
                     print("Failed to create iCloud directory: \(error)")
+                    isCloudEnabled = false
                 }
             }
+            
+            print("iCloud Documents enabled for audio files: \(containerURL!.path)")
         } else {
-            print("iCloud not available")
+            print("iCloud Documents not available - check entitlements and Apple ID")
             isCloudEnabled = false
         }
     }
@@ -55,7 +61,7 @@ class CloudStorageManager: ObservableObject {
     // Generate a unique filename for audio recording
     func generateAudioFilename() -> URL {
         let directory = getAudioStorageDirectory()
-        let filename = "recording_\(Date().timeIntervalSince1970).wav"
+        let filename = "recording_\(Date().timeIntervalSince1970).m4a"
         return directory.appendingPathComponent(filename)
     }
     
@@ -68,7 +74,7 @@ class CloudStorageManager: ObservableObject {
         do {
             let localFiles = try fileManager.contentsOfDirectory(at: localURL, includingPropertiesForKeys: nil)
             
-            for file in localFiles where file.pathExtension == "wav" {
+            for file in localFiles where file.pathExtension == "wav" || file.pathExtension == "m4a" {
                 let cloudDestination = cloudURL.appendingPathComponent(file.lastPathComponent)
                 
                 if !fileManager.fileExists(atPath: cloudDestination.path) {
@@ -90,9 +96,20 @@ class CloudStorageManager: ObservableObject {
     
     // Get the full URL for a file
     func getFileURL(for path: String) -> URL? {
+        // Handle empty path
+        guard !path.isEmpty else { return nil }
+        
         // If it's already a full path, convert to URL
         if path.starts(with: "/") {
-            return URL(fileURLWithPath: path)
+            let url = URL(fileURLWithPath: path)
+            // Check if the file exists at this absolute path
+            if fileManager.fileExists(atPath: url.path) {
+                return url
+            } else {
+                // File doesn't exist at absolute path, try as filename in current storage directory
+                let filename = url.lastPathComponent
+                return getAudioStorageDirectory().appendingPathComponent(filename)
+            }
         }
         
         // Otherwise, construct the URL from filename

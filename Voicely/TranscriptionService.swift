@@ -99,12 +99,7 @@ class TranscriptionService: ObservableObject {
                 return "Audio file not found"
             }
             
-            // Start downloading from iCloud if needed
-            CloudStorageManager.shared.startDownloadingFromCloud(url: audioURL)
-            
-            // Wait a bit for the download to start if needed
-            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-            
+            // Files are recorded locally to iCloud Documents, so they should exist immediately
             guard FileManager.default.fileExists(atPath: audioURL.path) else {
                 print("Audio file not found at: \(audioURL.path)")
                 return "Audio file not found"
@@ -125,9 +120,11 @@ class TranscriptionService: ObservableObject {
             progressCallback(0.1)
             transcriptionProgress = 0.1
             
+            let audioPath = audioURL.path
+            
             if selectedLanguageKey == "auto" {
                 // Use automatic language detection
-                let languageDetection = try await whisperKit.detectLanguage(audioPath: audioURL.path())
+                let languageDetection = try await whisperKit.detectLanguage(audioPath: audioPath)
                 languageCode = languageDetection.language
                 print("Auto-detected language: \(languageCode ?? "unknown")")
                 progressCallback(0.2)
@@ -168,7 +165,7 @@ class TranscriptionService: ObservableObject {
             }
             
             let transcriptionResults = try await whisperKit.transcribe(
-                audioPath: audioURL.path(),
+                audioPath: audioPath,
                 decodeOptions: decodeOptions
             )
             

@@ -51,6 +51,16 @@ class CloudStorageManager: ObservableObject {
     // Get the appropriate directory for storing audio files
     func getAudioStorageDirectory() -> URL {
         if isCloudEnabled, let cloudURL = containerURL {
+            // Ensure the directory exists
+            if !fileManager.fileExists(atPath: cloudURL.path) {
+                do {
+                    try fileManager.createDirectory(at: cloudURL, withIntermediateDirectories: true, attributes: nil)
+                    print("Created missing iCloud directory: \(cloudURL.path)")
+                } catch {
+                    print("Failed to create iCloud directory: \(error)")
+                }
+            }
+            
             return cloudURL
         } else {
             // Fallback to local documents directory
@@ -96,7 +106,6 @@ class CloudStorageManager: ObservableObject {
     
     // Get the full URL for a file
     func getFileURL(for path: String) -> URL? {
-        // Handle empty path
         guard !path.isEmpty else { return nil }
         
         // If it's already a full path, convert to URL

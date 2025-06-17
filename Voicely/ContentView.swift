@@ -163,7 +163,6 @@ struct VoiceNoteRow: View {
                         .foregroundColor(.orange)
                 }
             }
-            Divider()
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())

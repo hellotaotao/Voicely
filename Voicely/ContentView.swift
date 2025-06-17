@@ -5,8 +5,8 @@
 //  Created by Tao Wang on 1/6/2025.
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -15,9 +15,11 @@ struct ContentView: View {
     @StateObject private var modelManager = ModelManager()
     @StateObject private var transcriptionService = TranscriptionService()
     @StateObject private var cloudManager = CloudStorageManager.shared
+    @EnvironmentObject private var syncMonitor: CloudKitSyncMonitor
     @State private var selectedNote: VoiceNote?
     @State private var showingSettings = false
-    
+    @State private var showingSyncDetails = false
+
     var body: some View {
         GeometryReader { geometry in
             if shouldUseHorizontalLayout(geometry: geometry) {
@@ -110,15 +112,50 @@ struct ContentView: View {
     private var defaultNavigationView: some View {
         NavigationSplitView {
             VStack {
+                // CloudKit Sync Status Banner
+                if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .success {
+                    HStack {
+                        Circle()
+                            .fill(syncMonitor.statusColor)
+                            .frame(width: 8, height: 8)
+
+                        Text(syncMonitor.statusDescription)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        if case .error(_) = syncMonitor.syncStatus {
+                            Button("Retry") {
+                                Task {
+                                    await syncMonitor.forceSyncIfNeeded()
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                    .animation(.easeInOut, value: syncMonitor.syncStatus)
+                }
+
                 List {
                     ForEach(voiceNotes) { note in
-                        NavigationLink(destination: VoiceNoteDetailView(note: note).environmentObject(transcriptionService)) {
+                        NavigationLink(
+                            destination: VoiceNoteDetailView(note: note).environmentObject(
+                                transcriptionService)
+                        ) {
                             VoiceNoteRow(note: note)
                         }
                     }
                     .onDelete(perform: deleteNotes)
                 }
-                
+                .refreshable {
+                    await cloudManager.refreshSync()
+                }
+
                 RecordingControls(
                     audioService: audioService,
                     transcriptionService: transcriptionService,
@@ -136,6 +173,14 @@ struct ContentView: View {
                         Image(systemName: "gear")
                     }
                 }
+
+                ToolbarItem(placement: .principal) {
+                    if cloudManager.isCloudEnabled {
+                        SyncStatusView()
+                            .environmentObject(cloudManager)
+                    }
+                }
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     EditButton()
                 }
@@ -157,16 +202,17 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func setupServices() async {
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels()
-        
+
         // Migrate local files to iCloud if available
         if cloudManager.isCloudEnabled {
             await cloudManager.migrateLocalFilesToCloud()
+            await cloudManager.refreshSync()
         }
-        
+
         // Add model loading notification observer
         NotificationCenter.default.addObserver(
             forName: .modelLoadedNotification,
@@ -177,7 +223,7 @@ struct ContentView: View {
                 await self.processPendingTranscriptionsIfNeeded()
             }
         }
-        
+
         // Always preload model on startup to optimize user experience
         if !transcriptionService.isWhisperAvailable() {
             Task {
@@ -185,7 +231,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func processPendingTranscriptionsIfNeeded() async {
         // Find all notes pending transcription
         let pendingNotes = voiceNotes.filter { $0.pendingTranscription }
@@ -194,7 +240,7 @@ struct ContentView: View {
             await transcriptionService.processPendingTranscriptions(notes: pendingNotes)
         }
     }
-    
+
     private func deleteNotes(offsets: IndexSet) {
         withAnimation {
             for index in offsets {
@@ -211,7 +257,7 @@ struct ContentView: View {
 
 struct VoiceNoteRow: View {
     let note: VoiceNote
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -222,11 +268,11 @@ struct VoiceNoteRow: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            
+
             Text(note.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
                 .font(.caption)
                 .foregroundColor(.secondary)
-            
+
             if !note.transcription.isEmpty {
                 Text(note.transcription)
                     .font(.body)
@@ -244,7 +290,7 @@ struct VoiceNoteRow: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    
+
                     ProgressView(value: note.transcriptionProgress)
                         .progressViewStyle(LinearProgressViewStyle())
                         .scaleEffect(y: 0.5)
@@ -262,7 +308,7 @@ struct VoiceNoteRow: View {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
     }
-    
+
     private func formatDuration(_ duration: TimeInterval) -> String {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.minute, .second]
@@ -275,25 +321,26 @@ struct RecordingControls: View {
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
     let onRecordingComplete: (VoiceNote) -> Void
-    
+
     @State private var currentRecordingPath: String?
     @State private var waveformAnimation = false
-    
+
     // Computed properties to check model state
     private var isModelLoading: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.modelState == .loading || 
-               modelManager.modelState == .downloading || 
-               modelManager.modelState == .prewarming
+        return modelManager.modelState == .loading || modelManager.modelState == .downloading
+            || modelManager.modelState == .prewarming
     }
-    
+
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
         return modelManager.modelState == .loaded
     }
-    
+
     private var modelLoadingMessage: String {
-        guard let modelManager = transcriptionService.modelManager else { return "Model not available" }
+        guard let modelManager = transcriptionService.modelManager else {
+            return "Model not available"
+        }
         switch modelManager.modelState {
         case .loading:
             return "Loading model..."
@@ -311,7 +358,7 @@ struct RecordingControls: View {
             return ""
         }
     }
-    
+
     var body: some View {
         VStack(spacing: 16) {
             if audioService.isRecording {
@@ -326,7 +373,7 @@ struct RecordingControls: View {
                     .onChange(of: audioService.isPaused) { _, isPaused in
                         waveformAnimation = !isPaused
                     }
-                    
+
                     // Center - Stop button (same position as start button)
                     Button(action: stopRecording) {
                         Image(systemName: "stop.fill")
@@ -336,14 +383,14 @@ struct RecordingControls: View {
                             .background(Color.red)
                             .clipShape(Circle())
                     }
-                    
+
                     // Right side - Recording time and pause button
                     VStack(spacing: 4) {
                         Text(formatDuration(audioService.recordingDuration))
                             .font(.subheadline)
                             .monospacedDigit()
                             .foregroundColor(.primary)
-                        
+
                         Button(action: togglePauseResume) {
                             Image(systemName: audioService.isPaused ? "play.fill" : "pause.fill")
                                 .font(.title3)
@@ -367,7 +414,7 @@ struct RecordingControls: View {
                                 .frame(width: 60, height: 60)
                                 .background(audioService.hasPermission ? Color.blue : Color.gray)
                                 .clipShape(Circle())
-                            
+
                             // Small orange dot indicator when model is loading
                             if isModelLoading {
                                 Circle()
@@ -379,7 +426,7 @@ struct RecordingControls: View {
                     }
                     .disabled(!audioService.hasPermission)
                 }
-                
+
                 if !audioService.hasPermission {
                     Text("Microphone permission required")
                         .font(.caption)
@@ -392,13 +439,13 @@ struct RecordingControls: View {
         .cornerRadius(12)
         .padding()
     }
-    
+
     private func startRecording() {
         // Start recording immediately - model should already be loaded or loading
         currentRecordingPath = audioService.startRecording()
         waveformAnimation = true
     }
-    
+
     private func togglePauseResume() {
         if audioService.isPaused {
             audioService.resumeRecording()
@@ -408,32 +455,34 @@ struct RecordingControls: View {
             waveformAnimation = false
         }
     }
-    
+
     private func stopRecording() {
         waveformAnimation = false
         let (filePath, duration) = audioService.stopRecording()
-        
+
         guard let filePath = filePath else { return }
-        
+
         let note = VoiceNote(
-            title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
+            title:
+                "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
             audioFilePath: filePath
         )
         note.duration = duration
-        
+
         // Check if model is loaded
         if isModelLoaded {
             note.isTranscribing = true
-            
+
             onRecordingComplete(note)
-            
+
             Task {
-                let transcription = await transcriptionService.transcribeAudio(filePath: filePath) { progress in
+                let transcription = await transcriptionService.transcribeAudio(filePath: filePath) {
+                    progress in
                     Task { @MainActor in
                         note.transcriptionProgress = progress
                     }
                 }
-                
+
                 await MainActor.run {
                     if let transcription = transcription {
                         note.transcription = transcription
@@ -449,11 +498,11 @@ struct RecordingControls: View {
             note.isTranscribing = false
             note.transcription = ""
             note.pendingTranscription = true
-            
+
             onRecordingComplete(note)
         }
     }
-    
+
     private func formatDuration(_ duration: TimeInterval) -> String {
         let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
@@ -471,17 +520,17 @@ struct VoiceNoteDetailView: View {
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @StateObject private var audioPlayer = AudioPlayerService()
-    
+
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
         return modelManager.modelState == .loaded
     }
-    
+
     // Monitor model loading state changes
     private var modelLoadingState: ModelState {
         return transcriptionService.modelManager?.modelState ?? .unloaded
     }
-    
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -496,21 +545,24 @@ struct VoiceNoteDetailView: View {
                             Text(note.title)
                                 .font(.title2)
                                 .bold()
-                            
-                            Text(note.timestamp, format: Date.FormatStyle(date: .complete, time: .shortened))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+
+                            Text(
+                                note.timestamp,
+                                format: Date.FormatStyle(date: .complete, time: .shortened)
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                         }
                     }
-                    
+
                     Spacer()
-                    
+
                     Button(action: toggleEdit) {
                         Text(isEditing ? "Done" : "Edit")
                             .foregroundColor(.blue)
                     }
                 }
-                
+
                 // Duration
                 HStack {
                     Text("Duration: ")
@@ -518,18 +570,20 @@ struct VoiceNoteDetailView: View {
                     Text(formatDuration(note.duration))
                         .font(.headline)
                 }
-                
+
                 Divider()
-                
+
                 // Audio Player Controls - Compact Design
                 if !note.audioFilePath.isEmpty {
                     VStack(spacing: 12) {
                         // Progress Bar
                         VStack(spacing: 4) {
-                            ProgressView(value: audioPlayer.currentTime, total: audioPlayer.duration)
-                                .progressViewStyle(LinearProgressViewStyle())
-                                .frame(height: 4)
-                            
+                            ProgressView(
+                                value: audioPlayer.currentTime, total: audioPlayer.duration
+                            )
+                            .progressViewStyle(LinearProgressViewStyle())
+                            .frame(height: 4)
+
                             HStack {
                                 Text(formatTime(audioPlayer.currentTime))
                                     .font(.caption)
@@ -540,11 +594,11 @@ struct VoiceNoteDetailView: View {
                                     .monospacedDigit()
                             }
                         }
-                        
+
                         // Control Buttons centered with speed on the right
                         HStack {
                             Spacer()
-                            
+
                             HStack(spacing: 20) {
                                 // Backward 5 seconds
                                 Button(action: { audioPlayer.seekBackward() }) {
@@ -553,15 +607,18 @@ struct VoiceNoteDetailView: View {
                                         .foregroundColor(.blue)
                                 }
                                 .buttonStyle(PlainButtonStyle())
-                                
+
                                 // Play/Pause
                                 Button(action: { audioPlayer.togglePlayPause() }) {
-                                    Image(systemName: audioPlayer.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                        .font(.system(size: 44))
-                                        .foregroundColor(.blue)
+                                    Image(
+                                        systemName: audioPlayer.isPlaying
+                                            ? "pause.circle.fill" : "play.circle.fill"
+                                    )
+                                    .font(.system(size: 44))
+                                    .foregroundColor(.blue)
                                 }
                                 .buttonStyle(PlainButtonStyle())
-                                
+
                                 // Forward 5 seconds
                                 Button(action: { audioPlayer.seekForward() }) {
                                     Image(systemName: "goforward.5")
@@ -570,9 +627,9 @@ struct VoiceNoteDetailView: View {
                                 }
                                 .buttonStyle(PlainButtonStyle())
                             }
-                            
+
                             Spacer()
-                            
+
                             // Compact Speed Control - positioned absolutely on the right
                             Menu {
                                 Picker("Speed", selection: $audioPlayer.playbackRate) {
@@ -606,9 +663,9 @@ struct VoiceNoteDetailView: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(12)
                 }
-                
+
                 Divider()
-                
+
                 if note.isTranscribing || isTranscribing {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -620,7 +677,7 @@ struct VoiceNoteDetailView: View {
                                 .foregroundColor(.secondary)
                                 .font(.caption)
                         }
-                        
+
                         ProgressView(value: note.transcriptionProgress)
                             .progressViewStyle(LinearProgressViewStyle())
                             .frame(height: 8)
@@ -630,16 +687,16 @@ struct VoiceNoteDetailView: View {
                         HStack {
                             Text("Transcription")
                                 .font(.headline)
-                            
+
                             Spacer()
-                            
+
                             HStack(spacing: 12) {
                                 Button(action: { copyTranscription() }) {
                                     Image(systemName: "square.on.square")
                                         .foregroundColor(.blue)
                                 }
                                 .buttonStyle(PlainButtonStyle())
-                                
+
                                 Button(action: { shareTranscription() }) {
                                     Image(systemName: "square.and.arrow.up")
                                         .foregroundColor(.blue)
@@ -647,7 +704,7 @@ struct VoiceNoteDetailView: View {
                                 .buttonStyle(PlainButtonStyle())
                             }
                         }
-                        
+
                         if isEditing {
                             TextEditor(text: $editedTranscription)
                                 .font(.body)
@@ -666,11 +723,11 @@ struct VoiceNoteDetailView: View {
                         Text("Transcription pending")
                             .font(.headline)
                             .foregroundColor(.orange)
-                        
+
                         Text("This recording needs to be transcribed")
                             .font(.body)
                             .foregroundColor(.secondary)
-                        
+
                         if isModelLoaded {
                             Button(action: transcribeAudio) {
                                 Label("Transcribe Now", systemImage: "wand.and.stars")
@@ -697,7 +754,7 @@ struct VoiceNoteDetailView: View {
                         .foregroundColor(.secondary)
                         .italic()
                 }
-                
+
                 Spacer()
             }
             .padding()
@@ -731,13 +788,13 @@ struct VoiceNoteDetailView: View {
             editedTranscription = note.transcription
         }
     }
-    
+
     private func loadAudioFile() {
         if !note.audioFilePath.isEmpty {
             audioPlayer.loadAudio(from: note.audioFilePath)
         }
     }
-    
+
     private func toggleEdit() {
         if isEditing {
             // Save changes
@@ -750,38 +807,40 @@ struct VoiceNoteDetailView: View {
         }
         isEditing.toggle()
     }
-    
+
     private func formatTime(_ time: TimeInterval) -> String {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%02d:%02d", minutes, seconds)
     }
-    
+
     private func copyTranscription() {
         UIPasteboard.general.string = note.transcription
     }
-    
+
     private func shareTranscription() {
         showingShareSheet = true
     }
-    
+
     private func transcribeAudio() {
         guard isModelLoaded, note.pendingTranscription, !note.audioFilePath.isEmpty else { return }
-        
+
         isTranscribing = true
         note.isTranscribing = true
-        
+
         Task {
-            let transcription = await transcriptionService.transcribeAudio(filePath: note.audioFilePath) { progress in
+            let transcription = await transcriptionService.transcribeAudio(
+                filePath: note.audioFilePath
+            ) { progress in
                 Task { @MainActor in
                     note.transcriptionProgress = progress
                 }
             }
-            
+
             await MainActor.run {
                 isTranscribing = false
                 note.isTranscribing = false
-                
+
                 if let transcription = transcription {
                     note.transcription = transcription
                     note.pendingTranscription = false
@@ -792,7 +851,7 @@ struct VoiceNoteDetailView: View {
             }
         }
     }
-    
+
     private func formatDuration(_ duration: TimeInterval) -> String {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.minute, .second]
@@ -806,7 +865,7 @@ struct AudioWaveformView: View {
     @Binding var isAnimating: Bool
     @ObservedObject var audioService: AudioRecordingService
     @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 18)
-    
+
     var body: some View {
         if isAnimating {
             TimelineView(.animation(minimumInterval: 0.05)) { timeline in
@@ -839,7 +898,7 @@ struct AudioWaveformView: View {
             .frame(height: 30)
         }
     }
-    
+
     private func updateWaveHeights() {
         // Create new array
         var newHeights = waveHeights
@@ -851,7 +910,7 @@ struct AudioWaveformView: View {
         let variation = CGFloat.random(in: 0.9...1.1)
         let level = adjusted * variation
         let minH: CGFloat = 0.15  // Slightly lower minimum
-        let maxH: CGFloat = 1.2   // Slightly higher maximum
+        let maxH: CGFloat = 1.2  // Slightly higher maximum
         let newH = minH + (maxH - minH) * level
         newHeights.append(max(minH, min(maxH, newH)))
         // Update state
@@ -862,20 +921,26 @@ struct AudioWaveformView: View {
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
     let applicationActivities: [UIActivity]? = nil
-    
-    func makeUIViewController(context: UIViewControllerRepresentableContext<ShareSheet>) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
-        
+
+    func makeUIViewController(context: UIViewControllerRepresentableContext<ShareSheet>)
+        -> UIActivityViewController
+    {
+        let controller = UIActivityViewController(
+            activityItems: activityItems, applicationActivities: applicationActivities)
+
         // For iPad and Mac Catalyst, we need to configure the popover presentation
         if let popover = controller.popoverPresentationController {
             popover.sourceView = UIView()
             popover.sourceRect = CGRect(x: 0, y: 0, width: 1, height: 1)
         }
-        
+
         return controller
     }
-    
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: UIViewControllerRepresentableContext<ShareSheet>) {}
+
+    func updateUIViewController(
+        _ uiViewController: UIActivityViewController,
+        context: UIViewControllerRepresentableContext<ShareSheet>
+    ) {}
 }
 
 #Preview {

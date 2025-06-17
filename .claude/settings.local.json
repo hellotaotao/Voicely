@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(xcodebuild:*)",
-      "mcp__ide__executeCode"
+      "mcp__ide__executeCode",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:swiftpackageindex.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": []
   }

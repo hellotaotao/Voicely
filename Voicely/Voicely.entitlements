@@ -8,11 +8,16 @@
 	<string>development</string>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.$(CFBundleIdentifier)</string>
+		<string>iCloud.com.hellotaotao.Voicely</string>
 	</array>
 	<key>com.apple.developer.icloud-services</key>
 	<array>
+		<string>CloudDocuments</string>
 		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.ubiquity-container-identifiers</key>
+	<array>
+		<string>iCloud.com.hellotaotao.Voicely</string>
 	</array>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>

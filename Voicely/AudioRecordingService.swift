@@ -127,12 +127,10 @@ class AudioRecordingService: NSObject, ObservableObject {
         let audioFilename = CloudStorageManager.shared.generateAudioFilename()
         
         let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
             AVSampleRateKey: 16000,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false
+            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue
         ]
         
         do {
@@ -159,7 +157,8 @@ class AudioRecordingService: NSObject, ObservableObject {
             }
             
             print("Recording started successfully at: \(audioFilename.path)")
-            return audioFilename.path
+            // Return only the filename for cross-device compatibility
+            return audioFilename.lastPathComponent
         } catch {
             print("Failed to start recording: \(error)")
             return nil
@@ -178,7 +177,8 @@ class AudioRecordingService: NSObject, ObservableObject {
         recordingTimer = nil
         audioLevel = 0.0
         
-        let filePath = recorder.url.path
+        // Store only filename for cross-device compatibility
+        let filePath = recorder.url.lastPathComponent
         let duration = recordingDuration
         
         #if !os(macOS) && !targetEnvironment(macCatalyst)

@@ -116,7 +116,7 @@ class AudioRecordingService: NSObject, ObservableObject {
         #elseif targetEnvironment(macCatalyst)
         // For Mac Catalyst, we need to set up audio session differently
         do {
-            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
             try audioSession.setActive(true)
         } catch {
             print("Failed to set up audio session for Mac Catalyst: \(error)")
@@ -284,3 +284,4 @@ extension AudioRecordingService: AVAudioRecorderDelegate {
         }
     }
 }
+

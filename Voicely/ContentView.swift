@@ -476,7 +476,7 @@ struct RecordingControls: View {
             onRecordingComplete(note)
 
             Task {
-                let transcription = await transcriptionService.transcribeAudio(filePath: filePath) {
+                let result = await transcriptionService.transcribeAudio(filePath: filePath) {
                     progress in
                     Task { @MainActor in
                         note.transcriptionProgress = progress
@@ -484,10 +484,14 @@ struct RecordingControls: View {
                 }
 
                 await MainActor.run {
-                    if let transcription = transcription {
-                        note.transcription = transcription
+                    if let result = result {
+                        note.transcription = result.text
+                        note.lastTranscriptionDuration = result.duration
+                        note.pendingTranscription = false
                     } else {
                         note.transcription = ""
+                        note.lastTranscriptionDuration = 0
+                        note.pendingTranscription = true
                     }
                     note.isTranscribing = false
                     note.transcriptionProgress = 0.0
@@ -666,6 +670,19 @@ struct VoiceNoteDetailView: View {
 
                 Divider()
 
+                // Actions available regardless of current transcription state
+                HStack {
+                    Button(action: { transcribeAudio(force: true) }) {
+                        Label("Retry Transcription", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(
+                        note.audioFilePath.isEmpty || note.isTranscribing || isTranscribing
+                            || !isModelLoaded
+                    )
+
+                    Spacer()
+                }
+
                 if note.isTranscribing || isTranscribing {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -705,6 +722,14 @@ struct VoiceNoteDetailView: View {
                             }
                         }
 
+                        if note.lastTranscriptionDuration > 0 {
+                            Text(
+                                "Last transcription runtime: \(transcriptionService.formatTranscriptionDuration(note.lastTranscriptionDuration))."
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        }
+
                         if isEditing {
                             TextEditor(text: $editedTranscription)
                                 .font(.body)
@@ -729,7 +754,7 @@ struct VoiceNoteDetailView: View {
                             .foregroundColor(.secondary)
 
                         if isModelLoaded {
-                            Button(action: transcribeAudio) {
+                            Button(action: { transcribeAudio() }) {
                                 Label("Transcribe Now", systemImage: "wand.and.stars")
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 8)
@@ -761,7 +786,7 @@ struct VoiceNoteDetailView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingShareSheet) {
-            ShareSheet(activityItems: [note.transcription])
+            ShareSheet(activityItems: [shareableTranscriptionText()])
         }
         .onChange(of: modelLoadingState) { oldValue, newValue in
             if newValue == .loaded && note.pendingTranscription {
@@ -815,21 +840,23 @@ struct VoiceNoteDetailView: View {
     }
 
     private func copyTranscription() {
-        UIPasteboard.general.string = note.transcription
+        UIPasteboard.general.string = shareableTranscriptionText()
     }
 
     private func shareTranscription() {
         showingShareSheet = true
     }
 
-    private func transcribeAudio() {
-        guard isModelLoaded, note.pendingTranscription, !note.audioFilePath.isEmpty else { return }
+    private func transcribeAudio(force: Bool = false) {
+        guard isModelLoaded, !note.audioFilePath.isEmpty else { return }
+        guard force || note.pendingTranscription else { return }
 
         isTranscribing = true
         note.isTranscribing = true
+        note.transcriptionProgress = 0.0
 
         Task {
-            let transcription = await transcriptionService.transcribeAudio(
+            let result = await transcriptionService.transcribeAudio(
                 filePath: note.audioFilePath
             ) { progress in
                 Task { @MainActor in
@@ -841,15 +868,30 @@ struct VoiceNoteDetailView: View {
                 isTranscribing = false
                 note.isTranscribing = false
 
-                if let transcription = transcription {
-                    note.transcription = transcription
+                if let result = result {
+                    note.transcription = result.text
+                    note.lastTranscriptionDuration = result.duration
                     note.pendingTranscription = false
+                    editedTranscription = result.text
                 } else {
                     note.transcriptionProgress = 0.0
-                    // Keep pendingTranscription as true since we failed
+                    if !force {
+                        note.pendingTranscription = true
+                    }
                 }
             }
         }
+    }
+
+    private func shareableTranscriptionText() -> String {
+        guard note.lastTranscriptionDuration > 0 else {
+            return note.transcription
+        }
+
+        return transcriptionService.annotatedText(
+            text: note.transcription,
+            duration: note.lastTranscriptionDuration
+        )
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {

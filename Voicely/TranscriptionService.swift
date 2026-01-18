@@ -14,6 +14,11 @@ enum TranscriptionEngine {
     case notAvailable
 }
 
+struct TranscriptionResult {
+    let text: String
+    let duration: TimeInterval
+}
+
 @MainActor
 class TranscriptionService: ObservableObject {
     @Published var isTranscribing = false
@@ -67,19 +72,31 @@ class TranscriptionService: ObservableObject {
         }
     }
     
-    func transcribeAudio(filePath: String, progressCallback: @escaping (Float) -> Void = { _ in }) async -> String? {
+    func transcribeAudio(
+        filePath: String,
+        progressCallback: @escaping (Float) -> Void = { _ in }
+    ) async -> TranscriptionResult? {
         isTranscribing = true
         transcriptionProgress = 0.0
+        let startTime = Date()
         defer { 
             isTranscribing = false
             transcriptionProgress = 0.0
         }
         
-        if isWhisperLoaded {
-            return await transcribeWithWhisper(filePath: filePath, progressCallback: progressCallback)
-        } else {
+        guard isWhisperLoaded else {
             return nil
         }
+
+        guard let text = await transcribeWithWhisper(
+            filePath: filePath,
+            progressCallback: progressCallback
+        ) else {
+            return nil
+        }
+
+        let elapsed = Date().timeIntervalSince(startTime)
+        return TranscriptionResult(text: text, duration: elapsed)
     }
     
     private func transcribeWithWhisper(filePath: String, progressCallback: @escaping (Float) -> Void) async -> String? {
@@ -272,8 +289,9 @@ class TranscriptionService: ObservableObject {
                 }
             }
             
-            if let transcription = transcription {
-                note.transcription = transcription
+            if let result = transcription {
+                note.transcription = result.text
+                note.lastTranscriptionDuration = result.duration
                 note.pendingTranscription = false
             }
             
@@ -283,5 +301,41 @@ class TranscriptionService: ObservableObject {
             // Add a brief delay between transcriptions to avoid system overload
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
+    }
+}
+
+extension TranscriptionService {
+    func annotatedText(for result: TranscriptionResult) -> String {
+        annotatedText(text: result.text, duration: result.duration)
+    }
+
+    func annotatedText(text: String, duration: TimeInterval) -> String {
+        let formatted = formatTranscriptionDuration(duration)
+        let header = "Transcription completed in \(formatted)."
+        if text.isEmpty {
+            return header
+        }
+        return header + "\n\n" + text
+    }
+
+    func formatTranscriptionDuration(_ duration: TimeInterval) -> String {
+        if duration < 1 {
+            return String(format: "%.2f seconds", duration)
+        }
+
+        if duration < 60 {
+            return String(format: "%.2f seconds", duration)
+        }
+
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.minute, .second]
+        formatter.unitsStyle = .full
+        formatter.zeroFormattingBehavior = .dropTrailing
+
+        if let formatted = formatter.string(from: duration), !formatted.isEmpty {
+            return formatted
+        }
+
+        return String(format: "%.2f seconds", duration)
     }
 }

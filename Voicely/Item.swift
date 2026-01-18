@@ -19,6 +19,7 @@ final class VoiceNote {
     var isTranscribing: Bool = false
     var transcriptionProgress: Float = 0.0
     var pendingTranscription: Bool = false // Mark if waiting for transcription
+    var lastTranscriptionDuration: TimeInterval = 0
     
     init(title: String = "", audioFilePath: String = "", transcription: String = "") {
         self.id = UUID()

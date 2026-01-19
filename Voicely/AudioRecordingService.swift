@@ -106,22 +106,41 @@ class AudioRecordingService: NSObject, ObservableObject {
         }
         
         #if !os(macOS) && !targetEnvironment(macCatalyst)
+        print("🔍 [DEBUG] Setting up audio session for iOS...")
         do {
+            print("🔍 [DEBUG] Setting category to .record, mode: .default")
             try audioSession.setCategory(.record, mode: .default)
+            print("🔍 [DEBUG] Activating audio session...")
             try audioSession.setActive(true)
+            print("✅ [DEBUG] Audio session activated successfully")
+            print("🔍 [DEBUG] Audio session category: \(audioSession.category)")
+            print("🔍 [DEBUG] Audio session mode: \(audioSession.mode)")
+            print("🔍 [DEBUG] Audio session sample rate: \(audioSession.sampleRate) Hz")
+            print("🔍 [DEBUG] Audio session input channels: \(audioSession.inputNumberOfChannels)")
         } catch {
-            print("Failed to set up audio session: \(error)")
+            print("❌ [DEBUG] Failed to set up audio session: \(error)")
+            print("❌ [DEBUG] Error code: \((error as NSError).code)")
+            print("❌ [DEBUG] Error domain: \((error as NSError).domain)")
             return nil
         }
         #elseif targetEnvironment(macCatalyst)
         // For Mac Catalyst, we need to set up audio session differently
+        print("🔍 [DEBUG] Setting up audio session for Mac Catalyst...")
         do {
+            print("🔍 [DEBUG] Setting category to .playAndRecord with options")
             try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            print("🔍 [DEBUG] Activating audio session...")
             try audioSession.setActive(true)
+            print("✅ [DEBUG] Audio session activated successfully for Mac Catalyst")
+            print("🔍 [DEBUG] Audio session category: \(audioSession.category)")
+            print("🔍 [DEBUG] Audio session mode: \(audioSession.mode)")
         } catch {
-            print("Failed to set up audio session for Mac Catalyst: \(error)")
+            print("❌ [DEBUG] Failed to set up audio session for Mac Catalyst: \(error)")
+            print("❌ [DEBUG] This could be related to 'cannot add handler' warnings")
             return nil
         }
+        #else
+        print("🔍 [DEBUG] Running on macOS - audio session setup not required")
         #endif
         
         let audioFilename = CloudStorageManager.shared.generateAudioFilename()
@@ -133,16 +152,28 @@ class AudioRecordingService: NSObject, ObservableObject {
             AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue
         ]
         
+        print("🔍 [DEBUG] Creating AVAudioRecorder with settings:")
+        print("🔍 [DEBUG]   - Format: MPEG4AAC")
+        print("🔍 [DEBUG]   - Sample Rate: 16000 Hz")
+        print("🔍 [DEBUG]   - Channels: 1 (mono)")
+        print("🔍 [DEBUG]   - Quality: medium")
+        print("🔍 [DEBUG]   - Output file: \(audioFilename.lastPathComponent)")
+        
         do {
             audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
             audioRecorder?.delegate = self
             audioRecorder?.isMeteringEnabled = true  // Enable audio level metering
             
+            print("✅ [DEBUG] AVAudioRecorder created successfully")
+            print("🔍 [DEBUG] Starting recording...")
+            
             let success = audioRecorder?.record() ?? false
             if !success {
-                print("Failed to start recording")
+                print("❌ [DEBUG] Failed to start recording - record() returned false")
                 return nil
             }
+            
+            print("✅ [DEBUG] Recording started successfully")
             
             isRecording = true
             isPaused = false

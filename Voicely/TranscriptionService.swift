@@ -116,7 +116,7 @@ class TranscriptionService: ObservableObject {
                 return "Audio file not found"
             }
             
-            // Files are recorded locally to iCloud Documents, so they should exist immediately
+            // Files are recorded to iCloud Documents, so they should exist immediately
             guard FileManager.default.fileExists(atPath: audioURL.path) else {
                 print("Audio file not found at: \(audioURL.path)")
                 return "Audio file not found"

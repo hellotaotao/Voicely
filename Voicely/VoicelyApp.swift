@@ -33,10 +33,10 @@ struct VoicelyApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(syncMonitor)
+                .task {
+                    syncMonitor.setModelContainer(sharedModelContainer)
+                }
         }
         .modelContainer(sharedModelContainer)
-        .onAppear {
-            syncMonitor.setModelContainer(sharedModelContainer)
-        }
     }
 }

@@ -19,7 +19,13 @@ class CloudStorageManager: ObservableObject {
     @Published var pendingDownloads = 0
     
     private let fileManager = FileManager.default
-    private var containerURL: URL?
+    private let cloudContainerIdentifier = "iCloud.com.hellotaotao.Voicely"
+    private let audioDirectoryName = "AudioRecordings"
+    // Sync audio files via iCloud Documents to keep data consistent across devices.
+    private let syncAudioFiles = true
+
+    private var cloudContainerURL: URL?
+    private var localContainerURL: URL?
     private var metadataQuery: NSMetadataQuery?
     
     enum SyncStatus {
@@ -31,54 +37,73 @@ class CloudStorageManager: ObservableObject {
     }
     
     private init() {
+        setupLocalContainer()
         setupCloudContainer()
         setupMetadataQuery()
     }
+
+    private func setupLocalContainer() {
+        let localURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        localContainerURL = localURL
+        print("Local audio directory: \(localURL.path)")
+    }
     
     private func setupCloudContainer() {
-        // Use explicit container identifier for iCloud Documents
-        let containerIdentifier = "iCloud.com.hellotaotao.Voicely"
-        
-        if let url = fileManager.url(forUbiquityContainerIdentifier: containerIdentifier) {
-            containerURL = url.appendingPathComponent("Documents/AudioRecordings")
+        guard syncAudioFiles else {
+            isCloudEnabled = false
+            print("iCloud audio sync disabled - using local storage only")
+            return
+        }
+
+        if let url = fileManager.url(forUbiquityContainerIdentifier: cloudContainerIdentifier) {
+            let cloudURL = url.appendingPathComponent("Documents/\(audioDirectoryName)", isDirectory: true)
+            cloudContainerURL = cloudURL
             isCloudEnabled = true
-            
-            // Create directory if it doesn't exist
-            if !fileManager.fileExists(atPath: containerURL!.path) {
-                do {
-                    try fileManager.createDirectory(at: containerURL!, withIntermediateDirectories: true, attributes: nil)
-                    print("Created iCloud audio directory: \(containerURL!.path)")
-                } catch {
-                    print("Failed to create iCloud directory: \(error)")
-                    isCloudEnabled = false
-                }
-            }
-            
-            print("iCloud Documents enabled for audio files: \(containerURL!.path)")
+
+            createDirectoryIfNeeded(at: cloudURL, excludeFromBackup: false)
+            print("iCloud Documents enabled for audio files: \(cloudURL.path)")
         } else {
             print("iCloud Documents not available - check entitlements and Apple ID")
             isCloudEnabled = false
         }
     }
+
+    private func createDirectoryIfNeeded(at url: URL, excludeFromBackup: Bool) {
+        if !fileManager.fileExists(atPath: url.path) {
+            do {
+                try fileManager.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+                print("Created audio directory: \(url.path)")
+            } catch {
+                print("Failed to create audio directory: \(error)")
+            }
+        }
+
+        if excludeFromBackup {
+            var mutableURL = url
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            do {
+                try mutableURL.setResourceValues(values)
+            } catch {
+                print("Failed to exclude audio directory from backup: \(error)")
+            }
+        }
+    }
     
     // Get the appropriate directory for storing audio files
     func getAudioStorageDirectory() -> URL {
-        if isCloudEnabled, let cloudURL = containerURL {
-            // Ensure the directory exists
-            if !fileManager.fileExists(atPath: cloudURL.path) {
-                do {
-                    try fileManager.createDirectory(at: cloudURL, withIntermediateDirectories: true, attributes: nil)
-                    print("Created missing iCloud directory: \(cloudURL.path)")
-                } catch {
-                    print("Failed to create iCloud directory: \(error)")
-                }
-            }
-            
+        if syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL {
+            createDirectoryIfNeeded(at: cloudURL, excludeFromBackup: false)
             return cloudURL
-        } else {
-            // Fallback to local documents directory
-            return fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         }
+
+        if let localURL = localContainerURL {
+            createDirectoryIfNeeded(at: localURL, excludeFromBackup: false)
+            return localURL
+        }
+
+        // Fallback to local documents directory
+        return fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
     
     // Generate a unique filename for audio recording
@@ -90,9 +115,9 @@ class CloudStorageManager: ObservableObject {
     
     // Move existing local files to iCloud
     func migrateLocalFilesToCloud() async {
-        guard isCloudEnabled, let cloudURL = containerURL else { return }
+        guard syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL else { return }
         
-        let localURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let localURL = localContainerURL ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         
         do {
             let localFiles = try fileManager.contentsOfDirectory(at: localURL, includingPropertiesForKeys: nil)
@@ -112,7 +137,7 @@ class CloudStorageManager: ObservableObject {
     
     // Check if a file exists in cloud storage
     func fileExistsInCloud(filename: String) -> Bool {
-        guard isCloudEnabled, let cloudURL = containerURL else { return false }
+        guard syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL else { return false }
         let fileURL = cloudURL.appendingPathComponent(filename)
         return fileManager.fileExists(atPath: fileURL.path)
     }
@@ -141,7 +166,7 @@ class CloudStorageManager: ObservableObject {
     
     // Start downloading a file from iCloud if needed
     func startDownloadingFromCloud(url: URL) {
-        guard isCloudEnabled else { return }
+        guard syncAudioFiles, isCloudEnabled else { return }
         
         do {
             var isDownloaded: AnyObject?
@@ -171,7 +196,7 @@ class CloudStorageManager: ObservableObject {
     // MARK: - Sync Status Monitoring
     
     private func setupMetadataQuery() {
-        guard isCloudEnabled, containerURL != nil else { return }
+        guard syncAudioFiles, isCloudEnabled, cloudContainerURL != nil else { return }
         
         metadataQuery = NSMetadataQuery()
         metadataQuery?.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
@@ -269,7 +294,7 @@ class CloudStorageManager: ObservableObject {
     }
     
     func forceDownloadAll() async {
-        guard isCloudEnabled, let containerURL = containerURL else { return }
+        guard syncAudioFiles, isCloudEnabled, let containerURL = cloudContainerURL else { return }
         
         do {
             let contents = try fileManager.contentsOfDirectory(at: containerURL, includingPropertiesForKeys: [

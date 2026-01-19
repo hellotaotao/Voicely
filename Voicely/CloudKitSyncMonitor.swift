@@ -20,7 +20,7 @@ class CloudKitSyncMonitor: ObservableObject {
 
     private var modelContainer: ModelContainer?
 
-    enum SyncStatus {
+    enum SyncStatus: Equatable {
         case idle
         case syncing
         case success

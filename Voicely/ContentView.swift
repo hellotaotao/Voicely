@@ -45,7 +45,9 @@ struct ContentView: View {
                         Button(action: {
                             selectedNote = note
                         }) {
-                            VoiceNoteRow(note: note)
+                            VoiceNoteRow(note: note, onCancel: note.isTranscribing ? {
+                                cancelTranscription(for: note)
+                            } : nil)
                                 .foregroundColor(.primary)
                         }
                         .buttonStyle(PlainButtonStyle())
@@ -55,6 +57,13 @@ struct ContentView: View {
                             Color.accentColor.opacity(0.1) : 
                             Color.clear
                         )
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                deleteNote(note)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                     .onDelete(perform: deleteNotes)
                 }
@@ -147,7 +156,16 @@ struct ContentView: View {
                             destination: VoiceNoteDetailView(note: note).environmentObject(
                                 transcriptionService)
                         ) {
-                            VoiceNoteRow(note: note)
+                            VoiceNoteRow(note: note, onCancel: note.isTranscribing ? {
+                                cancelTranscription(for: note)
+                            } : nil)
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                deleteNote(note)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                     }
                     .onDelete(perform: deleteNotes)
@@ -253,10 +271,33 @@ struct ContentView: View {
             }
         }
     }
+    
+    private func deleteNote(_ note: VoiceNote) {
+        withAnimation {
+            // Cancel transcription if in progress
+            if note.isTranscribing {
+                transcriptionService.cancelTranscription()
+                note.isTranscribing = false
+            }
+            // Delete audio file using CloudStorageManager
+            if !note.audioFilePath.isEmpty {
+                cloudManager.deleteFile(at: note.audioFilePath)
+            }
+            modelContext.delete(note)
+        }
+    }
+    
+    private func cancelTranscription(for note: VoiceNote) {
+        transcriptionService.cancelTranscription()
+        note.isTranscribing = false
+        note.transcriptionProgress = 0.0
+        note.pendingTranscription = true
+    }
 }
 
 struct VoiceNoteRow: View {
     let note: VoiceNote
+    var onCancel: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -289,6 +330,16 @@ struct VoiceNoteRow: View {
                         Text("\(Int(note.transcriptionProgress * 100))%")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        
+                        // Cancel button
+                        if let onCancel = onCancel {
+                            Button(action: onCancel) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                                    .font(.caption)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
                     }
 
                     ProgressView(value: note.transcriptionProgress)
@@ -693,6 +744,13 @@ struct VoiceNoteDetailView: View {
                             Text("\(Int(note.transcriptionProgress * 100))%")
                                 .foregroundColor(.secondary)
                                 .font(.caption)
+                            
+                            // Cancel button in detail view
+                            Button(action: { cancelCurrentTranscription() }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                            }
+                            .buttonStyle(PlainButtonStyle())
                         }
 
                         ProgressView(value: note.transcriptionProgress)
@@ -899,6 +957,14 @@ struct VoiceNoteDetailView: View {
         formatter.allowedUnits = [.minute, .second]
         formatter.unitsStyle = .full
         return formatter.string(from: duration) ?? "0 seconds"
+    }
+    
+    private func cancelCurrentTranscription() {
+        transcriptionService.cancelTranscription()
+        isTranscribing = false
+        note.isTranscribing = false
+        note.transcriptionProgress = 0.0
+        note.pendingTranscription = true
     }
 }
 

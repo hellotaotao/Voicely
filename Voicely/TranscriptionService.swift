@@ -29,6 +29,10 @@ class TranscriptionService: ObservableObject {
     var modelManager: ModelManager?
     private var isWhisperLoaded = false
     
+    // Cancellation support
+    private var currentTranscriptionTask: Task<TranscriptionResult?, Never>?
+    private var isCancelled = false
+    
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
         currentEngine = .notAvailable
@@ -220,6 +224,26 @@ class TranscriptionService: ObservableObject {
                 break
             }
         }
+    }
+    
+    // Cancel the current transcription
+    func cancelTranscription() {
+        print("Cancelling current transcription...")
+        isCancelled = true
+        currentTranscriptionTask?.cancel()
+        currentTranscriptionTask = nil
+        isTranscribing = false
+        transcriptionProgress = 0.0
+    }
+    
+    // Check if transcription was cancelled
+    func wasTranscriptionCancelled() -> Bool {
+        return isCancelled
+    }
+    
+    // Reset cancellation state before starting new transcription
+    private func resetCancellationState() {
+        isCancelled = false
     }
     
     func unloadWhisperModel() {

@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var selectedNote: VoiceNote?
     @State private var showingSettings = false
     @State private var showingSyncDetails = false
+    @State private var didSetupServices = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -222,6 +223,9 @@ struct ContentView: View {
     }
 
     private func setupServices() async {
+        guard !didSetupServices else { return }
+        didSetupServices = true
+
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels()
 

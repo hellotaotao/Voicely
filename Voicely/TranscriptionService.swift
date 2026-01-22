@@ -80,6 +80,7 @@ class TranscriptionService: ObservableObject {
         filePath: String,
         progressCallback: @escaping (Float) -> Void = { _ in }
     ) async -> TranscriptionResult? {
+        resetCancellationState()
         isTranscribing = true
         transcriptionProgress = 0.0
         let startTime = Date()
@@ -92,10 +93,19 @@ class TranscriptionService: ObservableObject {
             return nil
         }
 
-        guard let text = await transcribeWithWhisper(
-            filePath: filePath,
-            progressCallback: progressCallback
-        ) else {
+        let task = Task { [weak self] in
+            await self?.transcribeWithWhisper(
+                filePath: filePath,
+                progressCallback: progressCallback
+            )
+        }
+        currentTranscriptionTask = task
+
+        guard let text = await task.value else {
+            return nil
+        }
+
+        if isCancelled || Task.isCancelled {
             return nil
         }
 
@@ -110,6 +120,10 @@ class TranscriptionService: ObservableObject {
             currentEngine = .notAvailable
             return nil
         }
+
+        if isCancelled || Task.isCancelled {
+            return nil
+        }
         
         do {
             currentEngine = .whisperKit
@@ -117,15 +131,15 @@ class TranscriptionService: ObservableObject {
             
             guard let audioURL = CloudStorageManager.shared.getFileURL(for: filePath) else {
                 print("Failed to get file URL for: \(filePath)")
-                return "Audio file not found"
+                return nil
             }
             
             // Files are recorded to iCloud Documents, so they should exist immediately
             guard FileManager.default.fileExists(atPath: audioURL.path) else {
                 print("Audio file not found at: \(audioURL.path)")
-                return "Audio file not found"
+                return nil
             }
-            
+
             // Start progress simulation
             let progressTask = Task {
                 await simulateTranscriptionProgress(progressCallback: progressCallback)
@@ -193,9 +207,13 @@ class TranscriptionService: ObservableObject {
             progressTask.cancel()
             progressCallback(1.0)
             transcriptionProgress = 1.0
+
+            if isCancelled || Task.isCancelled {
+                return nil
+            }
             
             guard let result = transcriptionResults.first else {
-                return "No transcription result"
+                return nil
             }
             
             return result.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
@@ -203,7 +221,7 @@ class TranscriptionService: ObservableObject {
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
-            return "Transcription failed: \(error.localizedDescription)"
+            return nil
         }
     }
     

@@ -10,8 +10,31 @@ import Testing
 
 struct VoicelyTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+    final class LoadedModelManager: ModelManager {
+        override func isModelLoaded() -> Bool { true }
+    }
+
+    @Test @MainActor func cancelTranscriptionReturnsNilAndStopsUpdates() async {
+        let service = TranscriptionService()
+        service.setModelManager(LoadedModelManager())
+
+        service.transcribeImpl = { _, _ in
+            for _ in 0..<10 {
+                if Task.isCancelled {
+                    return nil
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            return "ok"
+        }
+
+        let task = Task { await service.transcribeAudio(filePath: "dummy.m4a") }
+        service.cancelTranscription()
+        let result = await task.value
+
+        #expect(result == nil)
+        #expect(service.wasTranscriptionCancelled() == true)
+        #expect(service.isTranscribing == false)
     }
 
 }

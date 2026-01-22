@@ -21,6 +21,8 @@ struct TranscriptionResult {
 
 @MainActor
 class TranscriptionService: ObservableObject {
+    typealias TranscribeImpl = (String, @escaping (Float) -> Void) async -> String?
+
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
     @Published var transcriptionProgress: Float = 0.0
@@ -28,14 +30,22 @@ class TranscriptionService: ObservableObject {
     
     var modelManager: ModelManager?
     private var isWhisperLoaded = false
+    var transcribeImpl: TranscribeImpl = { _, _ in nil }
     
     // Cancellation support
-    private var currentTranscriptionTask: Task<TranscriptionResult?, Never>?
-    private var isCancelled = false
+    private var currentTranscriptionTask: Task<String?, Never>?
+    private var cancelRequested = false
+    private var lastCancellationHandled = false
     
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
         currentEngine = .notAvailable
+        self.transcribeImpl = { [weak self] filePath, progressCallback in
+            await self?.transcribeWithWhisper(
+                filePath: filePath,
+                progressCallback: progressCallback
+            )
+        }
     }
     
     func setModelManager(_ manager: ModelManager) {
@@ -80,7 +90,12 @@ class TranscriptionService: ObservableObject {
         filePath: String,
         progressCallback: @escaping (Float) -> Void = { _ in }
     ) async -> TranscriptionResult? {
-        resetCancellationState()
+        lastCancellationHandled = false
+        if cancelRequested {
+            cancelRequested = false
+            lastCancellationHandled = true
+            return nil
+        }
         isTranscribing = true
         transcriptionProgress = 0.0
         let startTime = Date()
@@ -94,10 +109,7 @@ class TranscriptionService: ObservableObject {
         }
 
         let task = Task { [weak self] in
-            await self?.transcribeWithWhisper(
-                filePath: filePath,
-                progressCallback: progressCallback
-            )
+            await self?.transcribeImpl(filePath, progressCallback)
         }
         currentTranscriptionTask = task
 
@@ -105,7 +117,9 @@ class TranscriptionService: ObservableObject {
             return nil
         }
 
-        if isCancelled || Task.isCancelled {
+        if cancelRequested || Task.isCancelled {
+            cancelRequested = false
+            lastCancellationHandled = true
             return nil
         }
 
@@ -121,7 +135,7 @@ class TranscriptionService: ObservableObject {
             return nil
         }
 
-        if isCancelled || Task.isCancelled {
+        if cancelRequested || Task.isCancelled {
             return nil
         }
         
@@ -208,7 +222,7 @@ class TranscriptionService: ObservableObject {
             progressCallback(1.0)
             transcriptionProgress = 1.0
 
-            if isCancelled || Task.isCancelled {
+            if cancelRequested || Task.isCancelled {
                 return nil
             }
             
@@ -247,7 +261,7 @@ class TranscriptionService: ObservableObject {
     // Cancel the current transcription
     func cancelTranscription() {
         print("Cancelling current transcription...")
-        isCancelled = true
+        cancelRequested = true
         currentTranscriptionTask?.cancel()
         currentTranscriptionTask = nil
         isTranscribing = false
@@ -256,12 +270,7 @@ class TranscriptionService: ObservableObject {
     
     // Check if transcription was cancelled
     func wasTranscriptionCancelled() -> Bool {
-        return isCancelled
-    }
-    
-    // Reset cancellation state before starting new transcription
-    private func resetCancellationState() {
-        isCancelled = false
+        return lastCancellationHandled
     }
     
     func unloadWhisperModel() {

@@ -86,6 +86,8 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "gear")
                     }
+                    .accessibilityLabel("Settings")
+                    .accessibilityIdentifier("SettingsButton")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     EditButton()
@@ -191,6 +193,8 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "gear")
                     }
+                    .accessibilityLabel("Settings")
+                    .accessibilityIdentifier("SettingsButton")
                 }
 
                 ToolbarItem(placement: .principal) {

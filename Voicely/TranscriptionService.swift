@@ -36,6 +36,8 @@ class TranscriptionService: ObservableObject {
     private var currentTranscriptionTask: Task<String?, Never>?
     private var cancelRequested = false
     private var lastCancellationHandled = false
+    private var progressSmoothingTask: Task<Void, Never>?
+    private var progressSmoothingTarget: Float = 0.0
     
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
@@ -98,9 +100,11 @@ class TranscriptionService: ObservableObject {
         }
         isTranscribing = true
         transcriptionProgress = 0.0
+        resetProgressSmoothing()
         let startTime = Date()
         defer { 
             isTranscribing = false
+            resetProgressSmoothing()
             transcriptionProgress = 0.0
         }
         
@@ -154,9 +158,33 @@ class TranscriptionService: ObservableObject {
                 return nil
             }
 
-            // Start progress simulation
-            let progressTask = Task {
-                await simulateTranscriptionProgress(progressCallback: progressCallback)
+#if DEBUG
+            let windowSamples = whisperKit.featureExtractor.windowSamples ?? Constants.defaultWindowSamples
+            let windowSeconds = Double(windowSamples) / Double(WhisperKit.sampleRate)
+            print("WhisperKit windowSamples=\(windowSamples) (~\(String(format: "%.2f", windowSeconds))s) sampleRate=\(WhisperKit.sampleRate)")
+#endif
+
+            let updateProgressOnMain: (Float) -> Void = { [weak self] value in
+                guard let self else { return }
+                self.smoothProgress(to: value, progressCallback: progressCallback)
+            }
+
+            // Set up callbacks for real progress reporting
+            whisperKit.transcriptionStateCallback = { state in
+                Task { @MainActor in
+                    switch state {
+                    case .convertingAudio:
+                        updateProgressOnMain(0.05)
+                    case .transcribing:
+                        updateProgressOnMain(0.1)
+                    case .finished:
+                        break
+                    }
+                }
+            }
+            defer {
+                whisperKit.segmentDiscoveryCallback = nil
+                whisperKit.transcriptionStateCallback = nil
             }
             
             // Use language from settings
@@ -166,8 +194,7 @@ class TranscriptionService: ObservableObject {
             // Get custom prompt from settings
             let customPrompt = UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? ""
             
-            progressCallback(0.1)
-            transcriptionProgress = 0.1
+            updateProgressOnMain(0.02)
             
             let audioPath = audioURL.path
             
@@ -176,17 +203,13 @@ class TranscriptionService: ObservableObject {
                 let languageDetection = try await whisperKit.detectLanguage(audioPath: audioPath)
                 languageCode = languageDetection.language
                 print("Auto-detected language: \(languageCode ?? "unknown")")
-                progressCallback(0.2)
-                transcriptionProgress = 0.2
+                updateProgressOnMain(0.08)
             } else {
                 languageCode = LanguageConstants.languages[selectedLanguageKey]
                 print("Using selected language code: \(languageCode ?? "nil")")
-                progressCallback(0.15)
-                transcriptionProgress = 0.15
+                updateProgressOnMain(0.06)
             }
-            
-            progressCallback(0.3)
-            transcriptionProgress = 0.3
+            updateProgressOnMain(0.1)
             
             // Create decode options and include custom prompt if available
             var decodeOptions = DecodingOptions(
@@ -216,11 +239,19 @@ class TranscriptionService: ObservableObject {
             let transcriptionResults = try await whisperKit.transcribe(
                 audioPath: audioPath,
                 decodeOptions: decodeOptions
-            )
-            
-            progressTask.cancel()
-            progressCallback(1.0)
-            transcriptionProgress = 1.0
+            ) { [weak self] _ in
+                guard let self else { return nil }
+                if self.cancelRequested || Task.isCancelled {
+                    return false
+                }
+                let fraction = Float(whisperKit.progress.fractionCompleted)
+                Task { @MainActor in
+                    updateProgressOnMain(fraction)
+                }
+                return nil
+            }
+
+            updateProgressOnMain(1.0)
 
             if cancelRequested || Task.isCancelled {
                 return nil
@@ -239,31 +270,13 @@ class TranscriptionService: ObservableObject {
         }
     }
     
-    private func simulateTranscriptionProgress(progressCallback: @escaping (Float) -> Void) async {
-        let startProgress: Float = 0.3
-        let endProgress: Float = 0.9
-        let duration: TimeInterval = 5.0 // Simulate 5 seconds of progress
-        let steps = 50
-        
-        for i in 0...steps {
-            let progress = startProgress + (endProgress - startProgress) * Float(i) / Float(steps)
-            progressCallback(progress)
-            transcriptionProgress = progress
-            
-            do {
-                try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000 / Double(steps)))
-            } catch {
-                break
-            }
-        }
-    }
-    
     // Cancel the current transcription
     func cancelTranscription() {
         print("Cancelling current transcription...")
         cancelRequested = true
         currentTranscriptionTask?.cancel()
         currentTranscriptionTask = nil
+        resetProgressSmoothing()
         isTranscribing = false
         transcriptionProgress = 0.0
     }
@@ -351,6 +364,47 @@ class TranscriptionService: ObservableObject {
             
             // Add a brief delay between transcriptions to avoid system overload
             try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+}
+
+private extension TranscriptionService {
+    @MainActor
+    func resetProgressSmoothing() {
+        progressSmoothingTask?.cancel()
+        progressSmoothingTask = nil
+        progressSmoothingTarget = 0.0
+    }
+
+    @MainActor
+    func smoothProgress(to target: Float, progressCallback: @escaping (Float) -> Void) {
+        let clamped = min(1.0, max(0.0, target))
+        if clamped <= transcriptionProgress {
+            return
+        }
+
+        progressSmoothingTarget = max(progressSmoothingTarget, clamped)
+
+        if progressSmoothingTask != nil {
+            return
+        }
+
+        progressSmoothingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let current = self.transcriptionProgress
+                let target = self.progressSmoothingTarget
+                if current >= target {
+                    break
+                }
+                let delta = target - current
+                let step = min(0.05, max(0.01, delta * 0.25))
+                let next = min(target, current + step)
+                self.transcriptionProgress = next
+                progressCallback(next)
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            self.progressSmoothingTask = nil
         }
     }
 }

@@ -1,0 +1,46 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+- `Voicely/` contains the SwiftUI app source, services (recording, transcription, CloudKit), and models (SwiftData).
+- `VoicelyTests/` holds unit tests using the Swift Testing framework.
+- `VoicelyUITests/` holds UI tests using XCTest.
+- `Voicely.xcodeproj/` is the Xcode project definition.
+- `build/` is build output and can be ignored.
+
+## Build, Test, and Development Commands
+- `open Voicely.xcodeproj` opens the project in Xcode for running on device/simulator.
+- `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 15' build` builds from the command line.
+- `xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 15' test` runs unit and UI tests.
+
+If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared before using `xcodebuild`.
+
+## Coding Style & Naming Conventions
+- Indentation uses 4 spaces; keep SwiftUI views and services formatted consistently.
+- Use Swift naming conventions: `UpperCamelCase` for types, `lowerCamelCase` for variables/functions.
+- Keep view files focused (one primary view per file when possible) and name files after their main type (e.g., `SettingsView.swift`).
+
+## Testing Guidelines
+- Unit tests use Swift Testing (`import Testing`) with `@Test` functions in `VoicelyTests/`.
+- UI tests use XCTest in `VoicelyUITests/`.
+- Name tests with `test...` or clear `@Test` function names describing behavior.
+
+## Commit & Pull Request Guidelines
+- Commits use short, imperative sentences (e.g., “Add CloudKit sync status monitoring”).
+- PRs should include a concise description, key changes, and testing notes.
+- For UI changes, include simulator screenshots or a short screen recording.
+
+## Configuration & Security Notes
+- CloudKit/iCloud features are used; avoid checking in secrets or local credentials.
+- Keep `Info.plist` changes minimal and documented in PRs when permissions or entitlements change.
+
+## To Do
+- Support incoming audio via Share Sheet / Open-in-place: register file type UTIs, handle inbound file URLs, import into app storage, create a new `VoiceNote`, and auto-start transcription. (`Voicely/Info.plist`, `Voicely/VoicelyApp.swift`, `Voicely/ContentView.swift`, `Voicely/CloudStorageManager.swift`)
+- Replace simulated transcription progress with real progress reporting (e.g., integrate WhisperKit callbacks / segment progress) and reflect in UI. (`Voicely/TranscriptionService.swift`, `Voicely/ContentView.swift`)
+- Fix `processPendingTranscriptions` so notes aren't skipped when another transcription is active; wait/retry or queue work. (`Voicely/TranscriptionService.swift`)
+- Ensure the simulated progress task is always cancelled on early exit/error/cancellation. (`Voicely/TranscriptionService.swift`)
+- Wire `showLoadModelPrompt` to prompt users when attempting transcription without a loaded model, and route to Settings. (`Voicely/ContentView.swift`, `Voicely/SettingsView.swift`)
+- Handle iCloud audio downloads more robustly (wait for download completion, retry load, and surface status in the UI). (`Voicely/AudioPlayerService.swift`, `Voicely/ContentView.swift`)
+- Start the metadata query automatically when iCloud is enabled so sync status updates without manual refresh. (`Voicely/CloudStorageManager.swift`)
+- Remove or use `currentRecordingPath` if it serves no purpose. (`Voicely/ContentView.swift`)
+- Add a test for pending transcription processing while a transcription is already in progress. (`VoicelyTests/TranscriptionServiceTests.swift`)
+- Gate verbose debug logging behind `#if DEBUG` to reduce production log noise. (`Voicely/AudioRecordingService.swift`, `Voicely/CloudStorageManager.swift`, `Voicely/AudioPlayerService.swift`, `Voicely/VoicelyApp.swift`)

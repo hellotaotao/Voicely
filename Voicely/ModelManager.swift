@@ -80,7 +80,7 @@ class ModelManager: ObservableObject {
         }
     }
     
-    func fetchModels() async {
+    func fetchModels(includeRemote: Bool = true) async {
         availableModels = []
         
         // Add selected model only if it passes filter
@@ -98,20 +98,22 @@ class ModelManager: ObservableObject {
             }
         }
         
-        // Fetch remote models
-        let remoteModelSupport = await WhisperKit.recommendedRemoteModels()
-        for model in remoteModelSupport.supported {
-            if !availableModels.contains(model) && shouldIncludeModel(model) {
-                availableModels.append(model)
+        if includeRemote {
+            // Fetch remote models
+            let remoteModelSupport = await WhisperKit.recommendedRemoteModels()
+            for model in remoteModelSupport.supported {
+                if !availableModels.contains(model) && shouldIncludeModel(model) {
+                    availableModels.append(model)
+                }
             }
-        }
-        for model in remoteModelSupport.disabled {
-            if !disabledModels.contains(model) {
-                disabledModels.append(model)
+            for model in remoteModelSupport.disabled {
+                if !disabledModels.contains(model) {
+                    disabledModels.append(model)
+                }
             }
+            print("recommendedRemoteModels: \(remoteModelSupport.supported)")
         }
-        
-        print("recommendedRemoteModels: \(remoteModelSupport.supported)")
+
         print("Available models: \(availableModels)")
     }
     

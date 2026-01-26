@@ -231,7 +231,7 @@ struct ContentView: View {
         didSetupServices = true
 
         transcriptionService.setModelManager(modelManager)
-        await modelManager.fetchModels()
+        await modelManager.fetchModels(includeRemote: false)
 
         // Migrate local files to iCloud if available
         if cloudManager.isCloudEnabled {

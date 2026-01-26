@@ -112,6 +112,13 @@ class ModelManager: ObservableObject {
                 }
             }
             print("recommendedRemoteModels: \(remoteModelSupport.supported)")
+            
+            // Always include large-v3-turbo multilingual model regardless of device recommendations
+            let largeTurboModel = "openai_whisper-large-v3-turbo"
+            if !availableModels.contains(largeTurboModel) {
+                availableModels.append(largeTurboModel)
+                print("Force-added large-v3-turbo multilingual model")
+            }
         }
 
         print("Available models: \(availableModels)")
@@ -300,8 +307,14 @@ class ModelManager: ObservableObject {
     private func shouldIncludeModel(_ model: String) -> Bool {
         let modelLower = model.lowercased()
         
-        // Remove all English models
+        // Remove all English-only models (including those with MB suffix like 947mb, 954mb)
         if modelLower.contains("english") || modelLower.contains(".en") {
+            return false
+        }
+        
+        // Remove English-only models with MB suffix (e.g., large-v3_947mb, large-v3-turbo_954mb)
+        // These are English-only variants that don't support multilingual transcription
+        if modelLower.contains("mb") && (modelLower.contains("947") || modelLower.contains("954") || modelLower.contains("_9")) {
             return false
         }
         

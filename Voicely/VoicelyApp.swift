@@ -51,9 +51,17 @@ struct VoicelyApp: App {
 
 // AppDelegate to handle remote notifications
 class AppDelegate: NSObject, UIApplicationDelegate {
+    private static var didRequestRemoteNotifications = false
+    private static let deviceTokenDefaultsKey = "VoicelyDeviceToken"
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         print("🔍 [DEBUG] App did finish launching")
         
+        if Self.didRequestRemoteNotifications {
+            return true
+        }
+        Self.didRequestRemoteNotifications = true
+
         // Register for remote notifications (required for CloudKit)
         print("🔍 [DEBUG] Registering for remote notifications...")
         application.registerForRemoteNotifications()
@@ -63,6 +71,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        let defaults = UserDefaults.standard
+        if let previousToken = defaults.string(forKey: Self.deviceTokenDefaultsKey),
+           previousToken == tokenString {
+            return
+        }
+        defaults.set(tokenString, forKey: Self.deviceTokenDefaultsKey)
         print("✅ [DEBUG] Successfully registered for remote notifications")
         print("✅ [DEBUG] Device token: \(tokenString)")
     }

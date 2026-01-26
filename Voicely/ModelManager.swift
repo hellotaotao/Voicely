@@ -126,7 +126,7 @@ class ModelManager: ObservableObject {
         if FileManager.default.fileExists(atPath: modelPath) {
             do {
                 let downloadedModels = try FileManager.default.contentsOfDirectory(atPath: modelPath)
-                localModels = WhisperKit.formatModelFiles(downloadedModels)
+                localModels = ModelUtilities.formatModelFiles(downloadedModels)
                 print("Found local models: \(localModels)")
             } catch {
                 print("Error enumerating files at \(modelPath): \(error.localizedDescription)")

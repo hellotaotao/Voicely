@@ -200,20 +200,34 @@ struct SettingsView: View {
     }
     
     private var modelStatusView: some View {
-        HStack {
-            Image(systemName: "circle.fill")
-                .foregroundStyle(modelManager.modelState == .loaded ? .green : (modelManager.modelState == .unloaded ? .red : .yellow))
-                .symbolEffect(.variableColor, isActive: modelManager.modelState != .loaded && modelManager.modelState != .unloaded)
-            
-            VStack(alignment: .leading) {
-                Text("Model Status")
-                    .font(.headline)
-                Text(modelManager.modelState.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "circle.fill")
+                    .foregroundStyle(modelManager.modelState == .loaded ? .green : (modelManager.modelState == .unloaded ? .red : .yellow))
+                    .symbolEffect(.variableColor, isActive: modelManager.modelState != .loaded && modelManager.modelState != .unloaded)
+                
+                VStack(alignment: .leading) {
+                    Text("Model Status")
+                        .font(.headline)
+                    Text(modelManager.modelState.description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
             }
             
-            Spacer()
+            // Show error message if any
+            if let errorMessage = modelManager.errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+                .padding(.vertical, 4)
+            }
         }
     }
     
@@ -270,6 +284,7 @@ struct SettingsView: View {
             if modelManager.selectedModel != model {
                 modelManager.selectedModel = model
                 modelManager.modelState = .unloaded
+                modelManager.errorMessage = nil  // Clear previous error when selecting new model
             }
         } label: {
             HStack {
@@ -307,8 +322,12 @@ struct SettingsView: View {
         VStack(spacing: 12) {
             if modelManager.modelState == .unloaded {
                 Button {
+                    print("=== Load Model button pressed ===")
+                    print("Selected model: \(modelManager.selectedModel)")
                     Task {
+                        print("Starting loadModel task...")
                         await modelManager.loadModel(modelManager.selectedModel)
+                        print("loadModel task completed")
                     }
                 } label: {
                     Text("Load Model")

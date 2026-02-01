@@ -54,6 +54,7 @@ class ModelManager: ObservableObject {
     @Published var loadingProgressValue: Float = 0.0
     @Published var encoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
     @Published var decoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
+    @Published var errorMessage: String?
     
     private let modelStorage = "huggingface/models/argmaxinc/whisperkit-coreml"
     private let repoName = "argmaxinc/whisperkit-coreml"
@@ -114,10 +115,12 @@ class ModelManager: ObservableObject {
             print("recommendedRemoteModels: \(remoteModelSupport.supported)")
             
             // Always include large-v3-turbo multilingual model regardless of device recommendations
+            // The multilingual version uses hyphen: openai_whisper-large-v3-turbo
+            // The MB suffix versions (954MB) are English-only which we filter out
             let largeTurboModel = "openai_whisper-large-v3-turbo"
             if !availableModels.contains(largeTurboModel) {
                 availableModels.append(largeTurboModel)
-                print("Force-added large-v3-turbo multilingual model")
+                print("Force-added large-v3-turbo multilingual model: \(largeTurboModel)")
             }
         }
 
@@ -143,11 +146,29 @@ class ModelManager: ObservableObject {
         }
     }
     
+    private var currentLoadedModel: String?
+    
     func loadModel(_ model: String, redownload: Bool = false) async {
+        print("=== loadModel called ===")
         print("Loading model: \(model)")
+        print("Device: \(WhisperKit.deviceName())")
         print("Compute Options - Audio Encoder: \(encoderComputeUnits), Text Decoder: \(decoderComputeUnits)")
         
+        // Clear any previous error
+        errorMessage = nil
+        
+        // Skip if the same model is already loaded in memory and we're not forcing a redownload
+        // This check is independent of modelState because user might have switched selection
+        // (which sets modelState to .unloaded) but the model is still in memory
+        if !redownload && whisperKit != nil && currentLoadedModel == model {
+            print("Model '\(model)' is already loaded in memory, skipping reload")
+            modelState = .loaded
+            loadingProgressValue = 1.0
+            return
+        }
+        
         whisperKit = nil
+        currentLoadedModel = nil
         modelState = .loading
         loadingProgressValue = 0.0
         
@@ -169,6 +190,8 @@ class ModelManager: ObservableObject {
             whisperKit = try await WhisperKit(config)
             
             guard let whisperKit = whisperKit else {
+                print("ERROR: WhisperKit initialization returned nil")
+                errorMessage = "Failed to initialize WhisperKit"
                 modelState = .unloaded
                 return
             }
@@ -178,13 +201,24 @@ class ModelManager: ObservableObject {
             // Check if model is available locally
             if localModels.contains(model) && !redownload {
                 folder = URL(fileURLWithPath: localModelPath).appendingPathComponent(model)
+                print("Using local model at: \(folder?.path ?? "nil")")
             } else {
                 // Download the model
                 modelState = .downloading
-                folder = try await WhisperKit.download(variant: model, from: repoName) { [self] progress in
-                    Task { @MainActor in
-                        self.loadingProgressValue = Float(progress.fractionCompleted) * self.specializationProgressRatio
+                print("Downloading model: \(model) from repo: \(repoName)")
+                
+                // Try downloading without device-specific filtering by using the exact model name
+                do {
+                    folder = try await WhisperKit.download(variant: model, from: repoName) { [self] progress in
+                        Task { @MainActor in
+                            self.loadingProgressValue = Float(progress.fractionCompleted) * self.specializationProgressRatio
+                        }
                     }
+                    print("Download succeeded, folder: \(folder?.path ?? "nil")")
+                } catch {
+                    print("Download failed with error: \(error)")
+                    // If the model name doesn't work, the error will propagate
+                    throw error
                 }
             }
             
@@ -205,12 +239,15 @@ class ModelManager: ObservableObject {
                     try await whisperKit.prewarmModels()
                     progressTask.cancel()
                 } catch {
-                    print("Error prewarming models, retrying: \(error.localizedDescription)")
+                    print("Error prewarming models: \(error.localizedDescription)")
                     progressTask.cancel()
                     if !redownload {
+                        print("Retrying with redownload...")
                         await loadModel(model, redownload: true)
                         return
                     } else {
+                        print("Prewarm failed after retry")
+                        errorMessage = "Failed to optimize model: \(error.localizedDescription)"
                         modelState = .unloaded
                         return
                     }
@@ -227,11 +264,13 @@ class ModelManager: ObservableObject {
                 
                 loadingProgressValue = 1.0
                 modelState = .loaded
+                currentLoadedModel = model
                 
                 print("Model loaded successfully: \(model)")
             }
         } catch {
             print("Failed to load model: \(error)")
+            errorMessage = "Failed to load model: \(error.localizedDescription)"
             modelState = .unloaded
             loadingProgressValue = 0.0
         }
@@ -248,9 +287,9 @@ class ModelManager: ObservableObject {
                 localModels.remove(at: index)
             }
             
-            if selectedModel == model {
-                // If deleting the currently selected model, default to an available model
-                if !availableModels.isEmpty {
+            if selectedModel == model || currentLoadedModel == model {
+                // If deleting the currently selected/loaded model, default to an available model
+                if selectedModel == model && !availableModels.isEmpty {
                     // Choose the first non-local model, or default back to "small"
                     let newModel = availableModels.first(where: { $0 != model }) ?? "small"
                     selectedModel = newModel // This triggers didSet to persist to UserDefaults
@@ -259,6 +298,7 @@ class ModelManager: ObservableObject {
                 
                 modelState = .unloaded
                 whisperKit = nil
+                currentLoadedModel = nil
             }
             
             print("Deleted model: \(model)")

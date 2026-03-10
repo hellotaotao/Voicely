@@ -38,6 +38,9 @@ class TranscriptionService: ObservableObject {
     private var lastCancellationHandled = false
     private var progressSmoothingTask: Task<Void, Never>?
     private var progressSmoothingTarget: Float = 0.0
+    private var isProcessingPendingTranscriptions = false
+    private var pendingTranscriptionQueue: [UUID: VoiceNote] = [:]
+    private var pendingTranscriptionOrder: [UUID] = []
     
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
@@ -92,6 +95,10 @@ class TranscriptionService: ObservableObject {
         filePath: String,
         progressCallback: @escaping (Float) -> Void = { _ in }
     ) async -> TranscriptionResult? {
+        while isTranscribing {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+
         lastCancellationHandled = false
         if cancelRequested {
             cancelRequested = false
@@ -104,6 +111,7 @@ class TranscriptionService: ObservableObject {
         let startTime = Date()
         defer { 
             isTranscribing = false
+            currentTranscriptionTask = nil
             resetProgressSmoothing()
             transcriptionProgress = 0.0
         }
@@ -147,14 +155,8 @@ class TranscriptionService: ObservableObject {
             currentEngine = .whisperKit
             print("Using WhisperKit for transcription")
             
-            guard let audioURL = CloudStorageManager.shared.getFileURL(for: filePath) else {
-                print("Failed to get file URL for: \(filePath)")
-                return nil
-            }
-            
-            // Files are recorded to iCloud Documents, so they should exist immediately
-            guard FileManager.default.fileExists(atPath: audioURL.path) else {
-                print("Audio file not found at: \(audioURL.path)")
+            guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
+                print("Failed to prepare audio file for transcription: \(filePath)")
                 return nil
             }
 
@@ -334,18 +336,31 @@ class TranscriptionService: ObservableObject {
             print("Model not loaded, cannot process pending transcriptions")
             return 
         }
-        
-        print("Processing \(notes.count) pending transcriptions")
-        for note in notes where note.pendingTranscription && !note.audioFilePath.isEmpty {
-            // Avoid processing multiple transcriptions simultaneously, which might consume too many resources
-            guard !isTranscribing else {
+
+        enqueuePendingTranscriptions(notes)
+
+        guard !isProcessingPendingTranscriptions else {
+            print("Pending transcription processing already running")
+            return
+        }
+
+        isProcessingPendingTranscriptions = true
+        defer { isProcessingPendingTranscriptions = false }
+
+        print("Processing \(pendingTranscriptionOrder.count) pending transcriptions")
+        while let note = dequeueNextPendingTranscription() {
+            while isTranscribing {
                 print("Another transcription is in progress, waiting...")
-                try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+
+            guard note.pendingTranscription && !note.audioFilePath.isEmpty else {
                 continue
             }
-            
+
             print("Transcribing note: \(note.title)")
             note.isTranscribing = true
+            note.transcriptionProgress = 0.0
             
             let transcription = await transcribeAudio(filePath: note.audioFilePath) { progress in
                 Task { @MainActor in
@@ -357,6 +372,8 @@ class TranscriptionService: ObservableObject {
                 note.transcription = result.text
                 note.lastTranscriptionDuration = result.duration
                 note.pendingTranscription = false
+            } else if !wasTranscriptionCancelled() {
+                note.pendingTranscription = true
             }
             
             note.isTranscribing = false
@@ -369,6 +386,28 @@ class TranscriptionService: ObservableObject {
 }
 
 private extension TranscriptionService {
+    @MainActor
+    func enqueuePendingTranscriptions(_ notes: [VoiceNote]) {
+        for note in notes where note.pendingTranscription && !note.audioFilePath.isEmpty {
+            pendingTranscriptionQueue[note.id] = note
+            if !pendingTranscriptionOrder.contains(note.id) {
+                pendingTranscriptionOrder.append(note.id)
+            }
+        }
+    }
+
+    @MainActor
+    func dequeueNextPendingTranscription() -> VoiceNote? {
+        while !pendingTranscriptionOrder.isEmpty {
+            let noteID = pendingTranscriptionOrder.removeFirst()
+            guard let note = pendingTranscriptionQueue.removeValue(forKey: noteID) else {
+                continue
+            }
+            return note
+        }
+        return nil
+    }
+
     @MainActor
     func resetProgressSmoothing() {
         progressSmoothingTask?.cancel()

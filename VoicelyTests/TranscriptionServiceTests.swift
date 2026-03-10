@@ -10,6 +10,20 @@ import Testing
 @testable import Voicely
 
 struct TranscriptionServiceTests {
+    actor TranscriptionGate {
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func resume() {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
 
     final class LoadedModelManager: ModelManager {
         override func isModelLoaded() -> Bool { true }
@@ -75,6 +89,47 @@ struct TranscriptionServiceTests {
         #expect(pendingNote.pendingTranscription == false)
         #expect(pendingNote.isTranscribing == false)
         #expect(skippedNote.pendingTranscription == true)
+    }
+
+    @Test @MainActor func processPendingTranscriptionsWaitsForActiveTranscription() async {
+        let service = TranscriptionService()
+        service.setModelManager(LoadedModelManager())
+        let gate = TranscriptionGate()
+
+        service.transcribeImpl = { filePath, _ in
+            if filePath == "active.m4a" {
+                await gate.wait()
+                return "Active transcription"
+            }
+            return "Queued transcription"
+        }
+
+        let activeTask = Task {
+            await service.transcribeAudio(filePath: "active.m4a")
+        }
+
+        while !service.isTranscribing {
+            await Task.yield()
+        }
+
+        let pendingNote = VoiceNote(title: "Queued", audioFilePath: "queued.m4a")
+        pendingNote.pendingTranscription = true
+
+        let processingTask = Task {
+            await service.processPendingTranscriptions(notes: [pendingNote])
+        }
+
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        #expect(pendingNote.transcription.isEmpty)
+        #expect(pendingNote.pendingTranscription == true)
+
+        await gate.resume()
+        _ = await activeTask.value
+        await processingTask.value
+
+        #expect(pendingNote.transcription == "Queued transcription")
+        #expect(pendingNote.pendingTranscription == false)
+        #expect(pendingNote.isTranscribing == false)
     }
 
     @Test @MainActor func annotatedTextUsesHeaderAndBody() {

@@ -232,6 +232,7 @@ struct ContentView: View {
 
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels(includeRemote: false)
+        recoverInterruptedTranscriptions()
 
         // Migrate local files to iCloud if available
         if cloudManager.isCloudEnabled {
@@ -264,6 +265,20 @@ struct ContentView: View {
         if !pendingNotes.isEmpty {
             print("Found \(pendingNotes.count) pending transcriptions to process")
             await transcriptionService.processPendingTranscriptions(notes: pendingNotes)
+        }
+    }
+
+    private func recoverInterruptedTranscriptions() {
+        let interruptedNotes = voiceNotes.filter { $0.isTranscribing }
+        guard !interruptedNotes.isEmpty else { return }
+
+        print("Recovering \(interruptedNotes.count) interrupted transcriptions")
+        for note in interruptedNotes {
+            note.isTranscribing = false
+            note.transcriptionProgress = 0.0
+            if note.transcription.isEmpty {
+                note.pendingTranscription = true
+            }
         }
     }
 
@@ -855,7 +870,8 @@ struct VoiceNoteDetailView: View {
             ShareSheet(activityItems: [shareableTranscriptionText()])
         }
         .onChange(of: modelLoadingState) { oldValue, newValue in
-            if newValue == .loaded && note.pendingTranscription {
+            if newValue == .loaded && note.pendingTranscription && !note.isTranscribing
+                && !transcriptionService.isTranscribing {
                 // Model just loaded and note needs transcription
                 transcribeAudio()
             }
@@ -916,6 +932,7 @@ struct VoiceNoteDetailView: View {
     private func transcribeAudio(force: Bool = false) {
         guard isModelLoaded, !note.audioFilePath.isEmpty else { return }
         guard force || note.pendingTranscription else { return }
+        guard !note.isTranscribing else { return }
 
         isTranscribing = true
         note.isTranscribing = true

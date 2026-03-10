@@ -243,6 +243,33 @@ class CloudStorageManager: ObservableObject {
             }
         }
     }
+
+    func prepareFileForReading(at path: String, timeout: TimeInterval = 90) async -> URL? {
+        guard let url = getFileURL(for: path) else { return nil }
+
+        startDownloadingFromCloud(url: url)
+
+        guard isCloudManagedURL(url) else {
+            return isFileReadyForReading(url) ? url : nil
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if isFileReadyForReading(url) {
+                print("✅ [DEBUG] File ready for reading: \(url.lastPathComponent)")
+                return url
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        if isFileReadyForReading(url) {
+            print("✅ [DEBUG] File ready for reading after wait: \(url.lastPathComponent)")
+            return url
+        }
+
+        print("❌ [DEBUG] Timed out waiting for file to become readable: \(url.lastPathComponent)")
+        return nil
+    }
     
     // Delete a file from storage
     func deleteFile(at path: String) {
@@ -397,5 +424,42 @@ class CloudStorageManager: ObservableObject {
     deinit {
         metadataQuery?.stop()
         NotificationCenter.default.removeObserver(self)
+    }
+}
+
+private extension CloudStorageManager {
+    func isCloudManagedURL(_ url: URL) -> Bool {
+        guard syncAudioFiles, isCloudEnabled, let cloudContainerURL else {
+            return false
+        }
+        return url.path.hasPrefix(cloudContainerURL.path)
+    }
+
+    func isFileReadyForReading(_ url: URL) -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else {
+            return false
+        }
+
+        guard fileManager.isReadableFile(atPath: url.path) else {
+            return false
+        }
+
+        guard isCloudManagedURL(url) else {
+            return true
+        }
+
+        do {
+            var downloadStatus: AnyObject?
+            try (url as NSURL).getResourceValue(&downloadStatus, forKey: .ubiquitousItemDownloadingStatusKey)
+
+            guard let status = downloadStatus as? String else {
+                return true
+            }
+
+            return status == URLUbiquitousItemDownloadingStatus.current.rawValue
+        } catch {
+            print("❌ [DEBUG] Failed to inspect iCloud download status for \(url.lastPathComponent): \(error)")
+            return false
+        }
     }
 }

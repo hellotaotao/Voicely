@@ -42,6 +42,18 @@ class CloudStorageManager: ObservableObject {
         setupMetadataQuery()
     }
 
+#if DEBUG
+    init(
+        testLocalContainerURL: URL,
+        testCloudContainerURL: URL? = nil,
+        testCloudEnabled: Bool = false
+    ) {
+        localContainerURL = testLocalContainerURL
+        cloudContainerURL = testCloudContainerURL
+        isCloudEnabled = testCloudEnabled
+    }
+#endif
+
     private func setupLocalContainer() {
         let localURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         localContainerURL = localURL
@@ -273,13 +285,23 @@ class CloudStorageManager: ObservableObject {
     
     // Delete a file from storage
     func deleteFile(at path: String) {
-        guard let url = getFileURL(for: path) else { return }
-        
-        do {
-            try fileManager.removeItem(at: url)
-            print("Deleted file: \(url.lastPathComponent)")
-        } catch {
-            print("Failed to delete file: \(error)")
+        let candidateURLs = deletionCandidateURLs(for: path)
+        guard !candidateURLs.isEmpty else { return }
+
+        var deletedPaths: [String] = []
+        for url in candidateURLs where fileManager.fileExists(atPath: url.path) {
+            do {
+                try fileManager.removeItem(at: url)
+                deletedPaths.append(url.path)
+            } catch {
+                print("Failed to delete file at \(url.path): \(error)")
+            }
+        }
+
+        if deletedPaths.isEmpty {
+            print("No audio file found to delete for path: \(path)")
+        } else {
+            print("Deleted file(s): \(deletedPaths.joined(separator: ", "))")
         }
     }
     
@@ -428,6 +450,36 @@ class CloudStorageManager: ObservableObject {
 }
 
 private extension CloudStorageManager {
+    func deletionCandidateURLs(for path: String) -> [URL] {
+        guard !path.isEmpty else { return [] }
+
+        let nsPath = path as NSString
+        let filename = nsPath.lastPathComponent
+        var candidateURLs: [URL] = []
+        var seenPaths = Set<String>()
+
+        func append(_ url: URL?) {
+            guard let url else { return }
+            let normalizedURL = url.standardizedFileURL
+            guard seenPaths.insert(normalizedURL.path).inserted else { return }
+            candidateURLs.append(normalizedURL)
+        }
+
+        if nsPath.isAbsolutePath {
+            append(URL(fileURLWithPath: path))
+        }
+
+        guard !filename.isEmpty else {
+            return candidateURLs
+        }
+
+        append(localContainerURL?.appendingPathComponent(filename))
+        append(cloudContainerURL?.appendingPathComponent(filename))
+        append(getAudioStorageDirectory().appendingPathComponent(filename))
+
+        return candidateURLs
+    }
+
     func isCloudManagedURL(_ url: URL) -> Bool {
         guard syncAudioFiles, isCloudEnabled, let cloudContainerURL else {
             return false

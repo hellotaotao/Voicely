@@ -285,29 +285,30 @@ struct ContentView: View {
     private func deleteNotes(offsets: IndexSet) {
         withAnimation {
             for index in offsets {
-                let note = voiceNotes[index]
-                // Delete audio file using CloudStorageManager
-                if !note.audioFilePath.isEmpty {
-                    cloudManager.deleteFile(at: note.audioFilePath)
-                }
-                modelContext.delete(note)
+                deleteNoteAndAudio(voiceNotes[index])
             }
         }
     }
     
     private func deleteNote(_ note: VoiceNote) {
         withAnimation {
-            // Cancel transcription if in progress
-            if note.isTranscribing {
-                transcriptionService.cancelTranscription()
-                note.isTranscribing = false
-            }
-            // Delete audio file using CloudStorageManager
-            if !note.audioFilePath.isEmpty {
-                cloudManager.deleteFile(at: note.audioFilePath)
-            }
-            modelContext.delete(note)
+            deleteNoteAndAudio(note)
         }
+    }
+
+    private func deleteNoteAndAudio(_ note: VoiceNote) {
+        if note.isTranscribing {
+            transcriptionService.cancelTranscription()
+            note.isTranscribing = false
+            note.transcriptionProgress = 0.0
+            note.pendingTranscription = false
+        }
+
+        if !note.audioFilePath.isEmpty {
+            cloudManager.deleteFile(at: note.audioFilePath)
+        }
+
+        modelContext.delete(note)
     }
     
     private func cancelTranscription(for note: VoiceNote) {

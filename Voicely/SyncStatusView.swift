@@ -80,12 +80,16 @@ struct RefreshableVoiceNotesList: View {
     let voiceNotes: [VoiceNote]
     let onDelete: (IndexSet) -> Void
     @EnvironmentObject var cloudManager: CloudStorageManager
+    @EnvironmentObject var transcriptionService: TranscriptionService
     
     var body: some View {
         List {
             ForEach(voiceNotes) { note in
-                NavigationLink(destination: VoiceNoteDetailView(note: note)) {
-                    VoiceNoteRow(note: note)
+                NavigationLink(
+                    destination: VoiceNoteDetailView(note: note)
+                        .environmentObject(transcriptionService)
+                ) {
+                    VoiceNoteRow(note: note, transcriptionService: transcriptionService)
                 }
                 .listRowSeparator(.hidden)
             }

@@ -38,6 +38,7 @@ class CloudStorageManager: ObservableObject {
     
     private init() {
         setupLocalContainer()
+        guard !AppRuntime.isRunningTests else { return }
         setupCloudContainer()
         setupMetadataQuery()
     }
@@ -57,7 +58,9 @@ class CloudStorageManager: ObservableObject {
     private func setupLocalContainer() {
         let localURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         localContainerURL = localURL
-        print("Local audio directory: \(localURL.path)")
+        if !AppRuntime.isRunningTests {
+            print("Local audio directory: \(localURL.path)")
+        }
     }
     
     private func setupCloudContainer() {

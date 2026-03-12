@@ -13,7 +13,11 @@ struct VoiceNoteModelTests {
 
     @Test func voiceNotePersistsInMemoryContainer() throws {
         let schema = Schema([VoiceNote.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let configuration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: true,
+            cloudKitDatabase: .none
+        )
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let context = ModelContext(container)
 

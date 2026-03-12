@@ -5,9 +5,9 @@
 //  Created by Tao Wang on 1/6/2025.
 //
 
+import AVFoundation
 import Foundation
 import WhisperKit
-import AVFoundation
 
 enum TranscriptionEngine {
     case whisperKit
@@ -28,24 +28,32 @@ class TranscriptionService: ObservableObject {
     @Published var loadingProgress: Float = 0.0
     @Published var transcriptionProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
-    
+    @Published private(set) var activeNoteID: UUID?
+    @Published private(set) var progressByNoteID: [UUID: Float] = [:]
+
     var modelManager: ModelManager?
-    private var isWhisperLoaded = false
     var transcribeImpl: TranscribeImpl = { _, _ in nil }
-    
-    // Cancellation support
+    var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
+    var nowProvider: () -> Date = { Date() }
+    var leaseDuration: TimeInterval = 5 * 60
+    var heartbeatInterval: TimeInterval = 60
+    var nonOriginQueueGracePeriod: TimeInterval = 5 * 60
+
+    private static let ownershipMigrationDefaultsKey = "VoicelyOwnershipMigrationV1"
+
+    private var isWhisperLoaded = false
     private var currentTranscriptionTask: Task<String?, Never>?
     private var cancelRequested = false
     private var lastCancellationHandled = false
     private var progressSmoothingTask: Task<Void, Never>?
     private var progressSmoothingTarget: Float = 0.0
+    private var leaseHeartbeatTask: Task<Void, Never>?
     private var isProcessingPendingTranscriptions = false
     private var pendingTranscriptionQueue: [UUID: VoiceNote] = [:]
     private var pendingTranscriptionOrder: [UUID] = []
-    
+
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
-        currentEngine = .notAvailable
         self.transcribeImpl = { [weak self] filePath, progressCallback in
             await self?.transcribeWithWhisper(
                 filePath: filePath,
@@ -53,26 +61,25 @@ class TranscriptionService: ObservableObject {
             )
         }
     }
-    
+
     func setModelManager(_ manager: ModelManager) {
         self.modelManager = manager
         updateEngineStatus()
     }
-    
+
     func loadWhisperModel() async -> Bool {
-        guard let modelManager = modelManager else {
+        guard let modelManager else {
             print("ModelManager not available")
             return false
         }
 
         let modelName = modelManager.selectedModel
-        
         loadingProgress = 0.1
         await modelManager.loadModel(modelName)
-        
+
         updateEngineStatus()
         loadingProgress = modelManager.loadingProgressValue
-        
+
         let success = modelManager.isModelLoaded()
         if success {
             print("WhisperKit loaded successfully with model: \(modelName)")
@@ -81,17 +88,210 @@ class TranscriptionService: ObservableObject {
         }
         return success
     }
-    
-    private func updateEngineStatus() {
-        if let modelManager = modelManager, modelManager.isModelLoaded() {
-            isWhisperLoaded = true
-            currentEngine = .whisperKit
+
+    func configureNewNote(_ note: VoiceNote, shouldStartImmediately: Bool) {
+        let now = nowProvider()
+        note.transcriptionOriginDeviceID = currentDeviceID
+        note.transcription = ""
+        note.lastTranscriptionDuration = 0
+        note.transcriptionModelIdentifier = nil
+        note.clearLegacyTranscriptionFlags()
+
+        if shouldStartImmediately {
+            let attemptID = UUID().uuidString
+            note.claimTranscription(
+                ownerDeviceID: currentDeviceID,
+                attemptID: attemptID,
+                queuedAt: now,
+                leaseExpiresAt: now.addingTimeInterval(leaseDuration)
+            )
         } else {
-            isWhisperLoaded = false
-            currentEngine = .notAvailable
+            note.queueTranscription(at: now)
         }
     }
-    
+
+    func migrateLegacyOwnershipIfNeeded(notes: [VoiceNote]) {
+        let now = nowProvider()
+        var migratedAny = false
+
+        for note in notes where !note.hasOwnershipState {
+            migratedAny = true
+            note.transcriptionOriginDeviceID = note.transcriptionOriginDeviceID ?? currentDeviceID
+
+            if !note.transcription.isEmpty {
+                note.completeTranscription()
+            } else if note.pendingTranscription || note.isTranscribing {
+                note.queueTranscription(at: note.timestamp > now ? now : note.timestamp)
+            } else {
+                note.completeTranscription()
+            }
+
+            note.clearLegacyTranscriptionFlags()
+        }
+
+        if migratedAny {
+            UserDefaults.standard.set(true, forKey: Self.ownershipMigrationDefaultsKey)
+        }
+    }
+
+    func processPendingTranscriptions(notes: [VoiceNote]) async {
+        guard isWhisperLoaded else {
+            print("Model not loaded, cannot process pending transcriptions")
+            return
+        }
+
+        migrateLegacyOwnershipIfNeeded(notes: notes)
+        enqueueEligibleNotes(notes)
+
+        guard !isProcessingPendingTranscriptions else {
+            print("Pending transcription processing already running")
+            return
+        }
+
+        isProcessingPendingTranscriptions = true
+        defer { isProcessingPendingTranscriptions = false }
+
+        while let note = dequeueNextPendingTranscription() {
+            while isTranscribing {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+
+            guard let action = processingAction(for: note, now: nowProvider()) else {
+                continue
+            }
+
+            switch action {
+            case .claimNew(let attemptID, let queuedAt):
+                note.claimTranscription(
+                    ownerDeviceID: currentDeviceID,
+                    attemptID: attemptID,
+                    queuedAt: queuedAt,
+                    leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
+                )
+                note.clearLegacyTranscriptionFlags()
+                await transcribeClaimedNote(note, attemptID: attemptID)
+            case .resumeOwned(let attemptID):
+                note.claimTranscription(
+                    ownerDeviceID: currentDeviceID,
+                    attemptID: attemptID,
+                    queuedAt: note.transcriptionQueuedAt ?? nowProvider(),
+                    leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
+                )
+                note.clearLegacyTranscriptionFlags()
+                await transcribeClaimedNote(note, attemptID: attemptID)
+            }
+
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    func requestTranscription(
+        for note: VoiceNote,
+        force: Bool = false,
+        takeOver: Bool = false
+    ) async -> Bool {
+        guard isWhisperLoaded, !note.audioFilePath.isEmpty else {
+            return false
+        }
+
+        migrateLegacyOwnershipIfNeeded(notes: [note])
+
+        if !takeOver, isTranscribingOnAnotherDevice(note) && !leaseHasExpired(note) {
+            return false
+        }
+
+        if !force, note.transcriptionState == .completed, !note.transcription.isEmpty {
+            return false
+        }
+
+        let queuedAt = note.transcriptionQueuedAt ?? nowProvider()
+        note.claimTranscription(
+            ownerDeviceID: currentDeviceID,
+            attemptID: UUID().uuidString,
+            queuedAt: queuedAt,
+            leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
+        )
+        note.clearLegacyTranscriptionFlags()
+        await processPendingTranscriptions(notes: [note])
+        return true
+    }
+
+    func cancelTranscription(for note: VoiceNote) {
+        guard activeNoteID == note.id else { return }
+        cancelTranscription()
+        requeueNote(note, queuedAt: nowProvider())
+    }
+
+    func localProgress(for note: VoiceNote) -> Float {
+        progressByNoteID[note.id] ?? 0.0
+    }
+
+    func isLocallyTranscribing(_ note: VoiceNote) -> Bool {
+        activeNoteID == note.id
+    }
+
+    func isTranscribingOnAnotherDevice(_ note: VoiceNote, now: Date? = nil) -> Bool {
+        guard note.transcriptionState == .claimed else {
+            return false
+        }
+
+        guard let ownerDeviceID = note.transcriptionOwnerDeviceID,
+              ownerDeviceID != currentDeviceID else {
+            return false
+        }
+
+        return !leaseHasExpired(note, now: now)
+    }
+
+    func shouldShowPendingState(_ note: VoiceNote, now: Date? = nil) -> Bool {
+        if note.transcriptionState == .queued {
+            return true
+        }
+
+        return note.transcriptionState == .claimed && leaseHasExpired(note, now: now)
+    }
+
+    func unloadWhisperModel() {
+        if let modelManager {
+            modelManager.whisperKit = nil
+            modelManager.modelState = .unloaded
+        }
+        isWhisperLoaded = false
+        currentEngine = .notAvailable
+        loadingProgress = 0.0
+        print("WhisperKit model unloaded")
+    }
+
+    func getAvailableModels() -> [String] {
+        [
+            "tiny",
+            "base",
+            "small"
+        ]
+    }
+
+    func isWhisperAvailable() -> Bool {
+        isWhisperLoaded
+    }
+
+    func getCurrentEngineDescription() -> String {
+        switch currentEngine {
+        case .whisperKit:
+            return "WhisperKit (Local AI)"
+        case .notAvailable:
+            return "No transcription available"
+        }
+    }
+
+    func getEngineStatusMessage() -> String {
+        switch currentEngine {
+        case .whisperKit:
+            return "Using WhisperKit for high-quality offline transcription"
+        case .notAvailable:
+            return "WhisperKit not loaded. Please load a model first."
+        }
+    }
+
     func transcribeAudio(
         filePath: String,
         progressCallback: @escaping (Float) -> Void = { _ in }
@@ -106,17 +306,18 @@ class TranscriptionService: ObservableObject {
             lastCancellationHandled = true
             return nil
         }
+
         isTranscribing = true
         transcriptionProgress = 0.0
         resetProgressSmoothing()
         let startTime = Date()
-        defer { 
+        defer {
             isTranscribing = false
             currentTranscriptionTask = nil
             resetProgressSmoothing()
             transcriptionProgress = 0.0
         }
-        
+
         guard isWhisperLoaded else {
             return nil
         }
@@ -144,9 +345,228 @@ class TranscriptionService: ObservableObject {
             modelIdentifier: modelIdentifier
         )
     }
-    
-    private func transcribeWithWhisper(filePath: String, progressCallback: @escaping (Float) -> Void) async -> String? {
-        guard let modelManager = modelManager,
+
+    func cancelTranscription() {
+        print("Cancelling current transcription...")
+        cancelRequested = true
+        currentTranscriptionTask?.cancel()
+        currentTranscriptionTask = nil
+        stopLeaseHeartbeat()
+        resetProgressSmoothing()
+        isTranscribing = false
+        transcriptionProgress = 0.0
+    }
+
+    func wasTranscriptionCancelled() -> Bool {
+        lastCancellationHandled
+    }
+}
+
+private extension TranscriptionService {
+    enum ProcessingAction {
+        case claimNew(attemptID: String, queuedAt: Date)
+        case resumeOwned(attemptID: String)
+    }
+
+    var currentDeviceID: String {
+        deviceIDProvider()
+    }
+
+    func updateEngineStatus() {
+        if let modelManager, modelManager.isModelLoaded() {
+            isWhisperLoaded = true
+            currentEngine = .whisperKit
+        } else {
+            isWhisperLoaded = false
+            currentEngine = .notAvailable
+        }
+    }
+
+    func processingAction(for note: VoiceNote, now: Date) -> ProcessingAction? {
+        guard !note.audioFilePath.isEmpty else {
+            return nil
+        }
+
+        switch note.transcriptionState {
+        case .claimed:
+            if note.transcriptionOwnerDeviceID == currentDeviceID {
+                let attemptID = note.transcriptionAttemptID ?? UUID().uuidString
+                return .resumeOwned(attemptID: attemptID)
+            }
+
+            guard leaseHasExpired(note, now: now) else {
+                return nil
+            }
+
+            return .claimNew(
+                attemptID: UUID().uuidString,
+                queuedAt: note.transcriptionQueuedAt ?? now
+            )
+        case .queued:
+            guard canCurrentDeviceClaimQueuedNote(note, now: now) else {
+                return nil
+            }
+
+            return .claimNew(
+                attemptID: UUID().uuidString,
+                queuedAt: note.transcriptionQueuedAt ?? now
+            )
+        case .completed:
+            return nil
+        case .none:
+            return nil
+        }
+    }
+
+    func canCurrentDeviceClaimQueuedNote(_ note: VoiceNote, now: Date) -> Bool {
+        guard note.transcriptionState == .queued else {
+            return false
+        }
+
+        if note.transcriptionOriginDeviceID == currentDeviceID {
+            return true
+        }
+
+        guard let queuedAt = note.transcriptionQueuedAt else {
+            return true
+        }
+
+        return now.timeIntervalSince(queuedAt) >= nonOriginQueueGracePeriod
+    }
+
+    func leaseHasExpired(_ note: VoiceNote, now: Date? = nil) -> Bool {
+        guard let leaseExpiresAt = note.transcriptionLeaseExpiresAt else {
+            return true
+        }
+        return leaseExpiresAt <= (now ?? nowProvider())
+    }
+
+    func enqueueEligibleNotes(_ notes: [VoiceNote]) {
+        let now = nowProvider()
+
+        for note in notes {
+            guard processingAction(for: note, now: now) != nil else {
+                continue
+            }
+
+            pendingTranscriptionQueue[note.id] = note
+            if !pendingTranscriptionOrder.contains(note.id) {
+                pendingTranscriptionOrder.append(note.id)
+            }
+        }
+    }
+
+    func dequeueNextPendingTranscription() -> VoiceNote? {
+        while !pendingTranscriptionOrder.isEmpty {
+            let noteID = pendingTranscriptionOrder.removeFirst()
+            guard let note = pendingTranscriptionQueue.removeValue(forKey: noteID) else {
+                continue
+            }
+            return note
+        }
+        return nil
+    }
+
+    func transcribeClaimedNote(_ note: VoiceNote, attemptID: String) async {
+        guard activeNoteID != note.id else {
+            return
+        }
+
+        beginLocalTranscription(for: note, attemptID: attemptID)
+        startLeaseHeartbeat(for: note, attemptID: attemptID)
+        let noteID = note.id
+
+        let transcription = await transcribeAudio(filePath: note.audioFilePath) { [weak self] progress in
+            Task { @MainActor in
+                self?.progressByNoteID[noteID] = progress
+            }
+        }
+
+        stopLeaseHeartbeat()
+        endLocalTranscription(for: noteID)
+
+        guard note.transcriptionOwnerDeviceID == currentDeviceID,
+              note.transcriptionAttemptID == attemptID,
+              note.transcriptionState == .claimed else {
+            return
+        }
+
+        if let result = transcription {
+            note.transcription = result.text
+            note.lastTranscriptionDuration = result.duration
+            note.transcriptionModelIdentifier = result.modelIdentifier
+            note.completeTranscription()
+        } else {
+            if note.transcription.isEmpty {
+                note.transcriptionModelIdentifier = nil
+            }
+            requeueNote(note, queuedAt: nowProvider())
+        }
+
+        note.clearLegacyTranscriptionFlags()
+    }
+
+    func beginLocalTranscription(for note: VoiceNote, attemptID: String) {
+        cancelRequested = false
+        activeNoteID = note.id
+        progressByNoteID[note.id] = 0.0
+        transcriptionProgress = 0.0
+        note.claimTranscription(
+            ownerDeviceID: currentDeviceID,
+            attemptID: attemptID,
+            queuedAt: note.transcriptionQueuedAt ?? nowProvider(),
+            leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
+        )
+        note.clearLegacyTranscriptionFlags()
+    }
+
+    func endLocalTranscription(for noteID: UUID) {
+        if activeNoteID == noteID {
+            activeNoteID = nil
+        }
+        progressByNoteID.removeValue(forKey: noteID)
+        transcriptionProgress = 0.0
+    }
+
+    func requeueNote(_ note: VoiceNote, queuedAt: Date) {
+        note.queueTranscription(at: queuedAt)
+        note.clearLegacyTranscriptionFlags()
+    }
+
+    func startLeaseHeartbeat(for note: VoiceNote, attemptID: String) {
+        stopLeaseHeartbeat()
+        leaseHeartbeatTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(self.heartbeatInterval * 1_000_000_000))
+
+                guard !Task.isCancelled else {
+                    break
+                }
+
+                guard self.activeNoteID == note.id,
+                      note.transcriptionState == .claimed,
+                      note.transcriptionOwnerDeviceID == self.currentDeviceID,
+                      note.transcriptionAttemptID == attemptID else {
+                    break
+                }
+
+                note.transcriptionLeaseExpiresAt = self.nowProvider().addingTimeInterval(self.leaseDuration)
+            }
+        }
+    }
+
+    func stopLeaseHeartbeat() {
+        leaseHeartbeatTask?.cancel()
+        leaseHeartbeatTask = nil
+    }
+
+    func transcribeWithWhisper(
+        filePath: String,
+        progressCallback: @escaping (Float) -> Void
+    ) async -> String? {
+        guard let modelManager,
               let whisperKit = modelManager.getWhisperKit() else {
             print("WhisperKit not available")
             currentEngine = .notAvailable
@@ -156,11 +576,11 @@ class TranscriptionService: ObservableObject {
         if cancelRequested || Task.isCancelled {
             return nil
         }
-        
+
         do {
             currentEngine = .whisperKit
             print("Using WhisperKit for transcription")
-            
+
             guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
                 print("Failed to prepare audio file for transcription: \(filePath)")
                 return nil
@@ -177,7 +597,6 @@ class TranscriptionService: ObservableObject {
                 self.smoothProgress(to: value, progressCallback: progressCallback)
             }
 
-            // Set up callbacks for real progress reporting
             whisperKit.transcriptionStateCallback = { state in
                 Task { @MainActor in
                     switch state {
@@ -194,20 +613,16 @@ class TranscriptionService: ObservableObject {
                 whisperKit.segmentDiscoveryCallback = nil
                 whisperKit.transcriptionStateCallback = nil
             }
-            
-            // Use language from settings
+
             let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
             let languageCode: String?
-            
-            // Get custom prompt from settings
             let customPrompt = UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? ""
-            
+
             updateProgressOnMain(0.02)
-            
+
             let audioPath = audioURL.path
-            
+
             if selectedLanguageKey == "auto" {
-                // Use automatic language detection
                 let languageDetection = try await whisperKit.detectLanguage(audioPath: audioPath)
                 languageCode = languageDetection.language
                 print("Auto-detected language: \(languageCode ?? "unknown")")
@@ -218,8 +633,7 @@ class TranscriptionService: ObservableObject {
                 updateProgressOnMain(0.06)
             }
             updateProgressOnMain(0.1)
-            
-            // Create decode options and include custom prompt if available
+
             var decodeOptions = DecodingOptions(
                 task: .transcribe,
                 language: languageCode,
@@ -233,17 +647,13 @@ class TranscriptionService: ObservableObject {
                 wordTimestamps: false,
                 clipTimestamps: [0.0]
             )
-            
-            // Add custom prompt if provided
-            if !customPrompt.isEmpty {
-                if let tokenizer = whisperKit.tokenizer {
-                    let promptText = " " + customPrompt.trimmingCharacters(in: .whitespaces)
-                    let encoded = tokenizer.encode(text: promptText)
-                    decodeOptions.promptTokens = encoded
-                    print("Using custom prompt: \(customPrompt)")
-                }
+
+            if !customPrompt.isEmpty, let tokenizer = whisperKit.tokenizer {
+                let promptText = " " + customPrompt.trimmingCharacters(in: .whitespaces)
+                decodeOptions.promptTokens = tokenizer.encode(text: promptText)
+                print("Using custom prompt: \(customPrompt)")
             }
-            
+
             let transcriptionResults = try await whisperKit.transcribe(
                 audioPath: audioPath,
                 decodeOptions: decodeOptions
@@ -264,165 +674,25 @@ class TranscriptionService: ObservableObject {
             if cancelRequested || Task.isCancelled {
                 return nil
             }
-            
+
             guard let result = transcriptionResults.first else {
                 return nil
             }
-            
-            return result.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            
+
+            return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
             return nil
         }
     }
-    
-    // Cancel the current transcription
-    func cancelTranscription() {
-        print("Cancelling current transcription...")
-        cancelRequested = true
-        currentTranscriptionTask?.cancel()
-        currentTranscriptionTask = nil
-        resetProgressSmoothing()
-        isTranscribing = false
-        transcriptionProgress = 0.0
-    }
-    
-    // Check if transcription was cancelled
-    func wasTranscriptionCancelled() -> Bool {
-        return lastCancellationHandled
-    }
-    
-    func unloadWhisperModel() {
-        if let modelManager = modelManager {
-            modelManager.whisperKit = nil
-            modelManager.modelState = .unloaded
-        }
-        isWhisperLoaded = false
-        currentEngine = .notAvailable
-        loadingProgress = 0.0
-        print("WhisperKit model unloaded")
-    }
-    
-    func getAvailableModels() -> [String] {
-        return [
-            "tiny",
-            "base",
-            "small"
-        ]
-    }
-    
-    func isWhisperAvailable() -> Bool {
-        return isWhisperLoaded
-    }
-    
-    func getCurrentEngineDescription() -> String {
-        switch currentEngine {
-        case .whisperKit:
-            return "WhisperKit (Local AI)"
-        case .notAvailable:
-            return "No transcription available"
-        }
-    }
-    
-    func getEngineStatusMessage() -> String {
-        switch currentEngine {
-        case .whisperKit:
-            return "Using WhisperKit for high-quality offline transcription"
-        case .notAvailable:
-            return "WhisperKit not loaded. Please load a model first."
-        }
-    }
-    
-    // New method: Process all pending transcription notes
-    @MainActor
-    func processPendingTranscriptions(notes: [VoiceNote]) async {
-        guard isWhisperLoaded else { 
-            print("Model not loaded, cannot process pending transcriptions")
-            return 
-        }
 
-        enqueuePendingTranscriptions(notes)
-
-        guard !isProcessingPendingTranscriptions else {
-            print("Pending transcription processing already running")
-            return
-        }
-
-        isProcessingPendingTranscriptions = true
-        defer { isProcessingPendingTranscriptions = false }
-
-        print("Processing \(pendingTranscriptionOrder.count) pending transcriptions")
-        while let note = dequeueNextPendingTranscription() {
-            while isTranscribing {
-                print("Another transcription is in progress, waiting...")
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            }
-
-            guard note.pendingTranscription && !note.audioFilePath.isEmpty else {
-                continue
-            }
-
-            print("Transcribing note: \(note.title)")
-            note.isTranscribing = true
-            note.transcriptionProgress = 0.0
-            
-            let transcription = await transcribeAudio(filePath: note.audioFilePath) { progress in
-                Task { @MainActor in
-                    note.transcriptionProgress = progress
-                }
-            }
-            
-            if let result = transcription {
-                note.transcription = result.text
-                note.lastTranscriptionDuration = result.duration
-                note.transcriptionModelIdentifier = result.modelIdentifier
-                note.pendingTranscription = false
-            } else if !wasTranscriptionCancelled() {
-                note.pendingTranscription = true
-            }
-            
-            note.isTranscribing = false
-            note.transcriptionProgress = 0.0
-            
-            // Add a brief delay between transcriptions to avoid system overload
-            try? await Task.sleep(nanoseconds: 200_000_000)
-        }
-    }
-}
-
-private extension TranscriptionService {
-    @MainActor
-    func enqueuePendingTranscriptions(_ notes: [VoiceNote]) {
-        for note in notes where note.pendingTranscription && !note.audioFilePath.isEmpty {
-            pendingTranscriptionQueue[note.id] = note
-            if !pendingTranscriptionOrder.contains(note.id) {
-                pendingTranscriptionOrder.append(note.id)
-            }
-        }
-    }
-
-    @MainActor
-    func dequeueNextPendingTranscription() -> VoiceNote? {
-        while !pendingTranscriptionOrder.isEmpty {
-            let noteID = pendingTranscriptionOrder.removeFirst()
-            guard let note = pendingTranscriptionQueue.removeValue(forKey: noteID) else {
-                continue
-            }
-            return note
-        }
-        return nil
-    }
-
-    @MainActor
     func resetProgressSmoothing() {
         progressSmoothingTask?.cancel()
         progressSmoothingTask = nil
         progressSmoothingTarget = 0.0
     }
 
-    @MainActor
     func smoothProgress(to target: Float, progressCallback: @escaping (Float) -> Void) {
         let clamped = min(1.0, max(0.0, target))
         if clamped <= transcriptionProgress {

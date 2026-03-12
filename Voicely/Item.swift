@@ -8,6 +8,12 @@
 import Foundation
 import SwiftData
 
+enum TranscriptionOwnershipState: String {
+    case queued
+    case claimed
+    case completed
+}
+
 @Model
 final class VoiceNote {
     var id: UUID = UUID()
@@ -21,6 +27,12 @@ final class VoiceNote {
     var transcriptionProgress: Float = 0.0
     var pendingTranscription: Bool = false // Mark if waiting for transcription
     var lastTranscriptionDuration: TimeInterval = 0
+    var transcriptionStateRaw: String = ""
+    var transcriptionOriginDeviceID: String?
+    var transcriptionOwnerDeviceID: String?
+    var transcriptionAttemptID: String?
+    var transcriptionQueuedAt: Date?
+    var transcriptionLeaseExpiresAt: Date?
     
     init(title: String = "", audioFilePath: String = "", transcription: String = "") {
         self.id = UUID()
@@ -37,10 +49,57 @@ final class VoiceNote {
 }
 
 extension VoiceNote {
+    var transcriptionState: TranscriptionOwnershipState? {
+        get {
+            TranscriptionOwnershipState(rawValue: transcriptionStateRaw)
+        }
+        set {
+            transcriptionStateRaw = newValue?.rawValue ?? ""
+        }
+    }
+
     var transcriptionModelDisplayName: String? {
         guard let transcriptionModelIdentifier, !transcriptionModelIdentifier.isEmpty else {
             return nil
         }
         return ModelManager.displayName(for: transcriptionModelIdentifier)
+    }
+
+    var hasOwnershipState: Bool {
+        !transcriptionStateRaw.isEmpty
+    }
+
+    func queueTranscription(at queuedAt: Date) {
+        transcriptionState = .queued
+        transcriptionQueuedAt = queuedAt
+        transcriptionOwnerDeviceID = nil
+        transcriptionAttemptID = nil
+        transcriptionLeaseExpiresAt = nil
+    }
+
+    func claimTranscription(
+        ownerDeviceID: String,
+        attemptID: String,
+        queuedAt: Date,
+        leaseExpiresAt: Date
+    ) {
+        transcriptionState = .claimed
+        transcriptionOwnerDeviceID = ownerDeviceID
+        transcriptionAttemptID = attemptID
+        transcriptionQueuedAt = queuedAt
+        transcriptionLeaseExpiresAt = leaseExpiresAt
+    }
+
+    func completeTranscription() {
+        transcriptionState = .completed
+        transcriptionOwnerDeviceID = nil
+        transcriptionAttemptID = nil
+        transcriptionLeaseExpiresAt = nil
+    }
+
+    func clearLegacyTranscriptionFlags() {
+        isTranscribing = false
+        transcriptionProgress = 0.0
+        pendingTranscription = false
     }
 }

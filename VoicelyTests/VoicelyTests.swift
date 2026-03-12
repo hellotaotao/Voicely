@@ -37,4 +37,8 @@ struct VoicelyTests {
         #expect(service.isTranscribing == false)
     }
 
+    @Test func appRuntimeDetectsTestEnvironment() {
+        #expect(AppRuntime.isRunningTests == true)
+    }
+
 }

@@ -10,6 +10,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \VoiceNote.timestamp, order: .reverse) private var voiceNotes: [VoiceNote]
     @StateObject private var audioService = AudioRecordingService()
     @StateObject private var modelManager = ModelManager()
@@ -19,6 +20,7 @@ struct ContentView: View {
     @State private var selectedNote: VoiceNote?
     @State private var showingSettings = false
     @State private var didSetupServices = false
+    @State private var ownershipPollingTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geometry in
@@ -34,6 +36,15 @@ struct ContentView: View {
         .onAppear(perform: syncInitialSelection)
         .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
+            Task { @MainActor in
+                await processPendingTranscriptionsIfNeeded()
+            }
+        }
+        .onChange(of: scenePhase) { _, newValue in
+            guard newValue == .active else { return }
+            Task { @MainActor in
+                await processPendingTranscriptionsIfNeeded()
+            }
         }
     }
     
@@ -176,7 +187,7 @@ struct ContentView: View {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                                 .contextMenu {
-                                    if note.isTranscribing {
+                                    if transcriptionService.isLocallyTranscribing(note) {
                                         Button {
                                             cancelTranscription(for: note)
                                         } label: {
@@ -224,7 +235,11 @@ struct ContentView: View {
             NavigationLink(
                 destination: detailView(note)
             ) {
-                VoiceNoteRow(note: note, isSelected: selectedNote?.id == note.id)
+                VoiceNoteRow(
+                    note: note,
+                    transcriptionService: transcriptionService,
+                    isSelected: selectedNote?.id == note.id
+                )
             }
             .simultaneousGesture(TapGesture().onEnded {
                 selectedNote = note
@@ -233,7 +248,11 @@ struct ContentView: View {
             Button {
                 selectedNote = note
             } label: {
-                VoiceNoteRow(note: note, isSelected: selectedNote?.id == note.id)
+                VoiceNoteRow(
+                    note: note,
+                    transcriptionService: transcriptionService,
+                    isSelected: selectedNote?.id == note.id
+                )
                     .foregroundStyle(.primary)
             }
             .buttonStyle(.plain)
@@ -274,9 +293,15 @@ struct ContentView: View {
         guard !didSetupServices else { return }
         didSetupServices = true
 
+        guard !AppRuntime.isRunningTests else {
+            transcriptionService.setModelManager(modelManager)
+            return
+        }
+
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels(includeRemote: false)
-        recoverInterruptedTranscriptions()
+        transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
+        startOwnershipPolling()
 
         // Migrate local files to iCloud if available
         if cloudManager.isCloudEnabled {
@@ -300,28 +325,29 @@ struct ContentView: View {
             Task {
                 let _ = await transcriptionService.loadWhisperModel()
             }
+        } else {
+            await processPendingTranscriptionsIfNeeded()
         }
     }
 
     private func processPendingTranscriptionsIfNeeded() async {
-        // Find all notes pending transcription
-        let pendingNotes = voiceNotes.filter { $0.pendingTranscription }
-        if !pendingNotes.isEmpty {
-            print("Found \(pendingNotes.count) pending transcriptions to process")
-            await transcriptionService.processPendingTranscriptions(notes: pendingNotes)
+        transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
+        let candidates = voiceNotes.filter { !$0.audioFilePath.isEmpty }
+        guard !candidates.isEmpty else {
+            return
         }
+
+        await transcriptionService.processPendingTranscriptions(notes: candidates)
     }
 
-    private func recoverInterruptedTranscriptions() {
-        let interruptedNotes = voiceNotes.filter { $0.isTranscribing }
-        guard !interruptedNotes.isEmpty else { return }
+    private func startOwnershipPolling() {
+        guard ownershipPollingTask == nil else { return }
 
-        print("Recovering \(interruptedNotes.count) interrupted transcriptions")
-        for note in interruptedNotes {
-            note.isTranscribing = false
-            note.transcriptionProgress = 0.0
-            if note.transcription.isEmpty {
-                note.pendingTranscription = true
+        ownershipPollingTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { break }
+                await processPendingTranscriptionsIfNeeded()
             }
         }
     }
@@ -343,11 +369,8 @@ struct ContentView: View {
     private func deleteNoteAndAudio(_ note: VoiceNote) {
         let replacementNote = voiceNotes.first { $0.id != note.id }
 
-        if note.isTranscribing {
-            transcriptionService.cancelTranscription()
-            note.isTranscribing = false
-            note.transcriptionProgress = 0.0
-            note.pendingTranscription = false
+        if transcriptionService.isLocallyTranscribing(note) {
+            transcriptionService.cancelTranscription(for: note)
         }
 
         if !note.audioFilePath.isEmpty {
@@ -362,16 +385,30 @@ struct ContentView: View {
     }
     
     private func cancelTranscription(for note: VoiceNote) {
-        transcriptionService.cancelTranscription()
-        note.isTranscribing = false
-        note.transcriptionProgress = 0.0
-        note.pendingTranscription = true
+        transcriptionService.cancelTranscription(for: note)
     }
 }
 
 struct VoiceNoteRow: View {
     let note: VoiceNote
+    @ObservedObject var transcriptionService: TranscriptionService
     var isSelected = false
+
+    private var isLocallyTranscribing: Bool {
+        transcriptionService.isLocallyTranscribing(note)
+    }
+
+    private var isRemoteTranscribing: Bool {
+        transcriptionService.isTranscribingOnAnotherDevice(note)
+    }
+
+    private var isPending: Bool {
+        transcriptionService.shouldShowPendingState(note)
+    }
+
+    private var localProgress: Float {
+        transcriptionService.localProgress(for: note)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -396,7 +433,7 @@ struct VoiceNoteRow: View {
                 )
             }
 
-            if note.isTranscribing {
+            if isLocallyTranscribing {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -405,20 +442,25 @@ struct VoiceNoteRow: View {
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.primary)
                         Spacer()
-                        Text("\(Int(note.transcriptionProgress * 100))%")
+                        Text("\(Int(localProgress * 100))%")
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
 
-                    ProgressView(value: note.transcriptionProgress)
+                    ProgressView(value: localProgress)
                         .tint(.accentColor)
                 }
+            } else if isRemoteTranscribing {
+                Text("Transcription in progress on another device.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             } else if !note.transcription.isEmpty {
                 Text(note.transcription)
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .lineLimit(3)
-            } else if note.pendingTranscription {
+            } else if isPending {
                 Text("Audio saved and waiting for transcription.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -430,7 +472,19 @@ struct VoiceNoteRow: View {
                     .lineLimit(2)
             }
 
-            if note.pendingTranscription {
+            if isLocallyTranscribing {
+                StatusBadge(
+                    title: "Transcribing here",
+                    systemImage: "waveform.badge.magnifyingglass",
+                    tint: .accentColor
+                )
+            } else if isRemoteTranscribing {
+                StatusBadge(
+                    title: "Another device",
+                    systemImage: "desktopcomputer.and.iphone",
+                    tint: .blue
+                )
+            } else if isPending {
                 StatusBadge(
                     title: "Transcription pending",
                     systemImage: "clock.arrow.circlepath",
@@ -554,44 +608,13 @@ struct RecordingControls: View {
         )
         note.duration = duration
 
-        // Check if model is loaded
+        transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
+        onRecordingComplete(note)
+
         if isModelLoaded {
-            note.isTranscribing = true
-
-            onRecordingComplete(note)
-
             Task {
-                let result = await transcriptionService.transcribeAudio(filePath: filePath) {
-                    progress in
-                    Task { @MainActor in
-                        note.transcriptionProgress = progress
-                    }
-                }
-
-                await MainActor.run {
-                    if let result = result {
-                        note.transcription = result.text
-                        note.lastTranscriptionDuration = result.duration
-                        note.transcriptionModelIdentifier = result.modelIdentifier
-                        note.pendingTranscription = false
-                    } else {
-                        note.transcription = ""
-                        note.lastTranscriptionDuration = 0
-                        note.transcriptionModelIdentifier = nil
-                        note.pendingTranscription = true
-                    }
-                    note.isTranscribing = false
-                    note.transcriptionProgress = 0.0
-                }
+                await transcriptionService.processPendingTranscriptions(notes: [note])
             }
-        } else {
-            // If model not loaded, save note without transcription
-            note.isTranscribing = false
-            note.transcription = ""
-            note.transcriptionModelIdentifier = nil
-            note.pendingTranscription = true
-
-            onRecordingComplete(note)
         }
     }
 
@@ -720,7 +743,6 @@ struct RecordingControls: View {
 struct VoiceNoteDetailView: View {
     let note: VoiceNote
     @EnvironmentObject var transcriptionService: TranscriptionService
-    @State private var isTranscribing = false
     @State private var showLoadModelPrompt = false
     @State private var showingShareSheet = false
     @State private var isEditing = false
@@ -744,6 +766,26 @@ struct VoiceNoteDetailView: View {
             return nil
         }
         return ModelManager.displayName(for: selectedModel)
+    }
+
+    private var isLocallyTranscribing: Bool {
+        transcriptionService.isLocallyTranscribing(note)
+    }
+
+    private var isRemoteTranscribing: Bool {
+        transcriptionService.isTranscribingOnAnotherDevice(note)
+    }
+
+    private var shouldShowTakeOverAction: Bool {
+        note.transcription.isEmpty && isRemoteTranscribing
+    }
+
+    private var shouldShowPendingState: Bool {
+        transcriptionService.shouldShowPendingState(note)
+    }
+
+    private var localTranscriptionProgress: Float {
+        transcriptionService.localProgress(for: note)
     }
 
     private var transcriptionSummaryText: String? {
@@ -811,10 +853,10 @@ struct VoiceNoteDetailView: View {
             ShareSheet(activityItems: [shareableTranscriptionText()])
         }
         .onChange(of: modelLoadingState) { oldValue, newValue in
-            if newValue == .loaded && note.pendingTranscription && !note.isTranscribing
-                && !transcriptionService.isTranscribing {
-                // Model just loaded and note needs transcription
-                transcribeAudio()
+            if newValue == .loaded {
+                Task { @MainActor in
+                    await transcriptionService.processPendingTranscriptions(notes: [note])
+                }
             }
         }
         .alert("Model Not Loaded", isPresented: $showLoadModelPrompt) {
@@ -896,13 +938,19 @@ struct VoiceNoteDetailView: View {
                             tint: .secondary
                         )
 
-                        if note.isTranscribing || isTranscribing {
+                        if isLocallyTranscribing {
                             StatusBadge(
                                 title: "Processing",
                                 systemImage: "waveform.badge.magnifyingglass",
                                 tint: Color.accentColor
                             )
-                        } else if note.pendingTranscription {
+                        } else if isRemoteTranscribing {
+                            StatusBadge(
+                                title: "Another device",
+                                systemImage: "desktopcomputer.and.iphone",
+                                tint: .blue
+                            )
+                        } else if shouldShowPendingState {
                             StatusBadge(
                                 title: "Pending",
                                 systemImage: "clock.arrow.circlepath",
@@ -1017,11 +1065,13 @@ struct VoiceNoteDetailView: View {
                 }
 
                 Group {
-                    if note.isTranscribing || isTranscribing {
+                    if isLocallyTranscribing {
                         transcriptionProgressContent
+                    } else if isRemoteTranscribing {
+                        remoteTranscriptionContent
                     } else if !note.transcription.isEmpty {
                         transcriptionTextContent
-                    } else if note.pendingTranscription {
+                    } else if shouldShowPendingState {
                         pendingTranscriptionContent
                     } else {
                         emptyTranscriptionContent
@@ -1045,19 +1095,26 @@ struct VoiceNoteDetailView: View {
                 .buttonStyle(.bordered)
             }
 
-            if note.transcription.isEmpty {
-                Button(action: { requestTranscription(force: true) }) {
+            if shouldShowTakeOverAction {
+                Button(action: { requestTranscription(takeOver: true) }) {
+                    Label("Take over on this device", systemImage: "arrow.triangle.branch")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing)
+                .help("Claims the current transcription on this device and lets the other device finish without saving.")
+            } else if note.transcription.isEmpty {
+                Button(action: { requestTranscription() }) {
                     Label("Transcribe", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(note.audioFilePath.isEmpty || note.isTranscribing || isTranscribing)
+                .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
             } else {
                 Button(action: { showingRetranscribeConfirmation = true }) {
                     Label("Re-transcribe", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
                 .help("Runs transcription again using the model currently selected in Settings.")
-                .disabled(note.audioFilePath.isEmpty || note.isTranscribing || isTranscribing)
+                .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
             }
         }
     }
@@ -1069,18 +1126,32 @@ struct VoiceNoteDetailView: View {
                 Text("Transcribing audio…")
                     .font(.subheadline.weight(.medium))
                 Spacer()
-                Text("\(Int(note.transcriptionProgress * 100))%")
+                Text("\(Int(localTranscriptionProgress * 100))%")
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
-            ProgressView(value: note.transcriptionProgress)
+            ProgressView(value: localTranscriptionProgress)
                 .tint(.accentColor)
 
             Button(role: .cancel, action: cancelCurrentTranscription) {
                 Label("Cancel Transcription", systemImage: "xmark.circle")
             }
             .buttonStyle(.bordered)
+        }
+    }
+
+    private var remoteTranscriptionContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            StatusBadge(
+                title: "Transcribing on another device",
+                systemImage: "desktopcomputer.and.iphone",
+                tint: .blue
+            )
+
+            Text("This recording is currently being transcribed elsewhere. The transcript will appear here after sync finishes.")
+                .font(.body)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1111,7 +1182,7 @@ struct VoiceNoteDetailView: View {
                 tint: .orange
             )
 
-            Text("This recording is saved locally and can be transcribed as soon as a model is available.")
+            Text("This recording is waiting for an eligible device to start transcription.")
                 .font(.body)
                 .foregroundStyle(.secondary)
 
@@ -1172,7 +1243,7 @@ struct VoiceNoteDetailView: View {
         showingShareSheet = true
     }
 
-    private func requestTranscription(force: Bool = false) {
+    private func requestTranscription(force: Bool = false, takeOver: Bool = false) {
         guard !note.audioFilePath.isEmpty else { return }
 
         guard isModelLoaded else {
@@ -1180,46 +1251,14 @@ struct VoiceNoteDetailView: View {
             return
         }
 
-        transcribeAudio(force: force)
-    }
-
-    private func transcribeAudio(force: Bool = false) {
-        guard isModelLoaded, !note.audioFilePath.isEmpty else { return }
-        guard force || note.pendingTranscription else { return }
-        guard !note.isTranscribing else { return }
-
-        isTranscribing = true
-        note.isTranscribing = true
-        note.transcriptionProgress = 0.0
-
-        Task {
-            let result = await transcriptionService.transcribeAudio(
-                filePath: note.audioFilePath
-            ) { progress in
-                Task { @MainActor in
-                    note.transcriptionProgress = progress
-                }
-            }
-
-            await MainActor.run {
-                isTranscribing = false
-                note.isTranscribing = false
-
-                if let result = result {
-                    note.transcription = result.text
-                    note.lastTranscriptionDuration = result.duration
-                    note.transcriptionModelIdentifier = result.modelIdentifier
-                    note.pendingTranscription = false
-                    editedTranscription = result.text
-                } else {
-                    note.transcriptionProgress = 0.0
-                    if note.transcription.isEmpty {
-                        note.transcriptionModelIdentifier = nil
-                    }
-                    if !force {
-                        note.pendingTranscription = true
-                    }
-                }
+        Task { @MainActor in
+            let didStart = await transcriptionService.requestTranscription(
+                for: note,
+                force: force,
+                takeOver: takeOver
+            )
+            if didStart, !isEditing {
+                editedTranscription = note.transcription
             }
         }
     }
@@ -1243,11 +1282,7 @@ struct VoiceNoteDetailView: View {
     }
     
     private func cancelCurrentTranscription() {
-        transcriptionService.cancelTranscription()
-        isTranscribing = false
-        note.isTranscribing = false
-        note.transcriptionProgress = 0.0
-        note.pendingTranscription = true
+        transcriptionService.cancelTranscription(for: note)
     }
 
     private func transportButton(systemImage: String, size: CGFloat, action: @escaping () -> Void)

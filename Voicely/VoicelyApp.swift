@@ -15,24 +15,31 @@ struct VoicelyApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var sharedModelContainer: ModelContainer = {
-        print("🔍 [DEBUG] Initializing ModelContainer...")
         let schema = Schema([
             VoiceNote.self
         ])
+        let cloudKitDatabase: ModelConfiguration.CloudKitDatabase = AppRuntime.isRunningTests ? .none : .automatic
         let modelConfiguration = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .automatic
+            isStoredInMemoryOnly: AppRuntime.isRunningTests,
+            cloudKitDatabase: cloudKitDatabase
         )
-        
-        print("🔍 [DEBUG] CloudKit database mode: .automatic")
+
+        if !AppRuntime.isRunningTests {
+            print("🔍 [DEBUG] Initializing ModelContainer...")
+            print("🔍 [DEBUG] CloudKit database mode: \(cloudKitDatabase)")
+        }
 
         do {
             let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            print("✅ [DEBUG] ModelContainer created successfully with CloudKit support")
+            if !AppRuntime.isRunningTests {
+                print("✅ [DEBUG] ModelContainer created successfully with CloudKit support")
+            }
             return container
         } catch {
-            print("❌ [DEBUG] Failed to create ModelContainer: \(error)")
+            if !AppRuntime.isRunningTests {
+                print("❌ [DEBUG] Failed to create ModelContainer: \(error)")
+            }
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
@@ -42,6 +49,7 @@ struct VoicelyApp: App {
             ContentView()
                 .environmentObject(syncMonitor)
                 .task {
+                    guard !AppRuntime.isRunningTests else { return }
                     syncMonitor.setModelContainer(sharedModelContainer)
                 }
         }
@@ -55,6 +63,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private static let deviceTokenDefaultsKey = "VoicelyDeviceToken"
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        guard !AppRuntime.isRunningTests else {
+            return true
+        }
+
         print("🔍 [DEBUG] App did finish launching")
         
         if Self.didRequestRemoteNotifications {

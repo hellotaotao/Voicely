@@ -232,18 +232,18 @@ struct ContentView: View {
     @ViewBuilder
     private func noteRow(note: VoiceNote, allowsNavigation: Bool) -> some View {
         if allowsNavigation {
-            NavigationLink(
-                destination: detailView(note)
-            ) {
+            NavigationLink {
+                detailView(note)
+                    .onAppear {
+                        selectedNote = note
+                    }
+            } label: {
                 VoiceNoteRow(
                     note: note,
                     transcriptionService: transcriptionService,
                     isSelected: selectedNote?.id == note.id
                 )
             }
-            .simultaneousGesture(TapGesture().onEnded {
-                selectedNote = note
-            })
         } else {
             Button {
                 selectedNote = note

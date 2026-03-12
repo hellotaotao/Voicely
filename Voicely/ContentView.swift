@@ -742,6 +742,7 @@ struct RecordingControls: View {
 
 struct VoiceNoteDetailView: View {
     let note: VoiceNote
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
     @State private var showingShareSheet = false
@@ -786,6 +787,10 @@ struct VoiceNoteDetailView: View {
 
     private var localTranscriptionProgress: Float {
         transcriptionService.localProgress(for: note)
+    }
+
+    private var usesCompactDetailLayout: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone && horizontalSizeClass == .compact
     }
 
     private var transcriptionSummaryText: String? {
@@ -890,89 +895,32 @@ struct VoiceNoteDetailView: View {
 
     private var detailHeaderCard: some View {
         SectionCard(contentPadding: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color.accentColor.opacity(0.12))
-                        .frame(width: 42, height: 42)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    headerIcon
 
-                    Image(systemName: note.transcription.isEmpty ? "waveform.circle.fill" : "text.quote")
-                        .font(.headline)
-                        .foregroundStyle(Color.accentColor)
+                    headerTitleContent
+
+                    Spacer(minLength: 8)
+
+                    editButton
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    if isEditing {
+                if usesCompactDetailLayout {
+                    VStack(alignment: .leading, spacing: 8) {
+                        headerStatusBadges
+                    }
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            headerStatusBadges
+                        }
+
                         VStack(alignment: .leading, spacing: 8) {
-                            TextField("Note title", text: $editedTitle)
-                                .font(.title3.weight(.semibold))
-                                .textFieldStyle(.plain)
-
-                            Divider()
-
-                            Text(
-                                note.timestamp,
-                                format: Date.FormatStyle(date: .abbreviated, time: .shortened)
-                            )
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(note.title)
-                                .font(.title3.weight(.semibold))
-
-                            Text(
-                                note.timestamp,
-                                format: Date.FormatStyle(date: .abbreviated, time: .shortened)
-                            )
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    HStack(spacing: 8) {
-                        StatusBadge(
-                            title: formatDuration(note.duration),
-                            systemImage: "clock",
-                            tint: .secondary
-                        )
-
-                        if isLocallyTranscribing {
-                            StatusBadge(
-                                title: "Processing",
-                                systemImage: "waveform.badge.magnifyingglass",
-                                tint: Color.accentColor
-                            )
-                        } else if isRemoteTranscribing {
-                            StatusBadge(
-                                title: "Another device",
-                                systemImage: "desktopcomputer.and.iphone",
-                                tint: .blue
-                            )
-                        } else if shouldShowPendingState {
-                            StatusBadge(
-                                title: "Pending",
-                                systemImage: "clock.arrow.circlepath",
-                                tint: .orange
-                            )
-                        } else if !note.transcription.isEmpty {
-                            StatusBadge(
-                                title: "Transcript",
-                                systemImage: "checkmark.circle.fill",
-                                tint: .green
-                            )
-                            TranscriptionModelBadge(note: note)
+                            headerStatusBadges
                         }
                     }
                 }
-
-                Spacer(minLength: 8)
-
-                Button(action: toggleEdit) {
-                    Text(isEditing ? "Done" : "Edit")
-                }
-                .buttonStyle(.bordered)
             }
         }
     }
@@ -980,21 +928,20 @@ struct VoiceNoteDetailView: View {
     private var audioPlayerCard: some View {
         SectionCard(contentPadding: 14) {
             VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    Text(formatTime(audioPlayer.currentTime))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, alignment: .leading)
+                if usesCompactDetailLayout {
+                    VStack(spacing: 10) {
+                        timeProgressRow
 
-                    ProgressView(value: audioPlayer.currentTime, total: max(audioPlayer.duration, 1))
-                        .tint(.accentColor)
-
-                    Text(formatTime(audioPlayer.duration))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, alignment: .trailing)
-
-                    playbackRateMenu
+                        HStack {
+                            Spacer()
+                            playbackRateMenu
+                        }
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        timeProgressRow
+                        playbackRateMenu
+                    }
                 }
 
                 HStack(spacing: 14) {
@@ -1063,21 +1010,19 @@ struct VoiceNoteDetailView: View {
     private var transcriptionCard: some View {
         SectionCard {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Transcription")
-                            .font(.headline)
-
-                        if let transcriptionSummaryText {
-                            Text(transcriptionSummaryText)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        }
+                if usesCompactDetailLayout {
+                    VStack(alignment: .leading, spacing: 12) {
+                        transcriptionHeaderContent
+                        compactTranscriptionActions
                     }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        transcriptionHeaderContent
 
-                    Spacer()
+                        Spacer()
 
-                    transcriptionActions
+                        regularTranscriptionActions
+                    }
                 }
 
                 Group {
@@ -1097,42 +1042,93 @@ struct VoiceNoteDetailView: View {
         }
     }
 
-    private var transcriptionActions: some View {
+    private var regularTranscriptionActions: some View {
         HStack(spacing: 10) {
             if !note.transcription.isEmpty {
-                Button(action: copyTranscription) {
-                    Image(systemName: "square.on.square")
-                }
-                .buttonStyle(.bordered)
-
-                Button(action: shareTranscription) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .buttonStyle(.bordered)
+                copyButton
+                shareButton
             }
 
             if shouldShowTakeOverAction {
-                Button(action: { requestTranscription(takeOver: true) }) {
-                    Label("Take over on this device", systemImage: "arrow.triangle.branch")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing)
-                .help("Claims the current transcription on this device and lets the other device finish without saving.")
+                takeOverButton
             } else if note.transcription.isEmpty {
-                Button(action: { requestTranscription() }) {
-                    Label("Transcribe", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
+                transcribeButton
             } else {
-                Button(action: { showingRetranscribeConfirmation = true }) {
-                    Label("Re-transcribe", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .help("Runs transcription again using the model currently selected in Settings.")
-                .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
+                retranscribeButton
             }
         }
+    }
+
+    private var compactTranscriptionActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !note.transcription.isEmpty {
+                HStack(spacing: 10) {
+                    copyButton
+                    shareButton
+                }
+            }
+
+            if shouldShowTakeOverAction {
+                takeOverButton
+            } else if note.transcription.isEmpty {
+                transcribeButton
+            } else {
+                retranscribeButton
+            }
+        }
+    }
+
+    private var transcriptionHeaderContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Transcription")
+                .font(.headline)
+
+            if let transcriptionSummaryText {
+                Text(transcriptionSummaryText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var copyButton: some View {
+        Button(action: copyTranscription) {
+            Image(systemName: "square.on.square")
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var shareButton: some View {
+        Button(action: shareTranscription) {
+            Image(systemName: "square.and.arrow.up")
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var takeOverButton: some View {
+        Button(action: { requestTranscription(takeOver: true) }) {
+            Label("Take over on this device", systemImage: "arrow.triangle.branch")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing)
+        .help("Claims the current transcription on this device and lets the other device finish without saving.")
+    }
+
+    private var transcribeButton: some View {
+        Button(action: { requestTranscription() }) {
+            Label("Transcribe", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
+    }
+
+    private var retranscribeButton: some View {
+        Button(action: { showingRetranscribeConfirmation = true }) {
+            Label("Re-transcribe", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.bordered)
+        .help("Runs transcription again using the model currently selected in Settings.")
+        .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
     }
 
     private var transcriptionProgressContent: some View {
@@ -1226,6 +1222,111 @@ struct VoiceNoteDetailView: View {
     private func loadAudioFile() {
         if !note.audioFilePath.isEmpty {
             audioPlayer.loadAudio(from: note.audioFilePath, expectedDuration: note.duration)
+        }
+    }
+
+    private var headerIcon: some View {
+        ZStack {
+            Circle()
+                .fill(Color.accentColor.opacity(0.12))
+                .frame(width: 42, height: 42)
+
+            Image(systemName: note.transcription.isEmpty ? "waveform.circle.fill" : "text.quote")
+                .font(.headline)
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    private var headerTitleContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isEditing {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Note title", text: $editedTitle)
+                        .font(.title3.weight(.semibold))
+                        .textFieldStyle(.plain)
+
+                    Divider()
+
+                    timestampText
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(note.title)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(2)
+
+                    timestampText
+                }
+            }
+        }
+    }
+
+    private var timestampText: some View {
+        Text(
+            note.timestamp,
+            format: Date.FormatStyle(date: .abbreviated, time: .shortened)
+        )
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    }
+
+    private var editButton: some View {
+        Button(action: toggleEdit) {
+            Text(isEditing ? "Done" : "Edit")
+        }
+        .buttonStyle(.bordered)
+    }
+
+    @ViewBuilder
+    private var headerStatusBadges: some View {
+        StatusBadge(
+            title: formatDuration(note.duration),
+            systemImage: "clock",
+            tint: .secondary
+        )
+
+        if isLocallyTranscribing {
+            StatusBadge(
+                title: "Processing",
+                systemImage: "waveform.badge.magnifyingglass",
+                tint: Color.accentColor
+            )
+        } else if isRemoteTranscribing {
+            StatusBadge(
+                title: "Another device",
+                systemImage: "desktopcomputer.and.iphone",
+                tint: .blue
+            )
+        } else if shouldShowPendingState {
+            StatusBadge(
+                title: "Pending",
+                systemImage: "clock.arrow.circlepath",
+                tint: .orange
+            )
+        } else if !note.transcription.isEmpty {
+            StatusBadge(
+                title: "Transcript",
+                systemImage: "checkmark.circle.fill",
+                tint: .green
+            )
+            TranscriptionModelBadge(note: note)
+        }
+    }
+
+    private var timeProgressRow: some View {
+        HStack(spacing: 10) {
+            Text(formatTime(audioPlayer.currentTime))
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+
+            ProgressView(value: audioPlayer.currentTime, total: max(audioPlayer.duration, 1))
+                .tint(.accentColor)
+
+            Text(formatTime(audioPlayer.duration))
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .trailing)
         }
     }
 
@@ -1356,10 +1457,12 @@ private struct StatusBadge: View {
         Label(title, systemImage: systemImage)
             .font(.footnote.weight(.medium))
             .foregroundStyle(tint)
+            .lineLimit(1)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(tint.opacity(0.12))
             .clipShape(Capsule())
+            .fixedSize(horizontal: true, vertical: true)
     }
 }
 

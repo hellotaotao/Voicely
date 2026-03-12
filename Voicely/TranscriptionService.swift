@@ -17,6 +17,7 @@ enum TranscriptionEngine {
 struct TranscriptionResult {
     let text: String
     let duration: TimeInterval
+    let modelIdentifier: String?
 }
 
 @MainActor
@@ -136,7 +137,12 @@ class TranscriptionService: ObservableObject {
         }
 
         let elapsed = Date().timeIntervalSince(startTime)
-        return TranscriptionResult(text: text, duration: elapsed)
+        let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
+        return TranscriptionResult(
+            text: text,
+            duration: elapsed,
+            modelIdentifier: modelIdentifier
+        )
     }
     
     private func transcribeWithWhisper(filePath: String, progressCallback: @escaping (Float) -> Void) async -> String? {
@@ -371,6 +377,7 @@ class TranscriptionService: ObservableObject {
             if let result = transcription {
                 note.transcription = result.text
                 note.lastTranscriptionDuration = result.duration
+                note.transcriptionModelIdentifier = result.modelIdentifier
                 note.pendingTranscription = false
             } else if !wasTranscriptionCancelled() {
                 note.pendingTranscription = true

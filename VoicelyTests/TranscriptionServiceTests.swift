@@ -35,7 +35,9 @@ struct TranscriptionServiceTests {
 
     @Test @MainActor func transcribeAudioReturnsResultWhenModelLoaded() async {
         let service = TranscriptionService()
-        service.setModelManager(LoadedModelManager())
+        let modelManager = LoadedModelManager()
+        modelManager.selectedModel = "openai_whisper-small"
+        service.setModelManager(modelManager)
 
         service.transcribeImpl = { _, progress in
             progress(0.2)
@@ -46,6 +48,7 @@ struct TranscriptionServiceTests {
 
         #expect(result?.text == "hello")
         #expect((result?.duration ?? -1) >= 0)
+        #expect(result?.modelIdentifier == "openai_whisper-small")
         #expect(service.isTranscribing == false)
         #expect(service.transcriptionProgress == 0.0)
     }
@@ -74,7 +77,9 @@ struct TranscriptionServiceTests {
 
     @Test @MainActor func processPendingTranscriptionsUpdatesNotes() async {
         let service = TranscriptionService()
-        service.setModelManager(LoadedModelManager())
+        let modelManager = LoadedModelManager()
+        modelManager.selectedModel = "openai_whisper-large-v3-turbo"
+        service.setModelManager(modelManager)
         service.transcribeImpl = { _, _ in "Transcribed text" }
 
         let pendingNote = VoiceNote(title: "Pending", audioFilePath: "file.m4a")
@@ -86,6 +91,7 @@ struct TranscriptionServiceTests {
         await service.processPendingTranscriptions(notes: [pendingNote, skippedNote])
 
         #expect(pendingNote.transcription == "Transcribed text")
+        #expect(pendingNote.transcriptionModelIdentifier == "openai_whisper-large-v3-turbo")
         #expect(pendingNote.pendingTranscription == false)
         #expect(pendingNote.isTranscribing == false)
         #expect(skippedNote.pendingTranscription == true)

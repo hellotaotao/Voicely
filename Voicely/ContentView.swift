@@ -140,18 +140,6 @@ struct ContentView: View {
     private func noteLibraryList(allowsNavigation: Bool) -> some View {
         ZStack(alignment: .bottom) {
             List {
-                Section {
-                    LibrarySummaryCard(
-                        title: "Your Library",
-                        subtitle: librarySubtitle,
-                        noteCount: voiceNotes.count,
-                        isCloudEnabled: cloudManager.isCloudEnabled
-                    )
-                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 10, trailing: 0))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                }
-
                 if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .success {
                     Section {
                         SyncStatusBannerCard(
@@ -584,10 +572,12 @@ struct RecordingControls: View {
                     if let result = result {
                         note.transcription = result.text
                         note.lastTranscriptionDuration = result.duration
+                        note.transcriptionModelIdentifier = result.modelIdentifier
                         note.pendingTranscription = false
                     } else {
                         note.transcription = ""
                         note.lastTranscriptionDuration = 0
+                        note.transcriptionModelIdentifier = nil
                         note.pendingTranscription = true
                     }
                     note.isTranscribing = false
@@ -598,6 +588,7 @@ struct RecordingControls: View {
             // If model not loaded, save note without transcription
             note.isTranscribing = false
             note.transcription = ""
+            note.transcriptionModelIdentifier = nil
             note.pendingTranscription = true
 
             onRecordingComplete(note)
@@ -733,6 +724,7 @@ struct VoiceNoteDetailView: View {
     @State private var showLoadModelPrompt = false
     @State private var showingShareSheet = false
     @State private var isEditing = false
+    @State private var showingRetranscribeConfirmation = false
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @StateObject private var audioPlayer = AudioPlayerService()
@@ -745,6 +737,59 @@ struct VoiceNoteDetailView: View {
     // Monitor model loading state changes
     private var modelLoadingState: ModelState {
         return transcriptionService.modelManager?.modelState ?? .unloaded
+    }
+
+    private var selectedModelDisplayName: String? {
+        guard let selectedModel = transcriptionService.modelManager?.selectedModel, !selectedModel.isEmpty else {
+            return nil
+        }
+        return ModelManager.displayName(for: selectedModel)
+    }
+
+    private var transcriptionSummaryText: String? {
+        guard !note.transcription.isEmpty else {
+            return note.lastTranscriptionDuration > 0
+                ? "Last run: \(transcriptionService.formatTranscriptionDuration(note.lastTranscriptionDuration))."
+                : nil
+        }
+
+        var parts: [String] = []
+
+        if note.lastTranscriptionDuration > 0 {
+            var lastRun = "Last run: \(transcriptionService.formatTranscriptionDuration(note.lastTranscriptionDuration))"
+            if let modelName = note.transcriptionModelDisplayName {
+                lastRun += " using \(modelName)"
+            }
+            parts.append(lastRun + ".")
+        } else if let modelName = note.transcriptionModelDisplayName {
+            parts.append("Transcribed with \(modelName).")
+        }
+
+        if note.transcriptionModelDisplayName == nil {
+            parts.append("Model not recorded for this transcript.")
+        }
+
+        if let selectedModelDisplayName,
+           note.transcriptionModelDisplayName != selectedModelDisplayName {
+            parts.append("Selected now: \(selectedModelDisplayName).")
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    private var retranscribeConfirmationMessage: String {
+        let nextModel = selectedModelDisplayName ?? "the currently selected model"
+
+        if let currentModel = note.transcriptionModelDisplayName,
+           currentModel != nextModel {
+            return "This note currently uses \(currentModel). Re-transcribing will use \(nextModel) and replace the current transcript."
+        }
+
+        if let currentModel = note.transcriptionModelDisplayName {
+            return "This will run transcription again using \(currentModel) and replace the current transcript."
+        }
+
+        return "This will run transcription again using \(nextModel) and replace the current transcript."
     }
 
     var body: some View {
@@ -777,6 +822,18 @@ struct VoiceNoteDetailView: View {
         } message: {
             Text("Please load a model in Settings first to transcribe this recording.")
         }
+        .confirmationDialog(
+            "Re-transcribe this note?",
+            isPresented: $showingRetranscribeConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Re-transcribe") {
+                requestTranscription(force: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(retranscribeConfirmationMessage)
+        }
         .onAppear {
             loadAudioFile()
             editedTitle = note.title
@@ -790,44 +847,44 @@ struct VoiceNoteDetailView: View {
     }
 
     private var detailHeaderCard: some View {
-        SectionCard {
-            HStack(alignment: .top, spacing: 16) {
+        SectionCard(contentPadding: 14) {
+            HStack(alignment: .center, spacing: 12) {
                 ZStack {
                     Circle()
                         .fill(Color.accentColor.opacity(0.12))
-                        .frame(width: 56, height: 56)
+                        .frame(width: 42, height: 42)
 
                     Image(systemName: note.transcription.isEmpty ? "waveform.circle.fill" : "text.quote")
-                        .font(.title2)
+                        .font(.headline)
                         .foregroundStyle(Color.accentColor)
                 }
 
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
                     if isEditing {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
                             TextField("Note title", text: $editedTitle)
-                                .font(.title2.weight(.semibold))
+                                .font(.title3.weight(.semibold))
                                 .textFieldStyle(.plain)
 
                             Divider()
 
                             Text(
                                 note.timestamp,
-                                format: Date.FormatStyle(date: .complete, time: .shortened)
+                                format: Date.FormatStyle(date: .abbreviated, time: .shortened)
                             )
-                            .font(.subheadline)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(note.title)
-                                .font(.title2.weight(.semibold))
+                                .font(.title3.weight(.semibold))
 
                             Text(
                                 note.timestamp,
-                                format: Date.FormatStyle(date: .complete, time: .shortened)
+                                format: Date.FormatStyle(date: .abbreviated, time: .shortened)
                             )
-                            .font(.subheadline)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                         }
                     }
@@ -853,15 +910,16 @@ struct VoiceNoteDetailView: View {
                             )
                         } else if !note.transcription.isEmpty {
                             StatusBadge(
-                                title: "Transcript ready",
+                                title: "Transcript",
                                 systemImage: "checkmark.circle.fill",
                                 tint: .green
                             )
+                            TranscriptionModelBadge(note: note)
                         }
                     }
                 }
 
-                Spacer(minLength: 12)
+                Spacer(minLength: 8)
 
                 Button(action: toggleEdit) {
                     Text(isEditing ? "Done" : "Edit")
@@ -872,52 +930,43 @@ struct VoiceNoteDetailView: View {
     }
 
     private var audioPlayerCard: some View {
-        SectionCard {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Text("Playback")
-                        .font(.headline)
+        SectionCard(contentPadding: 14) {
+            VStack(spacing: 12) {
+                HStack(spacing: 10) {
+                    Text(formatTime(audioPlayer.currentTime))
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .leading)
 
-                    Spacer()
+                    ProgressView(value: audioPlayer.currentTime, total: max(audioPlayer.duration, 1))
+                        .tint(.accentColor)
+
+                    Text(formatTime(audioPlayer.duration))
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
 
                     playbackRateMenu
                 }
 
-                VStack(spacing: 8) {
-                    ProgressView(value: audioPlayer.currentTime, total: max(audioPlayer.duration, 1))
-                        .tint(.accentColor)
-
-                    HStack {
-                        Text(formatTime(audioPlayer.currentTime))
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-
-                        Spacer()
-
-                        Text(formatTime(audioPlayer.duration))
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                HStack(spacing: 18) {
+                HStack(spacing: 14) {
                     Spacer()
 
-                    transportButton(systemImage: "gobackward.5", size: 44) {
+                    transportButton(systemImage: "gobackward.5", size: 38) {
                         audioPlayer.seekBackward()
                     }
 
                     Button(action: { audioPlayer.togglePlayPause() }) {
                         Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title2.weight(.semibold))
+                            .font(.title3.weight(.semibold))
                             .foregroundStyle(.white)
-                            .frame(width: 64, height: 64)
+                            .frame(width: 54, height: 54)
                             .background(Circle().fill(Color.accentColor.gradient))
-                            .shadow(color: Color.accentColor.opacity(0.24), radius: 14, y: 8)
+                            .shadow(color: Color.accentColor.opacity(0.24), radius: 10, y: 5)
                     }
                     .buttonStyle(.plain)
 
-                    transportButton(systemImage: "goforward.5", size: 44) {
+                    transportButton(systemImage: "goforward.5", size: 38) {
                         audioPlayer.seekForward()
                     }
 
@@ -941,8 +990,8 @@ struct VoiceNoteDetailView: View {
                 audioPlayer.setPlaybackRate(newRate)
             }
         } label: {
-            Label(String(format: "%.2gx", audioPlayer.playbackRate), systemImage: "speedometer")
-                .font(.subheadline.weight(.medium))
+            Text(String(format: "%.2gx", audioPlayer.playbackRate))
+                .font(.footnote.weight(.semibold))
         }
         .buttonStyle(.bordered)
     }
@@ -955,10 +1004,8 @@ struct VoiceNoteDetailView: View {
                         Text("Transcription")
                             .font(.headline)
 
-                        if note.lastTranscriptionDuration > 0 {
-                            Text(
-                                "Last run: \(transcriptionService.formatTranscriptionDuration(note.lastTranscriptionDuration))."
-                            )
+                        if let transcriptionSummaryText {
+                            Text(transcriptionSummaryText)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         }
@@ -1005,10 +1052,11 @@ struct VoiceNoteDetailView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(note.audioFilePath.isEmpty || note.isTranscribing || isTranscribing)
             } else {
-                Button(action: { requestTranscription(force: true) }) {
-                    Label("Retry", systemImage: "arrow.clockwise")
+                Button(action: { showingRetranscribeConfirmation = true }) {
+                    Label("Re-transcribe", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
+                .help("Runs transcription again using the model currently selected in Settings.")
                 .disabled(note.audioFilePath.isEmpty || note.isTranscribing || isTranscribing)
             }
         }
@@ -1099,6 +1147,9 @@ struct VoiceNoteDetailView: View {
             // Save changes
             note.title = editedTitle
             note.transcription = editedTranscription
+            if editedTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                note.transcriptionModelIdentifier = nil
+            }
         } else {
             // Enter edit mode
             editedTitle = note.title
@@ -1157,10 +1208,14 @@ struct VoiceNoteDetailView: View {
                 if let result = result {
                     note.transcription = result.text
                     note.lastTranscriptionDuration = result.duration
+                    note.transcriptionModelIdentifier = result.modelIdentifier
                     note.pendingTranscription = false
                     editedTranscription = result.text
                 } else {
                     note.transcriptionProgress = 0.0
+                    if note.transcription.isEmpty {
+                        note.transcriptionModelIdentifier = nil
+                    }
                     if !force {
                         note.pendingTranscription = true
                     }
@@ -1213,21 +1268,24 @@ struct VoiceNoteDetailView: View {
 private struct SectionCard<Content: View>: View {
     private let backgroundColor: Color
     private let borderColor: Color
+    private let contentPadding: CGFloat
     private let content: Content
 
     init(
         backgroundColor: Color = Color(.secondarySystemGroupedBackground),
         borderColor: Color = Color.primary.opacity(0.05),
+        contentPadding: CGFloat = 18,
         @ViewBuilder content: () -> Content
     ) {
         self.backgroundColor = backgroundColor
         self.borderColor = borderColor
+        self.contentPadding = contentPadding
         self.content = content()
     }
 
     var body: some View {
         content
-            .padding(18)
+            .padding(contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(backgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -1254,6 +1312,26 @@ private struct StatusBadge: View {
     }
 }
 
+private struct TranscriptionModelBadge: View {
+    let note: VoiceNote
+
+    private var title: String {
+        note.transcriptionModelDisplayName ?? "Model Unknown"
+    }
+
+    private var systemImage: String {
+        note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu"
+    }
+
+    private var tint: Color {
+        note.transcriptionModelDisplayName == nil ? .orange : .blue
+    }
+
+    var body: some View {
+        StatusBadge(title: title, systemImage: systemImage, tint: tint)
+    }
+}
+
 private struct RecorderStatusChip: View {
     let title: String
     let systemImage: String
@@ -1267,56 +1345,6 @@ private struct RecorderStatusChip: View {
             .padding(.vertical, 5)
             .background(tint.opacity(0.12))
             .clipShape(Capsule())
-    }
-}
-
-private struct LibrarySummaryCard: View {
-    let title: String
-    let subtitle: String
-    let noteCount: Int
-    let isCloudEnabled: Bool
-
-    var body: some View {
-        SectionCard {
-            HStack(alignment: .center, spacing: 16) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.12))
-                        .frame(width: 60, height: 60)
-
-                    Image(systemName: "waveform.badge.mic")
-                        .font(.title2)
-                        .foregroundStyle(Color.accentColor)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(title)
-                        .font(.headline)
-
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        StatusBadge(
-                            title: noteCount == 1 ? "1 note" : "\(noteCount) notes",
-                            systemImage: "text.badge.checkmark",
-                            tint: .secondary
-                        )
-
-                        if isCloudEnabled {
-                            StatusBadge(
-                                title: "iCloud enabled",
-                                systemImage: "icloud.fill",
-                                tint: .blue
-                            )
-                        }
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
-        }
     }
 }
 

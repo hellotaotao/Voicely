@@ -335,7 +335,19 @@ class ModelManager: ObservableObject {
     func getWhisperKit() -> WhisperKit? {
         return whisperKit
     }
-    
+
+    func currentModelIdentifier() -> String? {
+        if let currentLoadedModel {
+            return currentLoadedModel
+        }
+
+        guard isModelLoaded() else {
+            return nil
+        }
+
+        return selectedModel
+    }
+
     func isModelLoaded() -> Bool {
         return modelState == .loaded && whisperKit != nil
     }
@@ -372,8 +384,35 @@ class ModelManager: ObservableObject {
         if modelLower.contains("large") && modelLower.contains("v2") {
             return false
         }
-        
+
         return true
+    }
+
+    nonisolated static func displayName(for modelIdentifier: String) -> String {
+        let normalized = modelIdentifier
+            .replacingOccurrences(of: "openai_whisper-", with: "")
+            .replacingOccurrences(of: "whisper-", with: "")
+            .replacingOccurrences(of: "_", with: "-")
+
+        let tokens = normalized.split(separator: "-").map { token -> String in
+            let lower = token.lowercased()
+
+            if lower.hasPrefix("v") && lower.dropFirst().allSatisfy({ $0.isNumber }) {
+                return lower
+            }
+
+            if lower.allSatisfy({ $0.isNumber }) {
+                return lower
+            }
+
+            return lower.capitalized
+        }
+
+        guard !tokens.isEmpty else {
+            return modelIdentifier
+        }
+
+        return tokens.joined(separator: " ")
     }
 }
 

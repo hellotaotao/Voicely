@@ -16,6 +16,7 @@ final class VoiceNote {
     var duration: TimeInterval = 0
     var audioFilePath: String = ""
     var transcription: String = ""
+    var transcriptionModelIdentifier: String?
     var isTranscribing: Bool = false
     var transcriptionProgress: Float = 0.0
     var pendingTranscription: Bool = false // Mark if waiting for transcription
@@ -28,8 +29,18 @@ final class VoiceNote {
         self.duration = 0
         self.audioFilePath = audioFilePath
         self.transcription = transcription
+        self.transcriptionModelIdentifier = nil
         self.isTranscribing = false
         self.transcriptionProgress = 0.0
         self.pendingTranscription = false
+    }
+}
+
+extension VoiceNote {
+    var transcriptionModelDisplayName: String? {
+        guard let transcriptionModelIdentifier, !transcriptionModelIdentifier.isEmpty else {
+            return nil
+        }
+        return ModelManager.displayName(for: transcriptionModelIdentifier)
     }
 }

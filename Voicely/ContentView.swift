@@ -1020,6 +1020,22 @@ struct VoiceNoteDetailView: View {
 
                     Spacer()
                 }
+
+                if audioPlayer.isPreparingAudio {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(audioPlayer.playbackStatusMessage ?? "Preparing audio...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else if let playbackStatusMessage = audioPlayer.playbackStatusMessage {
+                    Text(playbackStatusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
@@ -1209,7 +1225,7 @@ struct VoiceNoteDetailView: View {
 
     private func loadAudioFile() {
         if !note.audioFilePath.isEmpty {
-            audioPlayer.loadAudio(from: note.audioFilePath)
+            audioPlayer.loadAudio(from: note.audioFilePath, expectedDuration: note.duration)
         }
     }
 

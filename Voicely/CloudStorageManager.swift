@@ -270,11 +270,18 @@ class CloudStorageManager: ObservableObject {
 
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
+            if Task.isCancelled {
+                return nil
+            }
             if isFileReadyForReading(url) {
                 print("✅ [DEBUG] File ready for reading: \(url.lastPathComponent)")
                 return url
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        if Task.isCancelled {
+            return nil
         }
 
         if isFileReadyForReading(url) {
@@ -284,6 +291,10 @@ class CloudStorageManager: ObservableObject {
 
         print("❌ [DEBUG] Timed out waiting for file to become readable: \(url.lastPathComponent)")
         return nil
+    }
+
+    func isFileReadyForPlayback(at url: URL) -> Bool {
+        isFileReadyForReading(url)
     }
     
     // Delete a file from storage

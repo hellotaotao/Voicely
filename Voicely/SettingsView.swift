@@ -459,6 +459,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
             let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
+            let whisperKitVersion = Bundle.main.object(forInfoDictionaryKey: "WhisperKitVersion") as? String ?? "Unknown"
             
             HStack {
                 Text("App Version")
@@ -477,7 +478,7 @@ struct SettingsView: View {
             HStack {
                 Text("WhisperKit Version")
                 Spacer()
-                Text("Latest")
+                Text(whisperKitVersion)
                     .foregroundColor(.secondary)
             }
         }

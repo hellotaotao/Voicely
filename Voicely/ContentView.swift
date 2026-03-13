@@ -507,7 +507,10 @@ struct VoiceNoteRow: View {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.minute, .second]
         formatter.unitsStyle = .abbreviated
-        return formatter.string(from: duration) ?? "0s"
+        if let formatted = formatter.string(from: duration), !formatted.isEmpty {
+            return formatted
+        }
+        return "0s"
     }
 
     private var backgroundShape: some View {
@@ -1626,16 +1629,25 @@ private struct StatusBadge: View {
     let systemImage: String
     let tint: Color
 
+    private var displayTitle: String {
+        title.isEmpty ? "0s" : title
+    }
+
     var body: some View {
-        Label(title, systemImage: systemImage)
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(tint)
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(tint.opacity(0.12))
-            .clipShape(Capsule())
-            .fixedSize(horizontal: true, vertical: true)
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.footnote.weight(.medium))
+
+            Text(displayTitle)
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(tint.opacity(0.12))
+        .clipShape(Capsule())
+        .fixedSize(horizontal: true, vertical: true)
     }
 }
 

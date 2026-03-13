@@ -217,6 +217,9 @@ struct ContentView: View {
             RecordingControls(
                 audioService: audioService,
                 transcriptionService: transcriptionService,
+                onManageModels: {
+                    showingSettings = true
+                },
                 onRecordingComplete: { note in
                     modelContext.insert(note)
                     selectedNote = note
@@ -530,7 +533,9 @@ struct VoiceNoteRow: View {
 struct RecordingControls: View {
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
+    let onManageModels: () -> Void
     let onRecordingComplete: (VoiceNote) -> Void
+    @State private var showingModelPicker = false
 
     private var isModelLoading: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -543,26 +548,69 @@ struct RecordingControls: View {
         return modelManager.modelState == .loaded
     }
 
-    private var modelLoadingMessage: String {
-        guard let modelManager = transcriptionService.modelManager else {
-            return "Queue"
+    private var modelManager: ModelManager? {
+        transcriptionService.modelManager
+    }
+
+    private var selectedModelDisplayName: String {
+        guard let selectedModel = modelManager?.selectedModel, !selectedModel.isEmpty else {
+            return "Small"
         }
+        return ModelManager.displayName(for: selectedModel)
+    }
+
+    private var selectedModelStatusTitle: String {
+        if !audioService.hasPermission {
+            return "Mic Off"
+        }
+
+        guard let modelManager else {
+            return "Manage"
+        }
+
         switch modelManager.modelState {
-        case .loading:
-            return "Loading"
-        case .downloading:
-            return "Loading"
-        case .prewarming:
-            return "Loading"
-        case .unloaded:
-            if modelManager.isSelectedModelDownloaded() {
-                return "Idle"
-            } else {
-                return "Queue"
-            }
         case .loaded:
             return "Ready"
+        case .loading, .downloading, .prewarming:
+            return "Loading"
+        case .unloaded:
+            return modelManager.isSelectedModelDownloaded() ? "Local" : "Manage"
         }
+    }
+
+    private var selectedModelStatusTint: Color {
+        if !audioService.hasPermission {
+            return .orange
+        }
+
+        guard let modelManager else {
+            return .secondary
+        }
+
+        switch modelManager.modelState {
+        case .loaded:
+            return .green
+        case .loading, .downloading, .prewarming:
+            return .orange
+        case .unloaded:
+            return modelManager.isSelectedModelDownloaded() ? .secondary : .accentColor
+        }
+    }
+
+    private var quickSelectableModels: [String] {
+        guard let modelManager else { return [] }
+
+        return modelManager.localModels.sorted { lhs, rhs in
+            ModelManager.displayName(for: lhs).localizedCaseInsensitiveCompare(ModelManager.displayName(for: rhs)) == .orderedAscending
+        }
+    }
+
+    private var modelPickerMessage: String {
+        if quickSelectableModels.isEmpty {
+            return "Download a model in Settings to make it available here."
+        }
+
+        return "Choose a downloaded model for new transcriptions."
     }
 
     var body: some View {
@@ -582,6 +630,28 @@ struct RecordingControls: View {
         .shadow(color: Color.black.opacity(0.12), radius: 24, y: 12)
         .animation(.spring(response: 0.26, dampingFraction: 0.84), value: audioService.isRecording)
         .animation(.spring(response: 0.26, dampingFraction: 0.84), value: audioService.isPaused)
+        .confirmationDialog(
+            "Transcription Model",
+            isPresented: $showingModelPicker,
+            titleVisibility: .visible
+        ) {
+            if !quickSelectableModels.isEmpty {
+                ForEach(quickSelectableModels, id: \.self) { model in
+                    Button(modelPickerButtonTitle(for: model)) {
+                        selectModel(model)
+                    }
+                    .disabled(isModelLoading)
+                }
+            }
+
+            Button("Manage Models…") {
+                onManageModels()
+            }
+
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(modelPickerMessage)
+        }
     }
 
     private func startRecording() {
@@ -624,32 +694,6 @@ struct RecordingControls: View {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    private var recorderStatusBadge: some View {
-        Group {
-            if !audioService.hasPermission {
-                RecorderStatusChip(title: "Mic Off", systemImage: "mic.slash", tint: .orange)
-            } else if isModelLoaded {
-                RecorderStatusChip(
-                    title: "Ready",
-                    systemImage: "checkmark.circle.fill",
-                    tint: .green
-                )
-            } else if isModelLoading {
-                RecorderStatusChip(
-                    title: "Loading",
-                    systemImage: "arrow.triangle.2.circlepath",
-                    tint: .orange
-                )
-            } else {
-                RecorderStatusChip(
-                    title: modelLoadingMessage,
-                    systemImage: modelLoadingMessage == "Idle" ? "pause.circle.fill" : "clock.arrow.circlepath",
-                    tint: .secondary
-                )
-            }
-        }
-    }
-
     private var waveformRail: some View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
             .fill(audioService.isRecording ? Color.accentColor.opacity(0.08) : Color(.quaternarySystemFill))
@@ -658,22 +702,12 @@ struct RecordingControls: View {
                     .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
             )
             .overlay {
-                HStack(spacing: 12) {
-                    AudioWaveformView(
-                        isAnimating: audioService.isRecording && !audioService.isPaused,
-                        audioService: audioService,
-                        visualStyle: audioService.isRecording ? .active : .placeholder
-                    )
-                    .frame(width: 92, height: 24)
-
-                    Spacer(minLength: 8)
-
-                    Text(formatDuration(audioService.recordingDuration))
-                        .font(.subheadline.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(.primary)
-                        .opacity(audioService.isRecording ? 1 : 0)
-                        .frame(width: 44, alignment: .trailing)
+                Group {
+                    if audioService.isRecording {
+                        recordingWaveformRailContent
+                    } else {
+                        modelSelectionRailContent
+                    }
                 }
                 .padding(.horizontal, 14)
             }
@@ -681,35 +715,126 @@ struct RecordingControls: View {
             .frame(height: 48)
     }
 
-    private var controlsCluster: some View {
+    private var recordingWaveformRailContent: some View {
         HStack(spacing: 12) {
-            secondaryControlSlot
-            primaryActionButton
+            AudioWaveformView(
+                isAnimating: audioService.isRecording && !audioService.isPaused,
+                audioService: audioService,
+                visualStyle: .active
+            )
+            .frame(width: 92, height: 24)
+
+            Spacer(minLength: 8)
+
+            Text(formatDuration(audioService.recordingDuration))
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .frame(width: 44, alignment: .trailing)
         }
-        .frame(width: 128, alignment: .trailing)
+    }
+
+    private var modelSelectionRailContent: some View {
+        Button {
+            showingModelPicker = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "cpu")
+                    .font(.headline)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 30, height: 30)
+                    .background(Color.accentColor.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Transcription Model")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text(selectedModelDisplayName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(selectedModelStatusTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(selectedModelStatusTint)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(selectedModelStatusTint.opacity(0.12), in: Capsule())
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func modelPickerButtonTitle(for model: String) -> String {
+        let displayName = ModelManager.displayName(for: model)
+        if modelManager?.selectedModel == model {
+            return "✓ \(displayName)"
+        }
+        return displayName
+    }
+
+    private func selectModel(_ model: String) {
+        guard let modelManager else { return }
+
+        if modelManager.selectedModel == model && modelManager.isModelLoaded() {
+            return
+        }
+
+        if modelManager.selectedModel != model {
+            modelManager.selectedModel = model
+        }
+
+        modelManager.modelState = .unloaded
+        modelManager.errorMessage = nil
+
+        Task {
+            await modelManager.loadModel(model)
+        }
+    }
+
+    private var controlsCluster: some View {
+        Group {
+            if audioService.isRecording {
+                HStack(spacing: 12) {
+                    secondaryControlSlot
+                    primaryActionButton
+                }
+                .frame(width: 128, alignment: .trailing)
+            } else {
+                primaryActionButton
+            }
+        }
     }
 
     private var secondaryControlSlot: some View {
         VStack(spacing: 6) {
-            if audioService.isRecording {
-                Button(action: togglePauseResume) {
-                    Image(systemName: audioService.isPaused ? "play.fill" : "pause.fill")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(audioService.isPaused ? .green : .orange)
-                        .frame(width: 40, height: 40)
-                        .background(Color(.tertiarySystemFill))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-
-                Text(audioService.isPaused ? "Paused" : "Recording")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            } else {
-                recorderStatusBadge
+            Button(action: togglePauseResume) {
+                Image(systemName: audioService.isPaused ? "play.fill" : "pause.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(audioService.isPaused ? .green : .orange)
+                    .frame(width: 40, height: 40)
+                    .background(Color(.tertiarySystemFill))
+                    .clipShape(Circle())
             }
+            .buttonStyle(.plain)
+
+            Text(audioService.isPaused ? "Paused" : "Recording")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .frame(width: 68, height: 60, alignment: .center)
     }

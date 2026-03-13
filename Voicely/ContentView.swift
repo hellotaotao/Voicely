@@ -966,7 +966,7 @@ struct VoiceNoteDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: usesCompactDetailLayout ? 16 : 20) {
                 detailHeaderCard
 
                 if !note.audioFilePath.isEmpty {
@@ -975,7 +975,7 @@ struct VoiceNoteDetailView: View {
 
                 transcriptionCard
             }
-            .padding(20)
+            .padding(usesCompactDetailLayout ? 16 : 20)
         }
         .background(Color(.systemGroupedBackground))
         .navigationBarTitleDisplayMode(.inline)
@@ -1031,20 +1031,8 @@ struct VoiceNoteDetailView: View {
                     editButton
                 }
 
-                if usesCompactDetailLayout {
-                    VStack(alignment: .leading, spacing: 8) {
-                        headerStatusBadges
-                    }
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 8) {
-                            headerStatusBadges
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            headerStatusBadges
-                        }
-                    }
+                WrappingFlowLayout(horizontalSpacing: 8, verticalSpacing: 8) {
+                    headerStatusBadges
                 }
             }
         }
@@ -1053,20 +1041,9 @@ struct VoiceNoteDetailView: View {
     private var audioPlayerCard: some View {
         SectionCard(contentPadding: 14) {
             VStack(spacing: 12) {
-                if usesCompactDetailLayout {
-                    VStack(spacing: 10) {
-                        timeProgressRow
-
-                        HStack {
-                            Spacer()
-                            playbackRateMenu
-                        }
-                    }
-                } else {
-                    HStack(spacing: 10) {
-                        timeProgressRow
-                        playbackRateMenu
-                    }
+                HStack(spacing: 10) {
+                    timeProgressRow
+                    playbackRateMenu
                 }
 
                 HStack(spacing: 14) {
@@ -1185,12 +1162,10 @@ struct VoiceNoteDetailView: View {
     }
 
     private var compactTranscriptionActions: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        WrappingFlowLayout(horizontalSpacing: 10, verticalSpacing: 10) {
             if !note.transcription.isEmpty {
-                HStack(spacing: 10) {
-                    copyButton
-                    shareButton
-                }
+                copyButton
+                shareButton
             }
 
             if shouldShowTakeOverAction {
@@ -1221,6 +1196,7 @@ struct VoiceNoteDetailView: View {
             Image(systemName: "square.on.square")
         }
         .buttonStyle(.bordered)
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     private var shareButton: some View {
@@ -1228,6 +1204,7 @@ struct VoiceNoteDetailView: View {
             Image(systemName: "square.and.arrow.up")
         }
         .buttonStyle(.bordered)
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     private var takeOverButton: some View {
@@ -1237,6 +1214,7 @@ struct VoiceNoteDetailView: View {
         .buttonStyle(.borderedProminent)
         .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing)
         .help("Claims the current transcription on this device and lets the other device finish without saving.")
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     private var transcribeButton: some View {
@@ -1245,6 +1223,7 @@ struct VoiceNoteDetailView: View {
         }
         .buttonStyle(.borderedProminent)
         .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     private var retranscribeButton: some View {
@@ -1254,6 +1233,7 @@ struct VoiceNoteDetailView: View {
         .buttonStyle(.bordered)
         .help("Runs transcription again using the model currently selected in Settings.")
         .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     private var transcriptionProgressContent: some View {
@@ -1384,6 +1364,7 @@ struct VoiceNoteDetailView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var timestampText: some View {
@@ -1570,6 +1551,73 @@ private struct SectionCard<Content: View>: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(borderColor, lineWidth: 1)
             )
+    }
+}
+
+private struct WrappingFlowLayout: Layout {
+    struct Item {
+        let index: Int
+        let frame: CGRect
+    }
+
+    var horizontalSpacing: CGFloat = 8
+    var verticalSpacing: CGFloat = 8
+
+    func makeCache(subviews: Subviews) -> [Item] {
+        []
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout [Item]
+    ) -> CGSize {
+        cache = frames(for: subviews, maxWidth: proposal.width ?? .greatestFiniteMagnitude)
+        let width = cache.map(\.frame.maxX).max() ?? 0
+        let height = cache.map(\.frame.maxY).max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout [Item]
+    ) {
+        cache = frames(for: subviews, maxWidth: bounds.width)
+
+        for item in cache {
+            subviews[item.index].place(
+                at: CGPoint(x: bounds.minX + item.frame.minX, y: bounds.minY + item.frame.minY),
+                proposal: ProposedViewSize(item.frame.size)
+            )
+        }
+    }
+
+    private func frames(for subviews: Subviews, maxWidth: CGFloat) -> [Item] {
+        let availableWidth = max(maxWidth, 0)
+        var items: [Item] = []
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var currentRowHeight: CGFloat = 0
+
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+
+            if currentX > 0 && currentX + size.width > availableWidth {
+                currentX = 0
+                currentY += currentRowHeight + verticalSpacing
+                currentRowHeight = 0
+            }
+
+            let frame = CGRect(origin: CGPoint(x: currentX, y: currentY), size: size)
+            items.append(Item(index: index, frame: frame))
+
+            currentX += size.width + horizontalSpacing
+            currentRowHeight = max(currentRowHeight, size.height)
+        }
+
+        return items
     }
 }
 

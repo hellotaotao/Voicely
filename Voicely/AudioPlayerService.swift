@@ -22,25 +22,54 @@ class AudioPlayerService: NSObject, ObservableObject {
     private var pendingFilePath: String?
     private var preloadTask: Task<Void, Never>?
     private var prepareTask: Task<Void, Never>?
+    #if !os(macOS) || targetEnvironment(macCatalyst)
+    private let audioSession = AVAudioSession.sharedInstance()
+    private var isAudioSessionActive = false
+    #endif
     
     override init() {
         super.init()
-        setupAudioSession()
     }
     
-    private func setupAudioSession() {
+    private func activateAudioSessionIfNeeded() -> Bool {
+        #if os(macOS) && !targetEnvironment(macCatalyst)
+        return true
+        #else
+        guard !isAudioSessionActive else {
+            return true
+        }
+
         print("🔍 [DEBUG] AudioPlayerService: Setting up audio session for playback...")
         do {
             print("🔍 [DEBUG] Setting category to .playback, mode: .default")
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try audioSession.setCategory(.playback, mode: .default)
             print("🔍 [DEBUG] Activating audio session...")
-            try AVAudioSession.sharedInstance().setActive(true)
+            try audioSession.setActive(true)
+            isAudioSessionActive = true
             print("✅ [DEBUG] Audio playback session activated successfully")
-            print("🔍 [DEBUG] Audio session category: \(AVAudioSession.sharedInstance().category)")
+            print("🔍 [DEBUG] Audio session category: \(audioSession.category)")
+            return true
         } catch {
             print("❌ [DEBUG] Failed to setup audio session: \(error)")
             print("❌ [DEBUG] This could cause 'cannot add handler' warnings")
+            return false
         }
+        #endif
+    }
+
+    private func deactivateAudioSessionIfNeeded() {
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        guard isAudioSessionActive else {
+            return
+        }
+
+        do {
+            try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            isAudioSessionActive = false
+        } catch {
+            print("❌ [DEBUG] Failed to deactivate audio session: \(error)")
+        }
+        #endif
     }
     
     @MainActor
@@ -68,9 +97,18 @@ class AudioPlayerService: NSObject, ObservableObject {
     func play() {
         if let player = audioPlayer {
             if !player.isPlaying {
-                player.play()
-                isPlaying = true
-                startTimer()
+                guard activateAudioSessionIfNeeded() else {
+                    playbackStatusMessage = "Couldn't start audio playback."
+                    return
+                }
+
+                if player.play() {
+                    isPlaying = true
+                    startTimer()
+                } else {
+                    playbackStatusMessage = "Couldn't start audio playback."
+                    deactivateAudioSessionIfNeeded()
+                }
             }
             return
         }
@@ -88,6 +126,7 @@ class AudioPlayerService: NSObject, ObservableObject {
         audioPlayer?.pause()
         isPlaying = false
         stopTimer()
+        deactivateAudioSessionIfNeeded()
     }
     
     func togglePlayPause() {
@@ -142,6 +181,7 @@ class AudioPlayerService: NSObject, ObservableObject {
         isPlaying = false
         currentTime = 0
         stopTimer()
+        deactivateAudioSessionIfNeeded()
     }
     
     deinit {
@@ -156,6 +196,7 @@ extension AudioPlayerService: AVAudioPlayerDelegate {
         isPlaying = false
         currentTime = 0
         stopTimer()
+        deactivateAudioSessionIfNeeded()
     }
 }
 
@@ -212,6 +253,10 @@ private extension AudioPlayerService {
         }
 
         guard !Task.isCancelled, pendingFilePath == filePath else { return }
+        guard activateAudioSessionIfNeeded() else {
+            playbackStatusMessage = "Couldn't start audio playback."
+            return
+        }
 
         do {
             print("🔍 [DEBUG] Creating AVAudioPlayer...")
@@ -230,12 +275,17 @@ private extension AudioPlayerService {
             print("🔍 [DEBUG] Audio duration: \(duration) seconds")
             print("🔍 [DEBUG] Audio format: \(player.format.description)")
 
-            player.play()
-            isPlaying = true
-            startTimer()
+            if player.play() {
+                isPlaying = true
+                startTimer()
+            } else {
+                playbackStatusMessage = "Couldn't start audio playback."
+                deactivateAudioSessionIfNeeded()
+            }
         } catch {
             print("❌ [DEBUG] Failed to load audio: \(error)")
             print("❌ [DEBUG] Error code: \((error as NSError).code)")
+            deactivateAudioSessionIfNeeded()
             if (error as NSError).code == 257 {
                 print("❌ [DEBUG] Permission denied (Error 257) - iCloud file access issue")
                 playbackStatusMessage = "Audio is still downloading from iCloud."
@@ -252,5 +302,6 @@ private extension AudioPlayerService {
         isPlaying = false
         currentTime = 0
         stopTimer()
+        deactivateAudioSessionIfNeeded()
     }
 }

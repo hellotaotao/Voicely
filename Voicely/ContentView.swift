@@ -17,10 +17,15 @@ struct ContentView: View {
     @StateObject private var transcriptionService = TranscriptionService()
     @StateObject private var cloudManager = CloudStorageManager.shared
     @EnvironmentObject private var syncMonitor: CloudKitSyncMonitor
-    @State private var selectedNote: VoiceNote?
+    @State private var selectedNoteID: UUID?
     @State private var showingSettings = false
     @State private var didSetupServices = false
     @State private var ownershipPollingTask: Task<Void, Never>?
+
+    private var selectedNote: VoiceNote? {
+        guard let selectedNoteID else { return nil }
+        return voiceNotes.first { $0.id == selectedNoteID }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -34,7 +39,7 @@ struct ContentView: View {
             .background(Color(.systemGroupedBackground))
         }
         .onAppear(perform: syncInitialSelection)
-        .onChange(of: voiceNotes.count) { _, _ in
+        .onChange(of: voiceNotes.map(\.id)) { _, _ in
             syncInitialSelection()
             Task { @MainActor in
                 await processPendingTranscriptionsIfNeeded()
@@ -57,7 +62,7 @@ struct ContentView: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 compactSplitHeader
-                noteLibraryList(allowsNavigation: false)
+                noteLibraryList()
             }
             .frame(width: sidebarWidth(for: geometry))
             .background(Color(.systemGroupedBackground))
@@ -77,7 +82,7 @@ struct ContentView: View {
     
     private var defaultNavigationView: some View {
         NavigationSplitView {
-            noteLibraryList(allowsNavigation: true)
+            noteLibraryList()
             .navigationTitle("Voice Notes")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -148,64 +153,9 @@ struct ContentView: View {
         .padding(.vertical, 16)
     }
 
-    private func noteLibraryList(allowsNavigation: Bool) -> some View {
+    private func noteLibraryList() -> some View {
         ZStack(alignment: .bottom) {
-            List {
-                if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .success {
-                    Section {
-                        SyncStatusBannerCard(
-                            description: syncMonitor.statusDescription,
-                            tint: syncMonitor.statusColor,
-                            showsRetry: {
-                                if case .error = syncMonitor.syncStatus {
-                                    return true
-                                }
-                                return false
-                            }(),
-                            retryAction: {
-                                Task {
-                                    await syncMonitor.forceSyncIfNeeded()
-                                }
-                            }
-                        )
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                    }
-                }
-
-                Section(voiceNotes.isEmpty ? "Get Started" : "Recent Recordings") {
-                    if voiceNotes.isEmpty {
-                        EmptyLibraryCard()
-                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 10, trailing: 0))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                    } else {
-                        ForEach(voiceNotes) { note in
-                            noteRow(note: note, allowsNavigation: allowsNavigation)
-                                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .contextMenu {
-                                    if transcriptionService.isLocallyTranscribing(note) {
-                                        Button {
-                                            cancelTranscription(for: note)
-                                        } label: {
-                                            Label("Cancel Transcription", systemImage: "xmark.circle")
-                                        }
-                                    }
-
-                                    Button(role: .destructive) {
-                                        deleteNote(note)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                        }
-                        .onDelete(perform: deleteNotes)
-                    }
-                }
-            }
+            noteList()
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
@@ -222,7 +172,7 @@ struct ContentView: View {
                 },
                 onRecordingComplete: { note in
                     modelContext.insert(note)
-                    selectedNote = note
+                    selectedNoteID = note.id
                 }
             )
             .padding(.horizontal, 16)
@@ -233,33 +183,84 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func noteRow(note: VoiceNote, allowsNavigation: Bool) -> some View {
-        if allowsNavigation {
-            NavigationLink {
-                detailView(note)
-                    .onAppear {
-                        selectedNote = note
-                    }
-            } label: {
-                VoiceNoteRow(
-                    note: note,
-                    transcriptionService: transcriptionService,
-                    isSelected: selectedNote?.id == note.id
-                )
-            }
-        } else {
-            Button {
-                selectedNote = note
-            } label: {
-                VoiceNoteRow(
-                    note: note,
-                    transcriptionService: transcriptionService,
-                    isSelected: selectedNote?.id == note.id
-                )
-                    .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
+    private func noteList() -> some View {
+        List {
+            noteListContent()
         }
+    }
+
+    @ViewBuilder
+    private func noteListContent() -> some View {
+        if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .success {
+            Section {
+                SyncStatusBannerCard(
+                    description: syncMonitor.statusDescription,
+                    tint: syncMonitor.statusColor,
+                    showsRetry: {
+                        if case .error = syncMonitor.syncStatus {
+                            return true
+                        }
+                        return false
+                    }(),
+                    retryAction: {
+                        Task {
+                            await syncMonitor.forceSyncIfNeeded()
+                        }
+                    }
+                )
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            }
+        }
+
+        Section(voiceNotes.isEmpty ? "Get Started" : "Recent Recordings") {
+            if voiceNotes.isEmpty {
+                EmptyLibraryCard()
+                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 10, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else {
+                ForEach(voiceNotes) { note in
+                    noteRow(note: note)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .contextMenu {
+                            if transcriptionService.isLocallyTranscribing(note) {
+                                Button {
+                                    cancelTranscription(for: note)
+                                } label: {
+                                    Label("Cancel Transcription", systemImage: "xmark.circle")
+                                }
+                            }
+
+                            Button(role: .destructive) {
+                                deleteNote(note)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                }
+                .onDelete(perform: deleteNotes)
+            }
+        }
+    }
+
+    private func noteRow(note: VoiceNote) -> some View {
+        let row = VoiceNoteRow(
+            note: note,
+            transcriptionService: transcriptionService,
+            isSelected: selectedNoteID == note.id
+        )
+
+        return Button {
+            selectedNoteID = note.id
+        } label: {
+            row
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
     }
 
     private var detailPane: some View {
@@ -288,8 +289,16 @@ struct ContentView: View {
     }
 
     private func syncInitialSelection() {
-        guard selectedNote == nil else { return }
-        selectedNote = voiceNotes.first
+        guard !voiceNotes.isEmpty else {
+            selectedNoteID = nil
+            return
+        }
+
+        guard let selectedNoteID,
+              voiceNotes.contains(where: { $0.id == selectedNoteID }) else {
+            self.selectedNoteID = voiceNotes.first?.id
+            return
+        }
     }
 
     private func setupServices() async {
@@ -380,8 +389,8 @@ struct ContentView: View {
             cloudManager.deleteFile(at: note.audioFilePath)
         }
 
-        if selectedNote?.id == note.id {
-            selectedNote = replacementNote
+        if selectedNoteID == note.id {
+            selectedNoteID = replacementNote?.id
         }
 
         modelContext.delete(note)

@@ -41,7 +41,6 @@ class TranscriptionService: ObservableObject {
 
     private static let ownershipMigrationDefaultsKey = "VoicelyOwnershipMigrationV1"
 
-    private var isWhisperLoaded = false
     private var currentTranscriptionTask: Task<String?, Never>?
     private var cancelRequested = false
     private var lastCancellationHandled = false
@@ -135,6 +134,8 @@ class TranscriptionService: ObservableObject {
     }
 
     func processPendingTranscriptions(notes: [VoiceNote]) async {
+        updateEngineStatus()
+
         guard isWhisperLoaded else {
             print("Model not loaded, cannot process pending transcriptions")
             return
@@ -190,6 +191,8 @@ class TranscriptionService: ObservableObject {
         force: Bool = false,
         takeOver: Bool = false
     ) async -> Bool {
+        updateEngineStatus()
+
         guard isWhisperLoaded, !note.audioFilePath.isEmpty else {
             return false
         }
@@ -256,7 +259,6 @@ class TranscriptionService: ObservableObject {
             modelManager.whisperKit = nil
             modelManager.modelState = .unloaded
         }
-        isWhisperLoaded = false
         currentEngine = .notAvailable
         loadingProgress = 0.0
         print("WhisperKit model unloaded")
@@ -271,10 +273,13 @@ class TranscriptionService: ObservableObject {
     }
 
     func isWhisperAvailable() -> Bool {
-        isWhisperLoaded
+        updateEngineStatus()
+        return isWhisperLoaded
     }
 
     func getCurrentEngineDescription() -> String {
+        updateEngineStatus()
+
         switch currentEngine {
         case .whisperKit:
             return "WhisperKit (Local AI)"
@@ -284,6 +289,8 @@ class TranscriptionService: ObservableObject {
     }
 
     func getEngineStatusMessage() -> String {
+        updateEngineStatus()
+
         switch currentEngine {
         case .whisperKit:
             return "Using WhisperKit for high-quality offline transcription"
@@ -296,6 +303,8 @@ class TranscriptionService: ObservableObject {
         filePath: String,
         progressCallback: @escaping (Float) -> Void = { _ in }
     ) async -> TranscriptionResult? {
+        updateEngineStatus()
+
         while isTranscribing {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
@@ -327,7 +336,12 @@ class TranscriptionService: ObservableObject {
         }
         currentTranscriptionTask = task
 
-        guard let text = await task.value else {
+        guard let rawText = await task.value else {
+            return nil
+        }
+
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
             return nil
         }
 
@@ -372,12 +386,14 @@ private extension TranscriptionService {
         deviceIDProvider()
     }
 
+    var isWhisperLoaded: Bool {
+        modelManager?.isModelLoaded() ?? false
+    }
+
     func updateEngineStatus() {
-        if let modelManager, modelManager.isModelLoaded() {
-            isWhisperLoaded = true
+        if isWhisperLoaded {
             currentEngine = .whisperKit
         } else {
-            isWhisperLoaded = false
             currentEngine = .notAvailable
         }
     }
@@ -498,6 +514,7 @@ private extension TranscriptionService {
             note.completeTranscription()
         } else {
             if note.transcription.isEmpty {
+                note.lastTranscriptionDuration = 0
                 note.transcriptionModelIdentifier = nil
             }
             requeueNote(note, queuedAt: nowProvider())

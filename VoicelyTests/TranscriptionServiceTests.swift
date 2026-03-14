@@ -46,6 +46,17 @@ struct TranscriptionServiceTests {
         override func isModelLoaded() -> Bool { false }
     }
 
+    final class ToggleableModelManager: ModelManager {
+        var loaded = false
+
+        override func isModelLoaded() -> Bool { loaded }
+
+        func setLoaded(_ value: Bool) {
+            loaded = value
+            modelState = value ? .loaded : .unloaded
+        }
+    }
+
     @Test @MainActor func transcribeAudioReturnsResultWhenModelLoaded() async {
         let service = makeService(deviceID: "device-a")
         service.transcribeImpl = { _, progress in
@@ -195,6 +206,49 @@ struct TranscriptionServiceTests {
         #expect(note.transcription == "Manual takeover")
         #expect(note.transcriptionState == .completed)
         #expect(note.transcriptionOwnerDeviceID == nil)
+    }
+
+    @Test @MainActor func requestTranscriptionUsesLatestModelManagerState() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = TranscriptionService()
+        let modelManager = ToggleableModelManager()
+        modelManager.selectedModel = "openai_whisper-small"
+        modelManager.setLoaded(false)
+        service.setModelManager(modelManager)
+        service.deviceIDProvider = { "phone" }
+        service.nowProvider = { now }
+        service.transcribeImpl = { _, _ in "Queued result" }
+
+        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+
+        modelManager.setLoaded(true)
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        #expect(note.transcription == "Queued result")
+        #expect(note.transcriptionState == .completed)
+    }
+
+    @Test @MainActor func emptyTranscriptionResultRequeuesNoteAndClearsMetadata() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.transcribeImpl = { _, _ in "   \n" }
+
+        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.lastTranscriptionDuration = 21.7
+        note.transcriptionModelIdentifier = "openai_whisper-large-v3-turbo"
+        note.queueTranscription(at: now)
+
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        #expect(note.transcription.isEmpty)
+        #expect(note.transcriptionState == .queued)
+        #expect(note.lastTranscriptionDuration == 0)
+        #expect(note.transcriptionModelIdentifier == nil)
     }
 
     @Test @MainActor func staleAttemptDoesNotOverwriteCurrentOwner() async {

@@ -557,7 +557,7 @@ struct RecordingControls: View {
 
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.modelState == .loaded
+        return modelManager.isModelLoaded()
     }
 
     private var modelManager: ModelManager? {
@@ -882,16 +882,18 @@ struct VoiceNoteDetailView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
+    @State private var showTranscriptionFailureAlert = false
     @State private var showingShareSheet = false
     @State private var isEditing = false
     @State private var showingRetranscribeConfirmation = false
+    @State private var transcriptionFailureMessage = ""
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @StateObject private var audioPlayer = AudioPlayerService()
 
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.modelState == .loaded
+        return modelManager.isModelLoaded()
     }
 
     // Monitor model loading state changes
@@ -1005,6 +1007,11 @@ struct VoiceNoteDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Please load a model in Settings first to transcribe this recording.")
+        }
+        .alert("Transcription Failed", isPresented: $showTranscriptionFailureAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(transcriptionFailureMessage)
         }
         .confirmationDialog(
             "Re-transcribe this note?",
@@ -1487,6 +1494,7 @@ struct VoiceNoteDetailView: View {
         }
 
         Task { @MainActor in
+            let startedWithEmptyTranscript = note.transcription.isEmpty
             let didStart = await transcriptionService.requestTranscription(
                 for: note,
                 force: force,
@@ -1494,6 +1502,14 @@ struct VoiceNoteDetailView: View {
             )
             if didStart, !isEditing {
                 editedTranscription = note.transcription
+            }
+            if didStart,
+               startedWithEmptyTranscript,
+               note.transcription.isEmpty,
+               note.transcriptionState == .queued,
+               !transcriptionService.wasTranscriptionCancelled() {
+                transcriptionFailureMessage = "No usable transcript was produced for this recording. You can try again or choose a different model in Settings."
+                showTranscriptionFailureAlert = true
             }
         }
     }

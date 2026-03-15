@@ -24,8 +24,12 @@ final class VoicelyUITests: XCTestCase {
         }
     }
 
-    private func launchApp() -> XCUIApplication {
+    private func launchApp(seedNoteTitle: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
+        if let seedNoteTitle {
+            app.launchEnvironment["VOICELY_UI_TEST_SEED_NOTE"] = "1"
+            app.launchEnvironment["VOICELY_UI_TEST_NOTE_TITLE"] = seedNoteTitle
+        }
         app.launch()
         app.tap()
         return app
@@ -43,6 +47,19 @@ final class VoicelyUITests: XCTestCase {
         app.buttons["SettingsButton"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Model Management"].exists)
+    }
+
+    @MainActor
+    func testSelectingNoteShowsDetailScreen() throws {
+        let noteTitle = "UI Test Note"
+        let app = launchApp(seedNoteTitle: noteTitle)
+
+        let noteTitleText = app.staticTexts[noteTitle].firstMatch
+        XCTAssertTrue(noteTitleText.waitForExistence(timeout: 5))
+
+        noteTitleText.tap()
+
+        XCTAssertTrue(app.buttons["Transcribe"].waitForExistence(timeout: 5))
     }
 
     @MainActor

@@ -49,11 +49,36 @@ struct VoicelyApp: App {
             ContentView()
                 .environmentObject(syncMonitor)
                 .task {
-                    guard !AppRuntime.isRunningTests else { return }
-                    syncMonitor.setModelContainer(sharedModelContainer)
+                    if AppRuntime.isRunningTests {
+                        seedUITestNoteIfNeeded()
+                    } else {
+                        syncMonitor.setModelContainer(sharedModelContainer)
+                    }
                 }
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    private func seedUITestNoteIfNeeded() {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["VOICELY_UI_TEST_SEED_NOTE"] == "1" else { return }
+
+        let context = sharedModelContainer.mainContext
+        let descriptor = FetchDescriptor<VoiceNote>()
+
+        if let existingNotes = try? context.fetch(descriptor), !existingNotes.isEmpty {
+            return
+        }
+
+        let noteTitle = environment["VOICELY_UI_TEST_NOTE_TITLE"] ?? "UI Test Note"
+        let seededNote = VoiceNote(title: noteTitle)
+        context.insert(seededNote)
+
+        do {
+            try context.save()
+        } catch {
+            assertionFailure("Failed to seed UI test note: \(error)")
+        }
     }
 }
 

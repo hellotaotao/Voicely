@@ -62,7 +62,7 @@ struct ContentView: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 compactSplitHeader
-                noteLibraryList()
+                noteLibraryList(usesSplitNavigationSelection: false)
             }
             .frame(width: sidebarWidth(for: geometry))
             .background(Color(.systemGroupedBackground))
@@ -82,7 +82,7 @@ struct ContentView: View {
     
     private var defaultNavigationView: some View {
         NavigationSplitView {
-            noteLibraryList()
+            noteLibraryList(usesSplitNavigationSelection: true)
             .navigationTitle("Voice Notes")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -153,9 +153,9 @@ struct ContentView: View {
         .padding(.vertical, 16)
     }
 
-    private func noteLibraryList() -> some View {
+    private func noteLibraryList(usesSplitNavigationSelection: Bool) -> some View {
         ZStack(alignment: .bottom) {
-            noteList()
+            noteList(usesSplitNavigationSelection: usesSplitNavigationSelection)
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
@@ -183,14 +183,20 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func noteList() -> some View {
-        List {
-            noteListContent()
+    private func noteList(usesSplitNavigationSelection: Bool) -> some View {
+        if usesSplitNavigationSelection {
+            List(selection: $selectedNoteID) {
+                noteListContent(usesSplitNavigationSelection: true)
+            }
+        } else {
+            List {
+                noteListContent(usesSplitNavigationSelection: false)
+            }
         }
     }
 
     @ViewBuilder
-    private func noteListContent() -> some View {
+    private func noteListContent(usesSplitNavigationSelection: Bool) -> some View {
         if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .success {
             Section {
                 SyncStatusBannerCard(
@@ -222,7 +228,7 @@ struct ContentView: View {
                     .listRowSeparator(.hidden)
             } else {
                 ForEach(voiceNotes) { note in
-                    noteRow(note: note)
+                    noteRow(note: note, usesSplitNavigationSelection: usesSplitNavigationSelection)
                         .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -247,20 +253,29 @@ struct ContentView: View {
         }
     }
 
-    private func noteRow(note: VoiceNote) -> some View {
+    private func noteRow(note: VoiceNote, usesSplitNavigationSelection: Bool) -> some View {
         let row = VoiceNoteRow(
             note: note,
             transcriptionService: transcriptionService,
             isSelected: selectedNoteID == note.id
         )
 
-        return Button {
-            selectedNoteID = note.id
-        } label: {
-            row
-                .foregroundStyle(.primary)
+        return Group {
+            if usesSplitNavigationSelection {
+                NavigationLink(value: note.id) {
+                    row
+                        .foregroundStyle(.primary)
+                }
+            } else {
+                Button {
+                    selectedNoteID = note.id
+                } label: {
+                    row
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
     }
 
     private var detailPane: some View {

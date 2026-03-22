@@ -39,7 +39,7 @@ struct ContentView: View {
             .background(Color(.systemGroupedBackground))
         }
         .onAppear(perform: syncInitialSelection)
-        .onChange(of: voiceNotes.map(\.id)) { _, _ in
+        .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
             Task { @MainActor in
                 await processPendingTranscriptionsIfNeeded()

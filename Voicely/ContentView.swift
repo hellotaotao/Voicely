@@ -22,9 +22,13 @@ struct ContentView: View {
     @State private var didSetupServices = false
     @State private var ownershipPollingTask: Task<Void, Never>?
 
+    private var voiceNotesByID: [UUID: VoiceNote] {
+        Dictionary(uniqueKeysWithValues: voiceNotes.map { ($0.id, $0) })
+    }
+
     private var selectedNote: VoiceNote? {
         guard let selectedNoteID else { return nil }
-        return voiceNotes.first { $0.id == selectedNoteID }
+        return voiceNotesByID[selectedNoteID]
     }
 
     var body: some View {
@@ -47,6 +51,11 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, newValue in
             guard newValue == .active else { return }
+            Task { @MainActor in
+                await processPendingTranscriptionsIfNeeded()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
                 await processPendingTranscriptionsIfNeeded()
             }
@@ -334,17 +343,6 @@ struct ContentView: View {
         if cloudManager.isCloudEnabled {
             await cloudManager.migrateLocalFilesToCloud()
             await cloudManager.refreshSync()
-        }
-
-        // Add model loading notification observer
-        NotificationCenter.default.addObserver(
-            forName: .modelLoadedNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            Task { @MainActor [self] in
-                await self.processPendingTranscriptionsIfNeeded()
-            }
         }
 
         // Always preload model on startup to optimize user experience

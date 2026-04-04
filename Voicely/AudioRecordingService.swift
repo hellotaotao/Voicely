@@ -248,7 +248,9 @@ class AudioRecordingService: NSObject, ObservableObject {
         let success = recorder.record()
         if success {
             isPaused = false
-            
+
+            recordingTimer?.invalidate()
+            recordingTimer = nil
             recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     self?.updateRecordingDuration()

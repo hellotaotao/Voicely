@@ -369,6 +369,9 @@ class TranscriptionService: ObservableObject {
         resetProgressSmoothing()
         isTranscribing = false
         transcriptionProgress = 0.0
+        if let noteID = activeNoteID {
+            endLocalTranscription(for: noteID)
+        }
     }
 
     func wasTranscriptionCancelled() -> Bool {

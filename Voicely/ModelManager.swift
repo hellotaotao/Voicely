@@ -325,7 +325,7 @@ class ModelManager: ObservableObject {
             }
             
             do {
-                try await Task.sleep(nanoseconds: 100_000_000)
+                try await Task.sleep(nanoseconds: 250_000_000)
             } catch {
                 break
             }

@@ -15,20 +15,16 @@ struct ContentView: View {
     @StateObject private var audioService = AudioRecordingService()
     @StateObject private var modelManager = ModelManager()
     @StateObject private var transcriptionService = TranscriptionService()
-    @StateObject private var cloudManager = CloudStorageManager.shared
+    @ObservedObject private var cloudManager = CloudStorageManager.shared
     @EnvironmentObject private var syncMonitor: CloudKitSyncMonitor
     @State private var selectedNoteID: UUID?
     @State private var showingSettings = false
     @State private var didSetupServices = false
     @State private var ownershipPollingTask: Task<Void, Never>?
 
-    private var voiceNotesByID: [UUID: VoiceNote] {
-        Dictionary(uniqueKeysWithValues: voiceNotes.map { ($0.id, $0) })
-    }
-
     private var selectedNote: VoiceNote? {
         guard let selectedNoteID else { return nil }
-        return voiceNotesByID[selectedNoteID]
+        return voiceNotes.first { $0.id == selectedNoteID }
     }
 
     var body: some View {

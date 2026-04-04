@@ -19,6 +19,8 @@ class CloudKitSyncMonitor: ObservableObject {
     @Published var lastSuccessfulSync: Date?
 
     private var modelContainer: ModelContainer?
+    private var retryTask: Task<Void, Never>?
+    private var accountStatusTask: Task<Void, Never>?
 
     enum SyncStatus: Equatable {
         case idle
@@ -34,6 +36,8 @@ class CloudKitSyncMonitor: ObservableObject {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        retryTask?.cancel()
+        accountStatusTask?.cancel()
     }
 
     func setModelContainer(_ container: ModelContainer) {
@@ -125,7 +129,8 @@ class CloudKitSyncMonitor: ObservableObject {
     }
 
     @objc private func handleAccountStatusChange(notification: Notification) {
-        Task { @MainActor in
+        accountStatusTask?.cancel()
+        accountStatusTask = Task { @MainActor in
             await checkCloudKitAccountStatus()
         }
     }
@@ -161,9 +166,10 @@ class CloudKitSyncMonitor: ObservableObject {
     }
 
     private func scheduleRetry() {
-        // Retry sync after 30 seconds
-        Task {
-            try await Task.sleep(nanoseconds: 30_000_000_000)  // 30 seconds
+        retryTask?.cancel()
+        retryTask = Task {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)  // 30 seconds
+            guard !Task.isCancelled else { return }
             await forceSyncIfNeeded()
         }
     }

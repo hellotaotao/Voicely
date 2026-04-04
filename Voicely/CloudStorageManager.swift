@@ -341,6 +341,8 @@ class CloudStorageManager: ObservableObject {
             name: .NSMetadataQueryDidFinishGathering,
             object: metadataQuery
         )
+
+        metadataQuery?.start()
     }
     
     @objc private func metadataQueryDidUpdate() {
@@ -353,38 +355,40 @@ class CloudStorageManager: ObservableObject {
     
     private func updateSyncStatus() {
         guard let query = metadataQuery else { return }
-        
+
+        query.disableUpdates()
+        defer { query.enableUpdates() }
+
         var uploading = 0
         var downloading = 0
         var hasErrors = false
-        
+
         for i in 0..<query.resultCount {
             guard let item = query.result(at: i) as? NSMetadataItem else { continue }
-            
-            // Check download status
-            if let downloadStatus = item.value(forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey) as? String {
-                if downloadStatus == URLUbiquitousItemDownloadingStatus.notDownloaded.rawValue {
-                    downloading += 1
-                }
+
+            let attrs = item.values(forAttributes: [
+                NSMetadataUbiquitousItemDownloadingStatusKey,
+                NSMetadataUbiquitousItemIsUploadedKey,
+                NSMetadataUbiquitousItemHasUnresolvedConflictsKey
+            ])
+
+            if let downloadStatus = attrs?[NSMetadataUbiquitousItemDownloadingStatusKey] as? String,
+               downloadStatus == URLUbiquitousItemDownloadingStatus.notDownloaded.rawValue {
+                downloading += 1
             }
-            
-            // Check upload status
-            if let isUploaded = item.value(forAttribute: NSMetadataUbiquitousItemIsUploadedKey) as? Bool,
-               !isUploaded {
+            if let isUploaded = attrs?[NSMetadataUbiquitousItemIsUploadedKey] as? Bool, !isUploaded {
                 uploading += 1
             }
-            
-            // Check for errors
-            if let itemHasError = item.value(forAttribute: NSMetadataUbiquitousItemHasUnresolvedConflictsKey) as? Bool,
-               itemHasError {
+            if let hasConflict = attrs?[NSMetadataUbiquitousItemHasUnresolvedConflictsKey] as? Bool, hasConflict {
                 hasErrors = true
             }
         }
-        
-        Task { @MainActor in
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             self.pendingUploads = uploading
             self.pendingDownloads = downloading
-            
+
             if hasErrors {
                 self.syncStatus = .error("Sync conflicts detected")
             } else if uploading > 0 {
@@ -394,7 +398,7 @@ class CloudStorageManager: ObservableObject {
             } else {
                 self.syncStatus = .idle
             }
-            
+
             self.isSyncing = uploading > 0 || downloading > 0
         }
     }

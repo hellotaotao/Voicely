@@ -318,6 +318,8 @@ struct BenchmarkView: View {
                         audioPath: audioPath,
                         decodeOptions: DecodingOptions(
                             task: .transcribe,
+                            usePrefillPrompt: true,
+                            detectLanguage: true,
                             skipSpecialTokens: true,
                             withoutTimestamps: true
                         )

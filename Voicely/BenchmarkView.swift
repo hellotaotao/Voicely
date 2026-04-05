@@ -96,35 +96,71 @@ struct BenchmarkView: View {
 
     // MARK: - Sections
 
+    // Show recordings between 30s and 5 minutes — short enough to benchmark quickly,
+    // long enough to be representative. Cap at 8 items, shortest first.
+    private static let minDuration: TimeInterval = 30
+    private static let maxDuration: TimeInterval = 300
+
+    private var benchmarkCandidates: [VoiceNote] {
+        voiceNotes
+            .filter { !$0.audioFilePath.isEmpty
+                && $0.duration >= Self.minDuration
+                && $0.duration <= Self.maxDuration }
+            .sorted { $0.duration < $1.duration }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    private func durationString(_ seconds: TimeInterval) -> String {
+        let m = Int(seconds) / 60
+        let s = Int(seconds) % 60
+        return m > 0 ? "\(m)m \(s)s" : "\(s)s"
+    }
+
     private var audioPickerSection: some View {
-        let notesWithAudio = voiceNotes.filter { !$0.audioFilePath.isEmpty }
-        return Section("Select Recording") {
-            if notesWithAudio.isEmpty {
-                Text("No recordings found. Record something first.")
+        let candidates = benchmarkCandidates
+        return Section {
+            if candidates.isEmpty {
+                Text("No recordings between 30 s and 5 min found. Record a short voice note first.")
                     .foregroundColor(.secondary)
+                    .font(.callout)
             } else {
-                ForEach(notesWithAudio) { note in
+                ForEach(candidates) { note in
                     Button {
                         selectedNote = note
                     } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(note.title)
-                                    .foregroundColor(.primary)
-                                Text(String(format: "%.1fs", note.duration))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack {
+                                    Text(note.title)
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                    Text(durationString(note.duration))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                if !note.transcription.isEmpty {
+                                    Text(note.transcription)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
                             }
-                            Spacer()
                             if selectedNote?.id == note.id {
-                                Image(systemName: "checkmark")
+                                Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.blue)
+                                    .padding(.top, 1)
                             }
                         }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
+        } header: {
+            Text("Select Recording (30 s – 5 min)")
         }
     }
 

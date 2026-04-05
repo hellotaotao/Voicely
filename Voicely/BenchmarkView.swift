@@ -8,12 +8,26 @@ import WhisperKit
 import CoreML
 import SwiftData
 
+// MARK: - MLComputeUnits display helper
+
+extension MLComputeUnits {
+    var shortName: String {
+        switch self {
+        case .cpuOnly:            return "CPU"
+        case .cpuAndGPU:          return "GPU"
+        case .cpuAndNeuralEngine: return "ANE"
+        default:                  return "Auto"
+        }
+    }
+}
+
 // MARK: - Data model
 
 struct BenchmarkRound: Identifiable {
     let id = UUID()
     let label: String
-    let computeUnits: MLComputeUnits
+    let encoderUnits: MLComputeUnits
+    let decoderUnits: MLComputeUnits
 
     enum Status { case pending, running, completed, failed }
     var status: Status = .pending
@@ -37,9 +51,13 @@ struct BenchmarkView: View {
 
     private static func makeRounds() -> [BenchmarkRound] {
         [
-            BenchmarkRound(label: "CPU", computeUnits: .cpuOnly),
-            BenchmarkRound(label: "CPU + GPU", computeUnits: .cpuAndGPU),
-            BenchmarkRound(label: "CPU + ANE", computeUnits: .cpuAndNeuralEngine),
+            // Pure configurations
+            BenchmarkRound(label: "CPU | CPU",         encoderUnits: .cpuOnly,            decoderUnits: .cpuOnly),
+            BenchmarkRound(label: "GPU | GPU",         encoderUnits: .cpuAndGPU,          decoderUnits: .cpuAndGPU),
+            BenchmarkRound(label: "ANE | ANE",         encoderUnits: .cpuAndNeuralEngine,  decoderUnits: .cpuAndNeuralEngine),
+            // Mixed — encoder and decoder on different hardware to test pipeline overlap
+            BenchmarkRound(label: "ANE | GPU",         encoderUnits: .cpuAndNeuralEngine,  decoderUnits: .cpuAndGPU),
+            BenchmarkRound(label: "GPU | ANE",         encoderUnits: .cpuAndGPU,          decoderUnits: .cpuAndNeuralEngine),
         ]
     }
 
@@ -165,7 +183,12 @@ struct BenchmarkView: View {
     private func roundRow(for round: BenchmarkRound, isFastest: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(round.label).font(.headline)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(round.label).font(.headline)
+                    Text("Enc: \(round.encoderUnits.shortName)  Dec: \(round.decoderUnits.shortName)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
                 roundStatusBadge(for: round, isFastest: isFastest)
             }
@@ -239,8 +262,8 @@ struct BenchmarkView: View {
 
                 do {
                     let computeOptions = ModelComputeOptions(
-                        audioEncoderCompute: rounds[i].computeUnits,
-                        textDecoderCompute: rounds[i].computeUnits
+                        audioEncoderCompute: rounds[i].encoderUnits,
+                        textDecoderCompute: rounds[i].decoderUnits
                     )
                     let config = WhisperKitConfig(
                         computeOptions: computeOptions,
@@ -285,9 +308,8 @@ struct BenchmarkView: View {
     }
 
     private func applyFastest(index: Int) {
-        let units = rounds[index].computeUnits
-        modelManager.encoderComputeUnits = units
-        modelManager.decoderComputeUnits = units
+        modelManager.encoderComputeUnits = rounds[index].encoderUnits
+        modelManager.decoderComputeUnits = rounds[index].decoderUnits
     }
 }
 

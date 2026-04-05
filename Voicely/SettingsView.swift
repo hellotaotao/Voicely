@@ -183,6 +183,12 @@ struct SettingsView: View {
                 
                 Section("Compute Settings") {
                     computeUnitsView
+                    NavigationLink {
+                        BenchmarkView()
+                            .environmentObject(modelManager)
+                    } label: {
+                        Label("Run Benchmark", systemImage: "timer")
+                    }
                 }
                 
                 Section("Info") {

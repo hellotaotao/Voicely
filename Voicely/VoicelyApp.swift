@@ -92,15 +92,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return true
         }
 
+#if DEBUG
         print("🔍 [DEBUG] App did finish launching")
-        
+#endif
+
         if Self.didRequestRemoteNotifications {
             return true
         }
         Self.didRequestRemoteNotifications = true
 
         // Register for remote notifications (required for CloudKit)
+#if DEBUG
         print("🔍 [DEBUG] Registering for remote notifications...")
+#endif
         application.registerForRemoteNotifications()
         
         return true
@@ -121,6 +125,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+#if DEBUG
         print("⚠️ [DEBUG] Failed to register for remote notifications: \(error)")
         print("⚠️ [DEBUG] This is the source of 'Giving up waiting to register' warning")
         print("⚠️ [DEBUG] Common causes:")
@@ -129,5 +134,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("   - Apple Push Notification service unavailable")
         print("   - Incorrect provisioning profile or entitlements")
         print("⚠️ [DEBUG] CloudKit sync may still work without remote notifications")
+#endif
     }
 }

@@ -26,19 +26,19 @@ struct VoicelyApp: App {
         )
 
         if !AppRuntime.isRunningTests {
-            print("🔍 [DEBUG] Initializing ModelContainer...")
-            print("🔍 [DEBUG] CloudKit database mode: \(cloudKitDatabase)")
+            debugLog("🔍 [DEBUG] Initializing ModelContainer...")
+            debugLog("🔍 [DEBUG] CloudKit database mode: \(cloudKitDatabase)")
         }
 
         do {
             let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
             if !AppRuntime.isRunningTests {
-                print("✅ [DEBUG] ModelContainer created successfully with CloudKit support")
+                debugLog("✅ [DEBUG] ModelContainer created successfully with CloudKit support")
             }
             return container
         } catch {
             if !AppRuntime.isRunningTests {
-                print("❌ [DEBUG] Failed to create ModelContainer: \(error)")
+                debugLog("❌ [DEBUG] Failed to create ModelContainer: \(error)")
             }
             fatalError("Could not create ModelContainer: \(error)")
         }

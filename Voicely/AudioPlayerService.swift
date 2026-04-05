@@ -40,19 +40,19 @@ class AudioPlayerService: NSObject, ObservableObject {
             return true
         }
 
-        print("🔍 [DEBUG] AudioPlayerService: Setting up audio session for playback...")
+        debugLog("🔍 [DEBUG] AudioPlayerService: Setting up audio session for playback...")
         do {
-            print("🔍 [DEBUG] Setting category to .playback, mode: .default")
+            debugLog("🔍 [DEBUG] Setting category to .playback, mode: .default")
             try audioSession.setCategory(.playback, mode: .default)
-            print("🔍 [DEBUG] Activating audio session...")
+            debugLog("🔍 [DEBUG] Activating audio session...")
             try audioSession.setActive(true)
             isAudioSessionActive = true
-            print("✅ [DEBUG] Audio playback session activated successfully")
-            print("🔍 [DEBUG] Audio session category: \(audioSession.category)")
+            debugLog("✅ [DEBUG] Audio playback session activated successfully")
+            debugLog("🔍 [DEBUG] Audio session category: \(audioSession.category)")
             return true
         } catch {
-            print("❌ [DEBUG] Failed to setup audio session: \(error)")
-            print("❌ [DEBUG] This could cause 'cannot add handler' warnings")
+            debugLog("❌ [DEBUG] Failed to setup audio session: \(error)")
+            debugLog("❌ [DEBUG] This could cause 'cannot add handler' warnings")
             return false
         }
         #endif
@@ -68,14 +68,14 @@ class AudioPlayerService: NSObject, ObservableObject {
             try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
             isAudioSessionActive = false
         } catch {
-            print("❌ [DEBUG] Failed to deactivate audio session: \(error)")
+            debugLog("❌ [DEBUG] Failed to deactivate audio session: \(error)")
         }
         #endif
     }
     
     @MainActor
     func loadAudio(from filePath: String, expectedDuration: TimeInterval? = nil) {
-        print("🔍 [DEBUG] AudioPlayerService: Loading audio from: \(filePath)")
+        debugLog("🔍 [DEBUG] AudioPlayerService: Loading audio from: \(filePath)")
 
         preloadTask?.cancel()
         prepareTask?.cancel()
@@ -210,19 +210,19 @@ private extension AudioPlayerService {
         guard pendingFilePath == filePath else { return }
 
         guard let url = CloudStorageManager.shared.getFileURL(for: filePath) else {
-            print("❌ [DEBUG] Failed to get file URL for: \(filePath)")
+            debugLog("❌ [DEBUG] Failed to get file URL for: \(filePath)")
             if pendingFilePath == filePath {
                 playbackStatusMessage = "Audio file unavailable."
             }
             return
         }
 
-        print("🔍 [DEBUG] Audio file URL: \(url.path)")
+        debugLog("🔍 [DEBUG] Audio file URL: \(url.path)")
 
         if FileManager.default.fileExists(atPath: url.path) {
-            print("✅ [DEBUG] Audio file exists at path")
+            debugLog("✅ [DEBUG] Audio file exists at path")
         } else {
-            print("⚠️ [DEBUG] Audio file NOT found at path - may need iCloud download")
+            debugLog("⚠️ [DEBUG] Audio file NOT found at path - may need iCloud download")
         }
 
         CloudStorageManager.shared.startDownloadingFromCloud(url: url)
@@ -263,7 +263,7 @@ private extension AudioPlayerService {
         }
 
         do {
-            print("🔍 [DEBUG] Creating AVAudioPlayer...")
+            debugLog("🔍 [DEBUG] Creating AVAudioPlayer...")
             let player = try AVAudioPlayer(contentsOf: url)
             player.delegate = self
             player.prepareToPlay()
@@ -275,9 +275,9 @@ private extension AudioPlayerService {
             currentTime = 0
             playbackStatusMessage = nil
 
-            print("✅ [DEBUG] AVAudioPlayer created successfully")
-            print("🔍 [DEBUG] Audio duration: \(duration) seconds")
-            print("🔍 [DEBUG] Audio format: \(player.format.description)")
+            debugLog("✅ [DEBUG] AVAudioPlayer created successfully")
+            debugLog("🔍 [DEBUG] Audio duration: \(duration) seconds")
+            debugLog("🔍 [DEBUG] Audio format: \(player.format.description)")
 
             if player.play() {
                 isPlaying = true
@@ -287,11 +287,11 @@ private extension AudioPlayerService {
                 deactivateAudioSessionIfNeeded()
             }
         } catch {
-            print("❌ [DEBUG] Failed to load audio: \(error)")
-            print("❌ [DEBUG] Error code: \((error as NSError).code)")
+            debugLog("❌ [DEBUG] Failed to load audio: \(error)")
+            debugLog("❌ [DEBUG] Error code: \((error as NSError).code)")
             deactivateAudioSessionIfNeeded()
             if (error as NSError).code == 257 {
-                print("❌ [DEBUG] Permission denied (Error 257) - iCloud file access issue")
+                debugLog("❌ [DEBUG] Permission denied (Error 257) - iCloud file access issue")
                 playbackStatusMessage = "Audio is still downloading from iCloud."
             } else {
                 playbackStatusMessage = "Couldn't open this recording for playback."

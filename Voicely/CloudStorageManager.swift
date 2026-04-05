@@ -86,15 +86,15 @@ class CloudStorageManager: ObservableObject {
             return
         }
 
-        print("🔍 [DEBUG] Attempting to setup iCloud container with identifier: \(cloudContainerIdentifier)")
+        debugLog("🔍 [DEBUG] Attempting to setup iCloud container with identifier: \(cloudContainerIdentifier)")
         
         if let url = fileManager.url(forUbiquityContainerIdentifier: cloudContainerIdentifier) {
             let cloudURL = url.appendingPathComponent("Documents/\(audioDirectoryName)", isDirectory: true)
             cloudContainerURL = cloudURL
             isCloudEnabled = true
             
-            print("✅ [DEBUG] iCloud container URL obtained: \(url.path)")
-            print("✅ [DEBUG] Cloud audio directory path: \(cloudURL.path)")
+            debugLog("✅ [DEBUG] iCloud container URL obtained: \(url.path)")
+            debugLog("✅ [DEBUG] Cloud audio directory path: \(cloudURL.path)")
 
             createDirectoryIfNeeded(at: cloudURL, excludeFromBackup: false)
             print("iCloud Documents enabled for audio files: \(cloudURL.path)")
@@ -102,8 +102,8 @@ class CloudStorageManager: ObservableObject {
             // Check iCloud account status
             checkiCloudAccountStatus()
         } else {
-            print("❌ [DEBUG] Failed to obtain iCloud container URL")
-            print("❌ [DEBUG] Possible causes:")
+            debugLog("❌ [DEBUG] Failed to obtain iCloud container URL")
+            debugLog("❌ [DEBUG] Possible causes:")
             print("   - iCloud Drive not enabled in System Settings")
             print("   - Not signed into iCloud account")
             print("   - App entitlements not properly configured")
@@ -114,11 +114,11 @@ class CloudStorageManager: ObservableObject {
     }
     
     private func checkiCloudAccountStatus() {
-        print("🔍 [DEBUG] Checking iCloud account status...")
+        debugLog("🔍 [DEBUG] Checking iCloud account status...")
         
         FileManager.default.ubiquityIdentityToken != nil ?
-            print("✅ [DEBUG] iCloud account is available and signed in") :
-            print("⚠️ [DEBUG] iCloud account token is nil - user may not be signed in")
+            debugLog("✅ [DEBUG] iCloud account is available and signed in") :
+            debugLog("⚠️ [DEBUG] iCloud account token is nil - user may not be signed in")
     }
 
     private func createDirectoryIfNeeded(at url: URL, excludeFromBackup: Bool) {
@@ -198,26 +198,26 @@ class CloudStorageManager: ObservableObject {
     // Get the full URL for a file
     func getFileURL(for path: String) -> URL? {
         guard !path.isEmpty else {
-            print("⚠️ [DEBUG] getFileURL called with empty path")
+            debugLog("⚠️ [DEBUG] getFileURL called with empty path")
             return nil
         }
         
-        print("🔍 [DEBUG] Getting file URL for path: \(path)")
+        debugLog("🔍 [DEBUG] Getting file URL for path: \(path)")
         
         // If it's already a full path, convert to URL
         if path.starts(with: "/") {
             let url = URL(fileURLWithPath: path)
             // Check if the file exists at this absolute path
             if fileManager.fileExists(atPath: url.path) {
-                print("✅ [DEBUG] File exists at absolute path: \(url.path)")
+                debugLog("✅ [DEBUG] File exists at absolute path: \(url.path)")
                 return url
             } else {
-                print("⚠️ [DEBUG] File NOT found at absolute path: \(url.path)")
-                print("🔍 [DEBUG] Trying as filename in current storage directory...")
+                debugLog("⚠️ [DEBUG] File NOT found at absolute path: \(url.path)")
+                debugLog("🔍 [DEBUG] Trying as filename in current storage directory...")
                 // File doesn't exist at absolute path, try as filename in current storage directory
                 let filename = url.lastPathComponent
                 let alternativeURL = getAudioStorageDirectory().appendingPathComponent(filename)
-                print("🔍 [DEBUG] Alternative URL: \(alternativeURL.path)")
+                debugLog("🔍 [DEBUG] Alternative URL: \(alternativeURL.path)")
                 return alternativeURL
             }
         }
@@ -225,16 +225,16 @@ class CloudStorageManager: ObservableObject {
         // Otherwise, construct the URL from filename
         let directory = getAudioStorageDirectory()
         let resultURL = directory.appendingPathComponent(path)
-        print("🔍 [DEBUG] Constructed URL from filename: \(resultURL.path)")
+        debugLog("🔍 [DEBUG] Constructed URL from filename: \(resultURL.path)")
         
         // Check file accessibility
         do {
             let attributes = try fileManager.attributesOfItem(atPath: resultURL.path)
-            print("✅ [DEBUG] File accessible, size: \(attributes[.size] ?? "unknown") bytes")
+            debugLog("✅ [DEBUG] File accessible, size: \(attributes[.size] ?? "unknown") bytes")
         } catch {
-            print("⚠️ [DEBUG] File access check failed: \(error.localizedDescription)")
+            debugLog("⚠️ [DEBUG] File access check failed: \(error.localizedDescription)")
             if (error as NSError).code == 257 {
-                print("❌ [DEBUG] Permission denied (Error 257) - iCloud sync issue detected")
+                debugLog("❌ [DEBUG] Permission denied (Error 257) - iCloud sync issue detected")
             }
         }
         
@@ -244,33 +244,33 @@ class CloudStorageManager: ObservableObject {
     // Start downloading a file from iCloud if needed
     func startDownloadingFromCloud(url: URL) {
         guard syncAudioFiles, isCloudEnabled else {
-            print("🔍 [DEBUG] Skipping iCloud download check (syncAudioFiles: \(syncAudioFiles), isCloudEnabled: \(isCloudEnabled))")
+            debugLog("🔍 [DEBUG] Skipping iCloud download check (syncAudioFiles: \(syncAudioFiles), isCloudEnabled: \(isCloudEnabled))")
             return
         }
         
-        print("🔍 [DEBUG] Checking iCloud download status for: \(url.lastPathComponent)")
+        debugLog("🔍 [DEBUG] Checking iCloud download status for: \(url.lastPathComponent)")
         
         do {
             var isDownloaded: AnyObject?
             try (url as NSURL).getResourceValue(&isDownloaded, forKey: .ubiquitousItemDownloadingStatusKey)
             
             if let status = isDownloaded as? String {
-                print("🔍 [DEBUG] iCloud download status: \(status)")
+                debugLog("🔍 [DEBUG] iCloud download status: \(status)")
                 
                 if status != URLUbiquitousItemDownloadingStatus.current.rawValue {
-                    print("⬇️ [DEBUG] File not fully downloaded, starting download...")
+                    debugLog("⬇️ [DEBUG] File not fully downloaded, starting download...")
                     try fileManager.startDownloadingUbiquitousItem(at: url)
                     print("Started downloading file from iCloud: \(url.lastPathComponent)")
                 } else {
-                    print("✅ [DEBUG] File already downloaded from iCloud")
+                    debugLog("✅ [DEBUG] File already downloaded from iCloud")
                 }
             } else {
-                print("⚠️ [DEBUG] Could not determine iCloud download status")
+                debugLog("⚠️ [DEBUG] Could not determine iCloud download status")
             }
         } catch {
-            print("❌ [DEBUG] Error checking download status: \(error)")
+            debugLog("❌ [DEBUG] Error checking download status: \(error)")
             if (error as NSError).code == 257 {
-                print("❌ [DEBUG] Permission denied (Error 257) accessing iCloud file")
+                debugLog("❌ [DEBUG] Permission denied (Error 257) accessing iCloud file")
             }
         }
     }
@@ -290,7 +290,7 @@ class CloudStorageManager: ObservableObject {
                 return nil
             }
             if isFileReadyForReading(url) {
-                print("✅ [DEBUG] File ready for reading: \(url.lastPathComponent)")
+                debugLog("✅ [DEBUG] File ready for reading: \(url.lastPathComponent)")
                 return url
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -301,11 +301,11 @@ class CloudStorageManager: ObservableObject {
         }
 
         if isFileReadyForReading(url) {
-            print("✅ [DEBUG] File ready for reading after wait: \(url.lastPathComponent)")
+            debugLog("✅ [DEBUG] File ready for reading after wait: \(url.lastPathComponent)")
             return url
         }
 
-        print("❌ [DEBUG] Timed out waiting for file to become readable: \(url.lastPathComponent)")
+        debugLog("❌ [DEBUG] Timed out waiting for file to become readable: \(url.lastPathComponent)")
         return nil
     }
 
@@ -551,7 +551,7 @@ private extension CloudStorageManager {
 
             return status == URLUbiquitousItemDownloadingStatus.current.rawValue
         } catch {
-            print("❌ [DEBUG] Failed to inspect iCloud download status for \(url.lastPathComponent): \(error)")
+            debugLog("❌ [DEBUG] Failed to inspect iCloud download status for \(url.lastPathComponent): \(error)")
             return false
         }
     }

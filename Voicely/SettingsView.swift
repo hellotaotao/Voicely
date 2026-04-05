@@ -143,7 +143,7 @@ struct LanguageConstants {
 struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
     @State private var showingModelDeletion = false
-    @State private var showComputeUnits = false
+    @State private var showComputeUnits = true
     @State private var computeUnitsChanged = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
@@ -438,6 +438,7 @@ struct SettingsView: View {
                         Text("GPU").tag(MLComputeUnits.cpuAndGPU)
                         Text("Neural Engine").tag(MLComputeUnits.cpuAndNeuralEngine)
                     }
+                    .labelsHidden()
                     .onChange(of: modelManager.encoderComputeUnits) { computeUnitsChanged = true }
                 }
 
@@ -455,6 +456,7 @@ struct SettingsView: View {
                         Text("GPU").tag(MLComputeUnits.cpuAndGPU)
                         Text("Neural Engine").tag(MLComputeUnits.cpuAndNeuralEngine)
                     }
+                    .labelsHidden()
                     .onChange(of: modelManager.decoderComputeUnits) { computeUnitsChanged = true }
                 }
 

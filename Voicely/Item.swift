@@ -23,6 +23,7 @@ final class VoiceNote {
     var audioFilePath: String = ""
     var transcription: String = ""
     var transcriptionModelIdentifier: String?
+    var transcriptionLastErrorMessage: String?
     var isTranscribing: Bool = false
     var transcriptionProgress: Float = 0.0
     var pendingTranscription: Bool = false // Mark if waiting for transcription
@@ -42,6 +43,7 @@ final class VoiceNote {
         self.audioFilePath = audioFilePath
         self.transcription = transcription
         self.transcriptionModelIdentifier = nil
+        self.transcriptionLastErrorMessage = nil
         self.isTranscribing = false
         self.transcriptionProgress = 0.0
         self.pendingTranscription = false
@@ -88,6 +90,7 @@ extension VoiceNote {
         transcriptionAttemptID = attemptID
         transcriptionQueuedAt = queuedAt
         transcriptionLeaseExpiresAt = leaseExpiresAt
+        transcriptionLastErrorMessage = nil
     }
 
     func completeTranscription() {
@@ -95,6 +98,11 @@ extension VoiceNote {
         transcriptionOwnerDeviceID = nil
         transcriptionAttemptID = nil
         transcriptionLeaseExpiresAt = nil
+        transcriptionLastErrorMessage = nil
+    }
+
+    func markTranscriptionFailure(_ message: String) {
+        transcriptionLastErrorMessage = message
     }
 
     func clearLegacyTranscriptionFlags() {

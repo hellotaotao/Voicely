@@ -249,6 +249,7 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionState == .queued)
         #expect(note.lastTranscriptionDuration == 0)
         #expect(note.transcriptionModelIdentifier == nil)
+        #expect(note.transcriptionLastErrorMessage == "The last attempt did not produce a usable transcript. The note was queued again so you can retry or choose a different model.")
     }
 
     @Test @MainActor func staleAttemptDoesNotOverwriteCurrentOwner() async {
@@ -324,6 +325,49 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionOwnerDeviceID == nil)
         #expect(note.transcriptionAttemptID == nil)
         #expect(note.transcriptionLeaseExpiresAt == nil)
+        #expect(note.transcriptionLastErrorMessage == nil)
+    }
+
+    @Test @MainActor func queuedNoteAddedDuringActiveProcessingIsDrainedBySameLoop() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        let gate = TranscriptionGate()
+        service.transcribeImpl = { filePath, _ in
+            if filePath == "first.m4a" {
+                await gate.wait()
+                return "first result"
+            }
+            return "second result"
+        }
+
+        let firstNote = VoiceNote(title: "First", audioFilePath: "first.m4a")
+        firstNote.transcriptionOriginDeviceID = "phone"
+        firstNote.queueTranscription(at: now)
+
+        let secondNote = VoiceNote(title: "Second", audioFilePath: "second.m4a")
+        secondNote.transcriptionOriginDeviceID = "phone"
+        secondNote.queueTranscription(at: now)
+
+        let processingTask = Task {
+            await service.processPendingTranscriptions(notes: [firstNote])
+        }
+
+        while service.activeNoteID != firstNote.id {
+            await Task.yield()
+        }
+        await gate.waitUntilArmed()
+
+        let didStart = await service.requestTranscription(for: secondNote)
+        #expect(didStart == true)
+        #expect(secondNote.transcriptionState == .claimed)
+
+        await gate.resume()
+        await processingTask.value
+
+        #expect(firstNote.transcription == "first result")
+        #expect(firstNote.transcriptionState == .completed)
+        #expect(secondNote.transcription == "second result")
+        #expect(secondNote.transcriptionState == .completed)
     }
 
     @Test @MainActor func ownedClaimedNoteResumesOnCurrentDevice() async {

@@ -369,11 +369,15 @@ class CloudStorageManager: ObservableObject {
     }
     
     @objc private func metadataQueryDidUpdate() {
-        updateSyncStatus()
+        Task { @MainActor [weak self] in
+            self?.updateSyncStatus()
+        }
     }
     
     @objc private func metadataQueryDidFinishGathering() {
-        updateSyncStatus()
+        Task { @MainActor [weak self] in
+            self?.updateSyncStatus()
+        }
     }
     
     private func updateSyncStatus() {

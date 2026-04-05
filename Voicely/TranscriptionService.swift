@@ -380,6 +380,11 @@ class TranscriptionService: ObservableObject {
 }
 
 private extension TranscriptionService {
+    enum TranscriptionFailureReason {
+        case noUsableTranscript
+        case retryPreservedExistingTranscript
+    }
+
     enum ProcessingAction {
         case claimNew(attemptID: String, queuedAt: Date)
         case resumeOwned(attemptID: String)
@@ -494,6 +499,7 @@ private extension TranscriptionService {
         beginLocalTranscription(for: note, attemptID: attemptID)
         startLeaseHeartbeat(for: note, attemptID: attemptID)
         let noteID = note.id
+        let hadExistingTranscript = !note.transcription.isEmpty
 
         let transcription = await transcribeAudio(filePath: note.audioFilePath) { [weak self] progress in
             Task { @MainActor in
@@ -516,9 +522,16 @@ private extension TranscriptionService {
             note.transcriptionModelIdentifier = result.modelIdentifier
             note.completeTranscription()
         } else {
-            if note.transcription.isEmpty {
+            if !hadExistingTranscript {
                 note.lastTranscriptionDuration = 0
                 note.transcriptionModelIdentifier = nil
+            }
+
+            if !wasTranscriptionCancelled() {
+                let failureReason: TranscriptionFailureReason = hadExistingTranscript
+                    ? .retryPreservedExistingTranscript
+                    : .noUsableTranscript
+                note.markTranscriptionFailure(transcriptionFailureMessage(for: failureReason))
             }
             requeueNote(note, queuedAt: nowProvider())
         }
@@ -580,6 +593,15 @@ private extension TranscriptionService {
     func stopLeaseHeartbeat() {
         leaseHeartbeatTask?.cancel()
         leaseHeartbeatTask = nil
+    }
+
+    func transcriptionFailureMessage(for reason: TranscriptionFailureReason) -> String {
+        switch reason {
+        case .noUsableTranscript:
+            return "The last attempt did not produce a usable transcript. The note was queued again so you can retry or choose a different model."
+        case .retryPreservedExistingTranscript:
+            return "The last re-transcription attempt failed. The existing transcript was kept, and the note was queued again for another try."
+        }
     }
 
     func transcribeWithWhisper(

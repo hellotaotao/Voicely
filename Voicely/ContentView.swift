@@ -431,6 +431,22 @@ struct VoiceNoteRow: View {
         transcriptionService.localProgress(for: note)
     }
 
+    private var lastTranscriptionFailureMessage: String? {
+        guard let message = note.transcriptionLastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty else {
+            return nil
+        }
+        return message
+    }
+
+    private var pendingBadgeTitle: String {
+        lastTranscriptionFailureMessage == nil ? "Transcription pending" : "Retry queued"
+    }
+
+    private var pendingBadgeTint: Color {
+        lastTranscriptionFailureMessage == nil ? .orange : .red
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
@@ -482,7 +498,7 @@ struct VoiceNoteRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(3)
             } else if isPending {
-                Text("Audio saved and waiting for transcription.")
+                Text(lastTranscriptionFailureMessage ?? "Audio saved and waiting for transcription.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -507,9 +523,9 @@ struct VoiceNoteRow: View {
                 )
             } else if isPending {
                 StatusBadge(
-                    title: "Transcription pending",
+                    title: pendingBadgeTitle,
                     systemImage: "clock.arrow.circlepath",
-                    tint: .orange
+                    tint: pendingBadgeTint
                 )
             }
         }
@@ -892,11 +908,9 @@ struct VoiceNoteDetailView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
-    @State private var showTranscriptionFailureAlert = false
     @State private var showingShareSheet = false
     @State private var isEditing = false
     @State private var showingRetranscribeConfirmation = false
-    @State private var transcriptionFailureMessage = ""
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @StateObject private var audioPlayer = AudioPlayerService()
@@ -938,12 +952,31 @@ struct VoiceNoteDetailView: View {
         transcriptionService.localProgress(for: note)
     }
 
+    private var lastTranscriptionFailureMessage: String? {
+        guard let message = note.transcriptionLastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty else {
+            return nil
+        }
+        return message
+    }
+
+    private var pendingStatusTitle: String {
+        lastTranscriptionFailureMessage == nil ? "Waiting for transcription" : "Retry queued"
+    }
+
+    private var pendingStatusTint: Color {
+        lastTranscriptionFailureMessage == nil ? .orange : .red
+    }
+
     private var usesCompactDetailLayout: Bool {
         UIDevice.current.userInterfaceIdiom == .phone && horizontalSizeClass == .compact
     }
 
     private var transcriptionSummaryText: String? {
         guard !note.transcription.isEmpty else {
+            if let lastTranscriptionFailureMessage {
+                return lastTranscriptionFailureMessage
+            }
             return note.lastTranscriptionDuration > 0
                 ? "Last run: \(transcriptionService.formatTranscriptionDuration(note.lastTranscriptionDuration))."
                 : nil
@@ -968,6 +1001,10 @@ struct VoiceNoteDetailView: View {
         if let selectedModelDisplayName,
            note.transcriptionModelDisplayName != selectedModelDisplayName {
             parts.append("Selected now: \(selectedModelDisplayName).")
+        }
+
+        if let lastTranscriptionFailureMessage {
+            parts.append(lastTranscriptionFailureMessage)
         }
 
         return parts.isEmpty ? nil : parts.joined(separator: " ")
@@ -1018,11 +1055,6 @@ struct VoiceNoteDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Please load a model in Settings first to transcribe this recording.")
-        }
-        .alert("Transcription Failed", isPresented: $showTranscriptionFailureAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(transcriptionFailureMessage)
         }
         .confirmationDialog(
             "Re-transcribe this note?",
@@ -1325,14 +1357,24 @@ struct VoiceNoteDetailView: View {
     private var pendingTranscriptionContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             StatusBadge(
-                title: "Waiting for transcription",
+                title: pendingStatusTitle,
                 systemImage: "clock.arrow.circlepath",
-                tint: .orange
+                tint: pendingStatusTint
             )
 
-            Text("This recording is waiting for an eligible device to start transcription.")
-                .font(.body)
-                .foregroundStyle(.secondary)
+            if let lastTranscriptionFailureMessage {
+                Text(lastTranscriptionFailureMessage)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+
+                Text("The note stays queued until this device or another eligible device retries it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("This recording is waiting for an eligible device to start transcription.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
 
             Button(action: { requestTranscription() }) {
                 Label("Transcribe Now", systemImage: "wand.and.stars")
@@ -1506,7 +1548,6 @@ struct VoiceNoteDetailView: View {
         }
 
         Task { @MainActor in
-            let startedWithEmptyTranscript = note.transcription.isEmpty
             let didStart = await transcriptionService.requestTranscription(
                 for: note,
                 force: force,
@@ -1514,14 +1555,6 @@ struct VoiceNoteDetailView: View {
             )
             if didStart, !isEditing {
                 editedTranscription = note.transcription
-            }
-            if didStart,
-               startedWithEmptyTranscript,
-               note.transcription.isEmpty,
-               note.transcriptionState == .queued,
-               !transcriptionService.wasTranscriptionCancelled() {
-                transcriptionFailureMessage = "No usable transcript was produced for this recording. You can try again or choose a different model in Settings."
-                showTranscriptionFailureAlert = true
             }
         }
     }

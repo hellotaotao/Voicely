@@ -144,6 +144,7 @@ struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
     @State private var showingModelDeletion = false
     @State private var showComputeUnits = false
+    @State private var computeUnitsChanged = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
     @Environment(\.dismiss) private var dismiss
@@ -437,10 +438,9 @@ struct SettingsView: View {
                         Text("GPU").tag(MLComputeUnits.cpuAndGPU)
                         Text("Neural Engine").tag(MLComputeUnits.cpuAndNeuralEngine)
                     }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .frame(width: 200)
+                    .onChange(of: modelManager.encoderComputeUnits) { computeUnitsChanged = true }
                 }
-                
+
                 HStack {
                     VStack(alignment: .leading) {
                         Text("Text Decoder")
@@ -455,8 +455,18 @@ struct SettingsView: View {
                         Text("GPU").tag(MLComputeUnits.cpuAndGPU)
                         Text("Neural Engine").tag(MLComputeUnits.cpuAndNeuralEngine)
                     }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .frame(width: 200)
+                    .onChange(of: modelManager.decoderComputeUnits) { computeUnitsChanged = true }
+                }
+
+                if computeUnitsChanged {
+                    Button {
+                        computeUnitsChanged = false
+                        Task { await modelManager.loadModel(modelManager.selectedModel, redownload: false) }
+                    } label: {
+                        Label("Reload Model to Apply Changes", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
             .padding(.top, 8)

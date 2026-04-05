@@ -79,6 +79,7 @@ struct SyncStatusView: View {
 struct RefreshableVoiceNotesList: View {
     let voiceNotes: [VoiceNote]
     let onDelete: (IndexSet) -> Void
+    @Binding var showingSettings: Bool
     @EnvironmentObject var cloudManager: CloudStorageManager
     @EnvironmentObject var transcriptionService: TranscriptionService
     
@@ -86,7 +87,7 @@ struct RefreshableVoiceNotesList: View {
         List {
             ForEach(voiceNotes) { note in
                 NavigationLink(
-                    destination: VoiceNoteDetailView(note: note)
+                    destination: VoiceNoteDetailView(note: note, showingSettings: $showingSettings)
                         .environmentObject(transcriptionService)
                 ) {
                     VoiceNoteRow(note: note, transcriptionService: transcriptionService)

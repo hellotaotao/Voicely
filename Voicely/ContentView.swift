@@ -296,7 +296,7 @@ struct ContentView: View {
     }
 
     private func detailView(_ note: VoiceNote) -> some View {
-        VoiceNoteDetailView(note: note)
+        VoiceNoteDetailView(note: note, showingSettings: $showingSettings)
             .environmentObject(transcriptionService)
     }
 
@@ -888,6 +888,7 @@ struct RecordingControls: View {
 
 struct VoiceNoteDetailView: View {
     let note: VoiceNote
+    @Binding var showingSettings: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
@@ -1013,7 +1014,8 @@ struct VoiceNoteDetailView: View {
             }
         }
         .alert("Model Not Loaded", isPresented: $showLoadModelPrompt) {
-            Button("OK", role: .cancel) {}
+            Button("Open Settings") { showingSettings = true }
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text("Please load a model in Settings first to transcribe this recording.")
         }

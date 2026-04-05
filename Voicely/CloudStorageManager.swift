@@ -41,6 +41,20 @@ class CloudStorageManager: ObservableObject {
         guard !AppRuntime.isRunningTests else { return }
         setupCloudContainer()
         setupMetadataQuery()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(iCloudIdentityDidChange),
+            name: .NSUbiquityIdentityDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func iCloudIdentityDidChange() {
+        guard !isCloudEnabled else { return }
+        setupCloudContainer()
+        if isCloudEnabled {
+            setupMetadataQuery()
+        }
     }
 
 #if DEBUG

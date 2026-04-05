@@ -114,8 +114,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
         defaults.set(tokenString, forKey: Self.deviceTokenDefaultsKey)
+#if DEBUG
         print("✅ [DEBUG] Successfully registered for remote notifications")
         print("✅ [DEBUG] Device token: \(tokenString)")
+#endif
     }
     
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {

@@ -642,16 +642,15 @@ private extension TranscriptionService {
 
             let audioPath = audioURL.path
 
-            if selectedLanguageKey == "auto" {
-                let languageDetection = try await whisperKit.detectLanguage(audioPath: audioPath)
-                languageCode = languageDetection.language
-                print("Auto-detected language: \(languageCode ?? "unknown")")
-                updateProgressOnMain(0.08)
+            let isAutoLanguage = selectedLanguageKey == "auto"
+            if isAutoLanguage {
+                languageCode = nil
+                print("Auto language mode: WhisperKit will detect language via prefill")
             } else {
                 languageCode = LanguageConstants.languages[selectedLanguageKey]
                 print("Using selected language code: \(languageCode ?? "nil")")
-                updateProgressOnMain(0.06)
             }
+            updateProgressOnMain(0.06)
             updateProgressOnMain(0.1)
 
             var decodeOptions = DecodingOptions(
@@ -662,6 +661,7 @@ private extension TranscriptionService {
                 sampleLength: 224,
                 usePrefillPrompt: true,
                 usePrefillCache: false,
+                detectLanguage: isAutoLanguage,
                 skipSpecialTokens: true,
                 withoutTimestamps: false,
                 wordTimestamps: false,

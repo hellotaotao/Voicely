@@ -155,6 +155,11 @@ struct SettingsView: View {
                     modelStatusView
                     modelSelectorView
                     modelActionsView
+                    NavigationLink {
+                        WhisperKitModelsView()
+                    } label: {
+                        Label("WhisperKit Device Recommendations", systemImage: "list.bullet.rectangle")
+                    }
                 }
                 
                 Section("Language Settings") {

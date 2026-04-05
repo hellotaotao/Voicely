@@ -50,10 +50,12 @@ class CloudStorageManager: ObservableObject {
     }
 
     @objc private func iCloudIdentityDidChange() {
-        guard !isCloudEnabled else { return }
-        setupCloudContainer()
-        if isCloudEnabled {
-            setupMetadataQuery()
+        Task { @MainActor in
+            guard !isCloudEnabled else { return }
+            setupCloudContainer()
+            if isCloudEnabled {
+                setupMetadataQuery()
+            }
         }
     }
 
@@ -336,8 +338,15 @@ class CloudStorageManager: ObservableObject {
     // MARK: - Sync Status Monitoring
     
     private func setupMetadataQuery() {
+        if let oldQuery = metadataQuery {
+            oldQuery.stop()
+            NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidUpdate, object: oldQuery)
+            NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidFinishGathering, object: oldQuery)
+            metadataQuery = nil
+        }
+
         guard syncAudioFiles, isCloudEnabled, cloudContainerURL != nil else { return }
-        
+
         metadataQuery = NSMetadataQuery()
         metadataQuery?.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
         metadataQuery?.predicate = NSPredicate(format: "%K LIKE '*'", NSMetadataItemFSNameKey)

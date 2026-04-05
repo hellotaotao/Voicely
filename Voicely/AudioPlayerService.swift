@@ -9,6 +9,7 @@ import Foundation
 import AVFoundation
 import Combine
 
+@MainActor
 class AudioPlayerService: NSObject, ObservableObject {
     @Published var isPlaying = false
     @Published var currentTime: TimeInterval = 0
@@ -161,7 +162,9 @@ class AudioPlayerService: NSObject, ObservableObject {
     
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.updateCurrentTime()
+            MainActor.assumeIsolated {
+                self?.updateCurrentTime()
+            }
         }
     }
     
@@ -187,11 +190,12 @@ class AudioPlayerService: NSObject, ObservableObject {
     deinit {
         preloadTask?.cancel()
         prepareTask?.cancel()
-        stop()
+        audioPlayer?.stop()
+        timer?.invalidate()
     }
 }
 
-extension AudioPlayerService: AVAudioPlayerDelegate {
+extension AudioPlayerService: @preconcurrency AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         isPlaying = false
         currentTime = 0

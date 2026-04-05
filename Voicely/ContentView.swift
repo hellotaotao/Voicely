@@ -1042,6 +1042,7 @@ struct VoiceNoteDetailView: View {
             editedTranscription = note.transcription
         }
         .onChange(of: note.id) { _, _ in
+            if isEditing { isEditing = false }
             loadAudioFile()
             editedTitle = note.title
             editedTranscription = note.transcription

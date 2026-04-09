@@ -111,13 +111,6 @@ struct CloudKitSettingsView: View {
 
                 // Actions Section
                 Section("Actions") {
-                    Button("Check iCloud Status") {
-                        Task {
-                            await syncMonitor.checkCloudKitAccountStatus()
-                        }
-                    }
-                    .foregroundColor(.blue)
-
                     Button("Show Diagnostics") {
                         showingDiagnostics = true
                     }

@@ -51,10 +51,13 @@ class CloudStorageManager: ObservableObject {
 
     @objc private func iCloudIdentityDidChange() {
         Task { @MainActor in
-            guard !isCloudEnabled else { return }
+            let wasEnabled = isCloudEnabled
             setupCloudContainer()
-            if isCloudEnabled {
+            if isCloudEnabled && !wasEnabled {
                 setupMetadataQuery()
+            } else if !isCloudEnabled && wasEnabled {
+                tearDownMetadataQuery()
+                cloudContainerURL = nil
             }
         }
     }
@@ -110,6 +113,7 @@ class CloudStorageManager: ObservableObject {
             print("   - Container identifier mismatch")
             print("iCloud Documents not available - check entitlements and Apple ID")
             isCloudEnabled = false
+            cloudContainerURL = nil
         }
     }
     
@@ -337,13 +341,17 @@ class CloudStorageManager: ObservableObject {
     
     // MARK: - Sync Status Monitoring
     
-    private func setupMetadataQuery() {
+    private func tearDownMetadataQuery() {
         if let oldQuery = metadataQuery {
             oldQuery.stop()
             NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidUpdate, object: oldQuery)
             NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidFinishGathering, object: oldQuery)
             metadataQuery = nil
         }
+    }
+
+    private func setupMetadataQuery() {
+        tearDownMetadataQuery()
 
         guard syncAudioFiles, isCloudEnabled, cloudContainerURL != nil else { return }
 

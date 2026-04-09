@@ -94,7 +94,8 @@ class CloudKitSyncMonitor: ObservableObject {
             try context.save()
 
             print("Local data reset completed - CloudKit will re-sync data")
-            syncStatus = .idle
+            lastSyncError = nil
+            await checkCloudKitAccountStatus()
         } catch {
             print("Failed to reset local data: \(error)")
             lastSyncError = error

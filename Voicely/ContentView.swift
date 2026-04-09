@@ -202,7 +202,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private func noteListContent(usesSplitNavigationSelection: Bool) -> some View {
-        if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .success {
+        if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .available {
             Section {
                 SyncStatusBannerCard(
                     description: syncMonitor.statusDescription,

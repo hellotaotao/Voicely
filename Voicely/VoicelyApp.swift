@@ -11,6 +11,7 @@ import UserNotifications
 
 @main
 struct VoicelyApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var syncMonitor = CloudKitSyncMonitor()
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
@@ -53,6 +54,13 @@ struct VoicelyApp: App {
                         seedUITestNoteIfNeeded()
                     } else {
                         syncMonitor.setModelContainer(sharedModelContainer)
+                        await syncMonitor.checkCloudKitAccountStatus()
+                    }
+                }
+                .onChange(of: scenePhase) { _, newValue in
+                    guard newValue == .active, !AppRuntime.isRunningTests else { return }
+                    Task {
+                        await syncMonitor.checkCloudKitAccountStatus()
                     }
                 }
         }

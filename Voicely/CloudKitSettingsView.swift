@@ -13,11 +13,8 @@ struct CloudKitSettingsView: View {
     @EnvironmentObject private var syncMonitor: CloudKitSyncMonitor
     @Environment(\.modelContext) private var modelContext
 
-    @State private var cloudKitAccountStatus: CKAccountStatus?
-    @State private var isCheckingAccount = false
     @State private var showingResetAlert = false
     @State private var showingDiagnostics = false
-    @State private var lastErrorMessage: String?
 
     var body: some View {
         NavigationView {
@@ -38,7 +35,7 @@ struct CloudKitSettingsView: View {
 
                         Spacer()
 
-                        if isCheckingAccount {
+                        if syncMonitor.syncStatus == .checkingAccount {
                             ProgressView()
                                 .scaleEffect(0.8)
                         }
@@ -47,7 +44,7 @@ struct CloudKitSettingsView: View {
                     Button("Check Account Status") {
                         checkAccountStatus()
                     }
-                    .disabled(isCheckingAccount)
+                    .disabled(syncMonitor.syncStatus == .checkingAccount)
                 }
 
                 // Sync Status Section
@@ -66,11 +63,11 @@ struct CloudKitSettingsView: View {
                         }
                     }
 
-                    if syncMonitor.lastSuccessfulSync != nil {
+                    if let lastStatusCheck = syncMonitor.lastStatusCheck {
                         HStack {
-                            Text("Last Successful Sync")
+                            Text("Last Status Check")
                             Spacer()
-                            Text(formatDate(syncMonitor.lastSuccessfulSync!))
+                            Text(formatDate(lastStatusCheck))
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -187,7 +184,7 @@ struct CloudKitSettingsView: View {
     }
 
     private var cloudKitStatusIcon: String {
-        guard let status = cloudKitAccountStatus else { return "questionmark.circle" }
+        guard let status = syncMonitor.accountStatus else { return "questionmark.circle" }
 
         switch status {
         case .available:
@@ -206,7 +203,7 @@ struct CloudKitSettingsView: View {
     }
 
     private var cloudKitStatusColor: Color {
-        guard let status = cloudKitAccountStatus else { return .gray }
+        guard let status = syncMonitor.accountStatus else { return .gray }
 
         switch status {
         case .available:
@@ -225,7 +222,12 @@ struct CloudKitSettingsView: View {
     }
 
     private var cloudKitStatusText: String {
-        guard let status = cloudKitAccountStatus else { return "Checking..." }
+        guard let status = syncMonitor.accountStatus else {
+            if syncMonitor.syncStatus == .checkingAccount {
+                return "Checking iCloud account..."
+            }
+            return "Account status not checked yet"
+        }
 
         switch status {
         case .available:
@@ -262,26 +264,8 @@ struct CloudKitSettingsView: View {
     }
 
     private func checkAccountStatus() {
-        isCheckingAccount = true
-
         Task {
             await syncMonitor.checkCloudKitAccountStatus()
-
-            // Get the account status directly
-            let container = CKContainer(identifier: "iCloud.com.hellotaotao.Voicely")
-
-            do {
-                let status = try await container.accountStatus()
-                await MainActor.run {
-                    self.cloudKitAccountStatus = status
-                    self.isCheckingAccount = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.cloudKitAccountStatus = .couldNotDetermine
-                    self.isCheckingAccount = false
-                }
-            }
         }
     }
 
@@ -468,17 +452,17 @@ struct CloudKitDiagnosticsView: View {
             case .idle:
                 syncValue = "Idle"
                 syncStatus = .info
-            case .syncing:
-                syncValue = "Syncing"
+            case .checkingAccount:
+                syncValue = "Checking Account"
                 syncStatus = .info
-            case .success:
-                syncValue = "Success"
+            case .available:
+                syncValue = "Account Available"
                 syncStatus = .good
             case .error(let message):
                 syncValue = "Error: \(message)"
                 syncStatus = .error
             case .recovering:
-                syncValue = "Recovering"
+                syncValue = "Resetting Local Data"
                 syncStatus = .warning
             }
 
@@ -489,22 +473,22 @@ struct CloudKitDiagnosticsView: View {
                     status: syncStatus
                 ))
 
-            // Last successful sync
-            if let lastSync = syncMonitor.lastSuccessfulSync {
+            // Last status check
+            if let lastStatusCheck = syncMonitor.lastStatusCheck {
                 let formatter = DateFormatter()
                 formatter.dateStyle = .short
                 formatter.timeStyle = .short
 
                 items.append(
                     DiagnosticItem(
-                        title: "Last Successful Sync",
-                        value: formatter.string(from: lastSync),
+                        title: "Last Status Check",
+                        value: formatter.string(from: lastStatusCheck),
                         status: .good
                     ))
             } else {
                 items.append(
                     DiagnosticItem(
-                        title: "Last Successful Sync",
+                        title: "Last Status Check",
                         value: "Never",
                         status: .warning
                     ))

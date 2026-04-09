@@ -17,7 +17,7 @@ final class IncrementalTranscriptionCoordinator {
     private(set) var accumulatedTranscript: String = ""
 
     /// Overridable for testing. When non-nil, used instead of TranscriptionService.
-    var transcribeOverride: ((String) async -> String?)? = nil
+    var transcribeOverride: (@Sendable (String) async -> String?)? = nil
 
     /// Closure that returns the current number of frames written to the recording file.
     var frameCountProvider: () -> AVAudioFramePosition = { 0 }

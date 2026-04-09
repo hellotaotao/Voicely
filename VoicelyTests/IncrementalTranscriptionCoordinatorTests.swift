@@ -67,4 +67,19 @@ struct IncrementalTranscriptionCoordinatorTests {
 
         try? FileManager.default.removeItem(at: segmentURL)
     }
+
+    @Test @MainActor func stopAccumulatesTranscriptFromSegments() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 30)
+        let service = TranscriptionService()
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: service,
+            recordingFileURL: pcmURL
+        )
+        coordinator.transcribeOverride = { @Sendable _ in "hello" }
+
+        await coordinator.transcribeSegment(upToFrame: 160_000)
+        await coordinator.transcribeSegment(upToFrame: 320_000)
+
+        #expect(coordinator.accumulatedTranscript == "hello\nhello")
+    }
 }

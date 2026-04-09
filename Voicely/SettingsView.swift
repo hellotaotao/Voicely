@@ -147,6 +147,7 @@ struct SettingsView: View {
     @State private var computeUnitsChanged = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
+    @AppStorage("incrementalTranscriptionInterval") private var incrementalInterval: Int = 10
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -180,6 +181,13 @@ struct SettingsView: View {
                             .padding(.top, 4)
                     }
                     .padding(.vertical, 4)
+
+                    Picker("Incremental Interval", selection: $incrementalInterval) {
+                        Text("5 min").tag(5)
+                        Text("10 min").tag(10)
+                        Text("15 min").tag(15)
+                        Text("30 min").tag(30)
+                    }
                 }
                 
                 Section("Compute Settings") {

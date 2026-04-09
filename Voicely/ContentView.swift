@@ -215,7 +215,7 @@ struct ContentView: View {
                     }(),
                     retryAction: {
                         Task {
-                            await syncMonitor.forceSyncIfNeeded()
+                            await syncMonitor.checkCloudKitAccountStatus()
                         }
                     }
                 )

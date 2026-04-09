@@ -73,10 +73,6 @@ class CloudKitSyncMonitor: ObservableObject {
         }
     }
 
-    func forceSyncIfNeeded() async {
-        await checkCloudKitAccountStatus()
-    }
-
     func resetLocalData() async {
         // WARNING: This will delete all local data and re-sync from CloudKit
         // Only use this as a last resort
@@ -98,8 +94,7 @@ class CloudKitSyncMonitor: ObservableObject {
             try context.save()
 
             print("Local data reset completed - CloudKit will re-sync data")
-            await checkCloudKitAccountStatus()
-
+            syncStatus = .idle
         } catch {
             print("Failed to reset local data: \(error)")
             lastSyncError = error
@@ -112,7 +107,6 @@ class CloudKitSyncMonitor: ObservableObject {
     func applyAccountStatus(_ status: CKAccountStatus, checkedAt: Date = Date()) {
         accountStatus = status
         lastStatusCheck = checkedAt
-        isRecovering = false
 
         switch status {
         case .available:

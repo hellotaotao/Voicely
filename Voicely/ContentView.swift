@@ -573,6 +573,8 @@ struct RecordingControls: View {
     let onManageModels: () -> Void
     let onRecordingComplete: (VoiceNote) -> Void
     @State private var showingModelPicker = false
+    @State private var coordinator: IncrementalTranscriptionCoordinator? = nil
+    @AppStorage("incrementalTranscriptionInterval") private var incrementalInterval: Int = 10
 
     private var isModelLoading: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -693,34 +695,61 @@ struct RecordingControls: View {
 
     private func startRecording() {
         _ = audioService.startRecording()
+        guard let pcmURL = audioService.currentPCMFileURL else { return }
+        let coord = IncrementalTranscriptionCoordinator(
+            transcriptionService: transcriptionService,
+            recordingFileURL: pcmURL
+        )
+        coord.frameCountProvider = { [weak audioService] in
+            audioService?.currentFramePosition ?? 0
+        }
+        coordinator = coord
+        coord.start(intervalMinutes: incrementalInterval)
     }
 
     private func togglePauseResume() {
         if audioService.isPaused {
             audioService.resumeRecording()
+            coordinator?.resume(intervalMinutes: incrementalInterval)
         } else {
             audioService.pauseRecording()
+            coordinator?.pause()
         }
     }
 
     private func stopRecording() {
+        let capturedCoordinator = coordinator
+        coordinator = nil
+
+        let finalFrame = audioService.currentFramePosition
         let (filePath, duration) = audioService.stopRecording()
 
-        guard let filePath = filePath else { return }
+        guard let filePath else { return }
 
-        let note = VoiceNote(
-            title:
-                "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
-            audioFilePath: filePath
-        )
-        note.duration = duration
+        Task {
+            let accumulatedTranscript: String
+            if let coord = capturedCoordinator {
+                accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
+            } else {
+                accumulatedTranscript = ""
+            }
 
-        transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
-        onRecordingComplete(note)
+            let note = VoiceNote(
+                title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
+                audioFilePath: filePath
+            )
+            note.duration = duration
 
-        if isModelLoaded {
-            Task {
-                await transcriptionService.processPendingTranscriptions(notes: [note])
+            if accumulatedTranscript.isEmpty {
+                transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
+                onRecordingComplete(note)
+                if isModelLoaded {
+                    await transcriptionService.processPendingTranscriptions(notes: [note])
+                }
+            } else {
+                note.transcription = accumulatedTranscript
+                note.completeTranscription()
+                onRecordingComplete(note)
             }
         }
     }

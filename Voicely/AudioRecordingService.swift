@@ -5,7 +5,7 @@
 //  Created by Tao Wang on 1/6/2025.
 //
 
-import AVFoundation
+@preconcurrency import AVFoundation
 import Combine
 import Foundation
 
@@ -280,18 +280,13 @@ class AudioRecordingService: ObservableObject {
             frameCapacity: outputFrameCapacity
         ) else { return }
 
-        var inputConsumed = false
-        let status = converter.convert(to: outputBuffer, error: nil) { _, outStatus in
-            if inputConsumed {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-            outStatus.pointee = .haveData
-            inputConsumed = true
-            return inputBuffer
+        do {
+            try converter.convert(to: outputBuffer, from: inputBuffer)
+        } catch {
+            return
         }
 
-        guard status != .error, outputBuffer.frameLength > 0 else { return }
+        guard outputBuffer.frameLength > 0 else { return }
 
         do {
             try audioFile?.write(from: outputBuffer)

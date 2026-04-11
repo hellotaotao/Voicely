@@ -251,6 +251,10 @@ class CloudStorageManager: ObservableObject {
             debugLog("🔍 [DEBUG] Skipping iCloud download check (syncAudioFiles: \(syncAudioFiles), isCloudEnabled: \(isCloudEnabled))")
             return
         }
+
+        guard isCloudManagedURL(url) else {
+            return
+        }
         
         debugLog("🔍 [DEBUG] Checking iCloud download status for: \(url.lastPathComponent)")
         

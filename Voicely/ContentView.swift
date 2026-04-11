@@ -567,6 +567,25 @@ struct VoiceNoteRow: View {
     }
 }
 
+private struct FloatingPanelBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, macCatalyst 26.0, *) {
+            content
+                .glassEffect(
+                    .regular.interactive(),
+                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+                )
+        } else {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.9)
+                )
+        }
+    }
+}
+
 struct RecordingControls: View {
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
@@ -661,12 +680,8 @@ struct RecordingControls: View {
         .padding(.vertical, 14)
         .frame(height: 92)
         .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.white.opacity(0.45), lineWidth: 0.8)
-        )
-        .shadow(color: Color.black.opacity(0.12), radius: 24, y: 12)
+        .modifier(FloatingPanelBackground())
+        .shadow(color: Color.black.opacity(0.18), radius: 28, y: 14)
         .animation(.spring(response: 0.26, dampingFraction: 0.84), value: audioService.isRecording)
         .animation(.spring(response: 0.26, dampingFraction: 0.84), value: audioService.isPaused)
         .confirmationDialog(

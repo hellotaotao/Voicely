@@ -8,6 +8,7 @@
 @preconcurrency import AVFoundation
 import Combine
 import Foundation
+import os
 
 @MainActor
 class AudioRecordingService: ObservableObject {
@@ -26,10 +27,24 @@ class AudioRecordingService: ObservableObject {
     private(set) var currentPCMFileURL: URL?
 
     /// Approximate number of 16 kHz frames written so far.
-    /// Updated from the audio tap thread; may lag slightly.
-    nonisolated(unsafe) private(set) var currentFramePosition: AVAudioFramePosition = 0
+    /// Read-safe from any thread; updated under lock from the audio tap thread.
+    nonisolated var currentFramePosition: AVAudioFramePosition {
+        sharedState.withLock { $0.framePosition }
+    }
+
+    /// Latest per-buffer RMS level (raw, unsmoothed). Safe to call from any thread.
+    nonisolated func peekAudioLevel() -> Float {
+        sharedState.withLock { $0.latestLevel }
+    }
 
     // MARK: Private
+
+    /// Shared state written by the audio tap thread and read by the MainActor UI tick.
+    private struct SharedState {
+        var framePosition: AVAudioFramePosition = 0
+        var latestLevel: Float = 0
+    }
+    private let sharedState = OSAllocatedUnfairLock<SharedState>(initialState: SharedState())
 
     private var engine: AVAudioEngine?
     private nonisolated(unsafe) var audioFile: AVAudioFile?
@@ -152,7 +167,10 @@ class AudioRecordingService: ObservableObject {
         converter = AVAudioConverter(from: inputFormat, to: targetFormat)
 
         currentPCMFileURL = pcmURL
-        currentFramePosition = 0
+        sharedState.withLock { state in
+            state.framePosition = 0
+            state.latestLevel = 0
+        }
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.processTapBuffer(buffer, inputFormat: inputFormat, outputFormat: targetFormat)
@@ -174,11 +192,7 @@ class AudioRecordingService: ObservableObject {
         recordingDuration = 0
         audioLevel = 0.0
 
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateDurationFromFrames()
-            }
-        }
+        startUITimer()
 
         debugLog("✅ [AudioRecordingService] Recording started → \(m4aURL.lastPathComponent)")
         return m4aURL.lastPathComponent
@@ -198,8 +212,7 @@ class AudioRecordingService: ObservableObject {
 
         audioFile = nil   // Close the write handle
 
-        recordingTimer?.invalidate()
-        recordingTimer = nil
+        stopUITimer()
 
         isRecording = false
         isPaused = false
@@ -241,8 +254,7 @@ class AudioRecordingService: ObservableObject {
         guard isRecording, !isPaused, let eng = engine else { return }
         eng.pause()
         isPaused = true
-        recordingTimer?.invalidate()
-        recordingTimer = nil
+        stopUITimer()
         audioLevel = 0.0
         debugLog("⏸ [AudioRecordingService] Paused")
     }
@@ -252,15 +264,27 @@ class AudioRecordingService: ObservableObject {
         do {
             try eng.start()
             isPaused = false
-            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
-                Task { @MainActor in
-                    self?.updateDurationFromFrames()
-                }
-            }
+            startUITimer()
             debugLog("▶️ [AudioRecordingService] Resumed")
         } catch {
             debugLog("❌ [AudioRecordingService] Resume failed: \(error)")
         }
+    }
+
+    // MARK: UI timer (single 10 Hz tick)
+
+    private func startUITimer() {
+        stopUITimer()
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.tickUIFromSharedState()
+            }
+        }
+    }
+
+    private func stopUITimer() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
     }
 
     // MARK: Private helpers
@@ -272,51 +296,74 @@ class AudioRecordingService: ObservableObject {
         outputFormat: AVAudioFormat
     ) {
         guard let converter else { return }
+        guard inputBuffer.frameLength > 0 else { return }
 
         let ratio = outputFormat.sampleRate / inputFormat.sampleRate
-        let outputFrameCapacity = AVAudioFrameCount(Double(inputBuffer.frameLength) * ratio + 1)
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: outputFrameCapacity
-        ) else { return }
+        let outputFrameCapacity = AVAudioFrameCount(
+            (Double(inputBuffer.frameLength) * ratio).rounded(.up) + 16
+        )
+        guard outputFrameCapacity > 0,
+              let outputBuffer = AVAudioPCMBuffer(
+                  pcmFormat: outputFormat,
+                  frameCapacity: outputFrameCapacity
+              ) else { return }
 
-        do {
-            try converter.convert(to: outputBuffer, from: inputBuffer)
-        } catch {
+        // Block-based convert is required for sample-rate conversion.
+        // The simple convert(to:from:) form asserts outputCapacity >= inputLength,
+        // which is impossible when downsampling (e.g. 48 kHz → 16 kHz).
+        var nsError: NSError?
+        var provided = false
+        let status = converter.convert(to: outputBuffer, error: &nsError) { _, outStatus in
+            if provided {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            provided = true
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        if status == .error || nsError != nil {
             return
         }
-
         guard outputBuffer.frameLength > 0 else { return }
 
+        let wroteFrames: AVAudioFramePosition
         do {
             try audioFile?.write(from: outputBuffer)
-            currentFramePosition += AVAudioFramePosition(outputBuffer.frameLength)
+            wroteFrames = AVAudioFramePosition(outputBuffer.frameLength)
         } catch {
             // Non-fatal: a dropped frame is preferable to a crash on the audio thread
+            wroteFrames = 0
         }
 
-        updateAudioLevelFromBuffer(outputBuffer)
+        let rms = computeRMS(outputBuffer)
+
+        sharedState.withLock { state in
+            state.framePosition += wroteFrames
+            state.latestLevel = rms
+        }
     }
 
-    private nonisolated func updateAudioLevelFromBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let data = buffer.floatChannelData?[0] else { return }
+    private nonisolated func computeRMS(_ buffer: AVAudioPCMBuffer) -> Float {
+        guard let data = buffer.floatChannelData?[0] else { return 0 }
         let count = Int(buffer.frameLength)
-        guard count > 0 else { return }
+        guard count > 0 else { return 0 }
 
         var sum: Float = 0
         for i in 0..<count { sum += data[i] * data[i] }
-        let rms = (sum / Float(count)).squareRoot()
-        let normalised = min(1.0, rms * 10)
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.audioLevel = self.audioLevel * 0.1 + normalised * 0.9
-            if self.audioLevel < 0.04 { self.audioLevel = 0 }
-        }
+        return (sum / Float(count)).squareRoot()
     }
 
-    private func updateDurationFromFrames() {
-        recordingDuration = Double(currentFramePosition) / 16000.0
+    /// Pull-model UI tick: runs on MainActor at 10 Hz.
+    /// Reads shared state once under the lock, then updates @Published properties.
+    private func tickUIFromSharedState() {
+        let snapshot = sharedState.withLock { ($0.framePosition, $0.latestLevel) }
+        recordingDuration = Double(snapshot.0) / 16000.0
+
+        let normalised = min(Float(1.0), snapshot.1 * 10)
+        let smoothed = audioLevel * 0.3 + normalised * 0.7
+        audioLevel = smoothed < 0.04 ? 0 : smoothed
     }
 
     // MARK: PCM (CAF) → M4A conversion

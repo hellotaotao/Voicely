@@ -1874,14 +1874,13 @@ struct AudioWaveformView: View {
 
     var body: some View {
         if isAnimating {
-            TimelineView(.animation(minimumInterval: 0.05)) { timeline in
+            TimelineView(.animation(minimumInterval: 0.1)) { timeline in
                 HStack(alignment: .center, spacing: 2) {
                     ForEach(0..<18, id: \.self) { index in
                         RoundedRectangle(cornerRadius: 1.5)
                             .fill(barColor)
                             .frame(width: barWidth)
                             .scaleEffect(y: waveHeights[index], anchor: .center)
-                            .animation(.easeInOut(duration: 0.05), value: waveHeights[index])
                     }
                 }
                 .frame(height: 24)

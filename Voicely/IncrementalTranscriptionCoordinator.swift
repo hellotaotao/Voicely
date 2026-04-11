@@ -95,9 +95,22 @@ final class IncrementalTranscriptionCoordinator {
         isProcessingSegment = true
         defer { isProcessingSegment = false }
 
-        guard let segmentURL = extractSegmentPublic(from: lastSegmentEndFrame, to: upToFrame) else { return }
-        let frameEnd = upToFrame
-        lastSegmentEndFrame = frameEnd
+        segmentIndex += 1
+        let index = segmentIndex
+        let startFrame = lastSegmentEndFrame
+        let fileURL = recordingFileURL
+
+        let extracted = await Task.detached {
+            Self.extractSegment(
+                fileURL: fileURL,
+                from: startFrame,
+                to: upToFrame,
+                segmentIndex: index
+            )
+        }.value
+
+        guard let segmentURL = extracted else { return }
+        lastSegmentEndFrame = upToFrame
 
         let textResult: String?
         if let override = transcribeOverride {
@@ -122,17 +135,34 @@ final class IncrementalTranscriptionCoordinator {
         }
     }
 
-    /// Reads audio frames from the recording file and writes them to a temp WAV.
-    /// Returns nil if the file can't be read or there are insufficient frames.
+    /// Test-only convenience that mirrors the legacy signature.
+    /// Increments `segmentIndex` and calls into the nonisolated extractor.
     func extractSegmentPublic(
         from startFrame: AVAudioFramePosition,
         to endFrame: AVAudioFramePosition
+    ) -> URL? {
+        segmentIndex += 1
+        return Self.extractSegment(
+            fileURL: recordingFileURL,
+            from: startFrame,
+            to: endFrame,
+            segmentIndex: segmentIndex
+        )
+    }
+
+    /// Reads audio frames from the recording file and writes them to a temp WAV.
+    /// Runs off the MainActor (called from Task.detached) to keep file I/O off the UI thread.
+    nonisolated static func extractSegment(
+        fileURL: URL,
+        from startFrame: AVAudioFramePosition,
+        to endFrame: AVAudioFramePosition,
+        segmentIndex: Int
     ) -> URL? {
         let frameCount = AVAudioFrameCount(endFrame - startFrame)
         guard frameCount > 0 else { return nil }
 
         do {
-            let sourceFile = try AVAudioFile(forReading: recordingFileURL)
+            let sourceFile = try AVAudioFile(forReading: fileURL)
             sourceFile.framePosition = startFrame
 
             guard let buffer = AVAudioPCMBuffer(
@@ -142,7 +172,6 @@ final class IncrementalTranscriptionCoordinator {
 
             try sourceFile.read(into: buffer, frameCount: frameCount)
 
-            segmentIndex += 1
             let segmentURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("voicely_seg_\(segmentIndex).wav")
 

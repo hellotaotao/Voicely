@@ -137,7 +137,6 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
 
         guard isWhisperLoaded else {
-            print("Model not loaded, cannot process pending transcriptions")
             return
         }
 

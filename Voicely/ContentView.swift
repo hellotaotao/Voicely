@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var selectedNoteID: UUID?
     @State private var showingSettings = false
     @State private var didSetupServices = false
+    @State private var didAutoProcessPendingAfterModelLoad = false
     @State private var ownershipPollingTask: Task<Void, Never>?
 
     private var selectedNote: VoiceNote? {
@@ -53,7 +54,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
-                await processPendingTranscriptionsIfNeeded()
+                await processPendingTranscriptionsAfterModelLoadIfNeeded()
             }
         }
     }
@@ -347,11 +348,28 @@ struct ContentView: View {
                 let _ = await transcriptionService.loadWhisperModel()
             }
         } else {
-            await processPendingTranscriptionsIfNeeded()
+            await processPendingTranscriptionsAfterModelLoadIfNeeded()
         }
     }
 
+    private func processPendingTranscriptionsAfterModelLoadIfNeeded() async {
+        guard transcriptionService.isWhisperAvailable() else {
+            return
+        }
+
+        guard !didAutoProcessPendingAfterModelLoad else {
+            return
+        }
+
+        didAutoProcessPendingAfterModelLoad = true
+        await processPendingTranscriptionsIfNeeded()
+    }
+
     private func processPendingTranscriptionsIfNeeded() async {
+        guard transcriptionService.isWhisperAvailable() else {
+            return
+        }
+
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
         let candidates = voiceNotes.filter { !$0.audioFilePath.isEmpty }
         guard !candidates.isEmpty else {

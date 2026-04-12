@@ -11,6 +11,7 @@ import SwiftUI
 @MainActor
 class CloudStorageManager: ObservableObject {
     static let shared = CloudStorageManager()
+    private static let localToCloudMigrationDefaultsKey = "VoicelyLocalToCloudMigrationV1"
     
     @Published var isCloudEnabled = false
     @Published var isSyncing = false
@@ -27,8 +28,9 @@ class CloudStorageManager: ObservableObject {
     private var cloudContainerURL: URL?
     private var localContainerURL: URL?
     private var metadataQuery: NSMetadataQuery?
+    private var syncStatusUpdateTask: Task<Void, Never>?
     
-    enum SyncStatus {
+    enum SyncStatus: Equatable {
         case idle
         case checking
         case uploading(Int)
@@ -55,9 +57,11 @@ class CloudStorageManager: ObservableObject {
             setupCloudContainer()
             if isCloudEnabled && !wasEnabled {
                 setupMetadataQuery()
+                await migrateLocalFilesToCloudIfNeeded()
             } else if !isCloudEnabled && wasEnabled {
                 tearDownMetadataQuery()
                 cloudContainerURL = nil
+                UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
             }
         }
     }
@@ -85,6 +89,7 @@ class CloudStorageManager: ObservableObject {
     private func setupCloudContainer() {
         guard syncAudioFiles else {
             isCloudEnabled = false
+            UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
             print("iCloud audio sync disabled - using local storage only")
             return
         }
@@ -114,6 +119,7 @@ class CloudStorageManager: ObservableObject {
             print("iCloud Documents not available - check entitlements and Apple ID")
             isCloudEnabled = false
             cloudContainerURL = nil
+            UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
         }
     }
     
@@ -172,20 +178,30 @@ class CloudStorageManager: ObservableObject {
     
     // Move existing local files to iCloud
     func migrateLocalFilesToCloud() async {
+        await migrateLocalFilesToCloudIfNeeded(force: true)
+    }
+
+    // Run local-to-cloud migration only once unless forced.
+    func migrateLocalFilesToCloudIfNeeded(force: Bool = false) async {
         guard syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL else { return }
-        
+
+        if !force, UserDefaults.standard.bool(forKey: Self.localToCloudMigrationDefaultsKey) {
+            return
+        }
+
         let localURL = localContainerURL ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        
+
         do {
-            let localFiles = try fileManager.contentsOfDirectory(at: localURL, includingPropertiesForKeys: nil)
-            
-            for file in localFiles where file.pathExtension == "wav" || file.pathExtension == "m4a" {
-                let cloudDestination = cloudURL.appendingPathComponent(file.lastPathComponent)
-                
-                if !fileManager.fileExists(atPath: cloudDestination.path) {
-                    try fileManager.moveItem(at: file, to: cloudDestination)
-                    print("Migrated file to iCloud: \(file.lastPathComponent)")
-                }
+            let report = try await Task.detached(priority: .utility) {
+                try Self.performLocalToCloudMigration(localURL: localURL, cloudURL: cloudURL)
+            }.value
+
+            UserDefaults.standard.set(true, forKey: Self.localToCloudMigrationDefaultsKey)
+
+            if report.migratedCount > 0 {
+                print("Migrated \(report.migratedCount) legacy local file(s) to iCloud")
+            } else {
+                debugLog("🔍 [DEBUG] No legacy local audio files needed migration")
             }
         } catch {
             print("Failed to migrate files: \(error)")
@@ -352,16 +368,23 @@ class CloudStorageManager: ObservableObject {
             NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidFinishGathering, object: oldQuery)
             metadataQuery = nil
         }
+
+        syncStatusUpdateTask?.cancel()
+        syncStatusUpdateTask = nil
     }
 
     private func setupMetadataQuery() {
         tearDownMetadataQuery()
 
-        guard syncAudioFiles, isCloudEnabled, cloudContainerURL != nil else { return }
+        guard syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL else { return }
 
         metadataQuery = NSMetadataQuery()
-        metadataQuery?.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
-        metadataQuery?.predicate = NSPredicate(format: "%K LIKE '*'", NSMetadataItemFSNameKey)
+        metadataQuery?.searchScopes = [cloudURL]
+        metadataQuery?.predicate = NSPredicate(
+            format: "(%K LIKE[c] '*.m4a') OR (%K LIKE[c] '*.wav')",
+            NSMetadataItemFSNameKey,
+            NSMetadataItemFSNameKey
+        )
         
         NotificationCenter.default.addObserver(
             self,
@@ -381,13 +404,18 @@ class CloudStorageManager: ObservableObject {
     }
     
     @objc private func metadataQueryDidUpdate() {
-        Task { @MainActor [weak self] in
-            self?.updateSyncStatus()
-        }
+        scheduleSyncStatusUpdate()
     }
     
     @objc private func metadataQueryDidFinishGathering() {
-        Task { @MainActor [weak self] in
+        scheduleSyncStatusUpdate()
+    }
+
+    private func scheduleSyncStatusUpdate() {
+        syncStatusUpdateTask?.cancel()
+        syncStatusUpdateTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
             self?.updateSyncStatus()
         }
     }
@@ -423,23 +451,29 @@ class CloudStorageManager: ObservableObject {
             }
         }
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.pendingUploads = uploading
-            self.pendingDownloads = downloading
-
-            if hasErrors {
-                self.syncStatus = .error("Sync conflicts detected")
-            } else if uploading > 0 {
-                self.syncStatus = .uploading(uploading)
-            } else if downloading > 0 {
-                self.syncStatus = .downloading(downloading)
-            } else {
-                self.syncStatus = .idle
-            }
-
-            self.isSyncing = uploading > 0 || downloading > 0
+        let newStatus: SyncStatus
+        if hasErrors {
+            newStatus = .error("Sync conflicts detected")
+        } else if uploading > 0 {
+            newStatus = .uploading(uploading)
+        } else if downloading > 0 {
+            newStatus = .downloading(downloading)
+        } else {
+            newStatus = .idle
         }
+
+        let newIsSyncing = uploading > 0 || downloading > 0
+        guard pendingUploads != uploading
+            || pendingDownloads != downloading
+            || syncStatus != newStatus
+            || isSyncing != newIsSyncing else {
+            return
+        }
+
+        pendingUploads = uploading
+        pendingDownloads = downloading
+        syncStatus = newStatus
+        isSyncing = newIsSyncing
     }
     
     // MARK: - Manual Sync Triggers
@@ -501,12 +535,44 @@ class CloudStorageManager: ObservableObject {
     }
     
     deinit {
+        syncStatusUpdateTask?.cancel()
         metadataQuery?.stop()
         NotificationCenter.default.removeObserver(self)
     }
 }
 
 private extension CloudStorageManager {
+    struct LocalToCloudMigrationReport: Sendable {
+        let migratedCount: Int
+    }
+
+    nonisolated static func performLocalToCloudMigration(localURL: URL, cloudURL: URL) throws -> LocalToCloudMigrationReport {
+        let fileManager = FileManager.default
+        let localFiles = try fileManager.contentsOfDirectory(
+            at: localURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+
+        var migratedCount = 0
+        for file in localFiles {
+            let ext = file.pathExtension.lowercased()
+            guard ext == "wav" || ext == "m4a" else {
+                continue
+            }
+
+            let cloudDestination = cloudURL.appendingPathComponent(file.lastPathComponent)
+            if fileManager.fileExists(atPath: cloudDestination.path) {
+                continue
+            }
+
+            try fileManager.moveItem(at: file, to: cloudDestination)
+            migratedCount += 1
+        }
+
+        return LocalToCloudMigrationReport(migratedCount: migratedCount)
+    }
+
     func deletionCandidateURLs(for path: String) -> [URL] {
         guard !path.isEmpty else { return [] }
 

@@ -21,11 +21,24 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var didSetupServices = false
     @State private var didAutoProcessPendingAfterModelLoad = false
-    @State private var ownershipPollingTask: Task<Void, Never>?
+    @State private var ownershipLeaseRecheckTask: Task<Void, Never>?
 
     private var selectedNote: VoiceNote? {
         guard let selectedNoteID else { return nil }
         return voiceNotes.first { $0.id == selectedNoteID }
+    }
+
+    private var ownershipSignature: Int {
+        var hasher = Hasher()
+        for note in voiceNotes {
+            hasher.combine(note.id)
+            hasher.combine(note.transcriptionStateRaw)
+            hasher.combine(note.transcriptionOwnerDeviceID ?? "")
+            hasher.combine(note.transcriptionAttemptID ?? "")
+            hasher.combine(note.transcriptionLeaseExpiresAt?.timeIntervalSince1970 ?? 0)
+            hasher.combine(note.audioFilePath)
+        }
+        return hasher.finalize()
     }
 
     var body: some View {
@@ -52,10 +65,20 @@ struct ContentView: View {
                 await processPendingTranscriptionsIfNeeded()
             }
         }
+        .onChange(of: ownershipSignature) { _, _ in
+            Task { @MainActor in
+                scheduleOwnershipLeaseRecheck()
+                await processPendingTranscriptionsIfNeeded()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
                 await processPendingTranscriptionsAfterModelLoadIfNeeded()
             }
+        }
+        .onDisappear {
+            ownershipLeaseRecheckTask?.cancel()
+            ownershipLeaseRecheckTask = nil
         }
     }
     
@@ -334,11 +357,11 @@ struct ContentView: View {
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels(includeRemote: false)
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
-        startOwnershipPolling()
+        scheduleOwnershipLeaseRecheck()
 
         // Migrate local files to iCloud if available
         if cloudManager.isCloudEnabled {
-            await cloudManager.migrateLocalFilesToCloud()
+            await cloudManager.migrateLocalFilesToCloudIfNeeded()
             await cloudManager.refreshSync()
         }
 
@@ -366,6 +389,8 @@ struct ContentView: View {
     }
 
     private func processPendingTranscriptionsIfNeeded() async {
+        scheduleOwnershipLeaseRecheck()
+
         guard transcriptionService.isWhisperAvailable() else {
             return
         }
@@ -377,17 +402,34 @@ struct ContentView: View {
         }
 
         await transcriptionService.processPendingTranscriptions(notes: candidates)
+        scheduleOwnershipLeaseRecheck()
     }
 
-    private func startOwnershipPolling() {
-        guard ownershipPollingTask == nil else { return }
+    private func scheduleOwnershipLeaseRecheck() {
+        ownershipLeaseRecheckTask?.cancel()
+        ownershipLeaseRecheckTask = nil
 
-        ownershipPollingTask = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
-                guard !Task.isCancelled else { break }
-                await processPendingTranscriptionsIfNeeded()
+        let now = Date()
+        let currentDeviceID = DeviceIdentity.currentDeviceID
+        let nextLeaseExpiry = voiceNotes.compactMap { note -> Date? in
+            guard note.transcriptionState == .claimed,
+                  note.transcriptionOwnerDeviceID != currentDeviceID,
+                  let leaseExpiresAt = note.transcriptionLeaseExpiresAt,
+                  leaseExpiresAt > now else {
+                return nil
             }
+            return leaseExpiresAt
+        }.min()
+
+        guard let nextLeaseExpiry else {
+            return
+        }
+
+        let delay = max(0.5, nextLeaseExpiry.timeIntervalSince(now) + 0.2)
+        ownershipLeaseRecheckTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await processPendingTranscriptionsIfNeeded()
         }
     }
 

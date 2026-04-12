@@ -36,6 +36,11 @@ struct ContentView: View {
     private var ownershipSignature: Int {
         var hasher = Hasher()
         for note in voiceNotes {
+            // Completed notes no longer participate in pending ownership transitions.
+            if note.transcriptionState == .completed {
+                continue
+            }
+
             hasher.combine(note.id)
             hasher.combine(note.transcriptionStateRaw)
             hasher.combine(note.transcriptionOwnerDeviceID ?? "")
@@ -402,7 +407,10 @@ struct ContentView: View {
         }
 
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
-        let candidates = voiceNotes.filter { !$0.audioFilePath.isEmpty }
+        let candidates = voiceNotes.filter { note in
+            guard !note.audioFilePath.isEmpty else { return false }
+            return note.transcriptionState != .completed
+        }
         guard !candidates.isEmpty else {
             return
         }
@@ -428,15 +436,23 @@ struct ContentView: View {
 
         let now = Date()
         let currentDeviceID = DeviceIdentity.currentDeviceID
-        let nextLeaseExpiry = voiceNotes.compactMap { note -> Date? in
+        var nextLeaseExpiry: Date?
+        for note in voiceNotes {
             guard note.transcriptionState == .claimed,
                   note.transcriptionOwnerDeviceID != currentDeviceID,
                   let leaseExpiresAt = note.transcriptionLeaseExpiresAt,
                   leaseExpiresAt > now else {
-                return nil
+                continue
             }
-            return leaseExpiresAt
-        }.min()
+
+            if let existing = nextLeaseExpiry {
+                if leaseExpiresAt < existing {
+                    nextLeaseExpiry = leaseExpiresAt
+                }
+            } else {
+                nextLeaseExpiry = leaseExpiresAt
+            }
+        }
 
         guard let nextLeaseExpiry else {
             return
@@ -1756,33 +1772,42 @@ private struct WrappingFlowLayout: Layout {
         let frame: CGRect
     }
 
+    struct Cache {
+        var items: [Item] = []
+        var size: CGSize = .zero
+        var maxWidth: CGFloat?
+        var subviewCount = 0
+    }
+
     var horizontalSpacing: CGFloat = 8
     var verticalSpacing: CGFloat = 8
 
-    func makeCache(subviews: Subviews) -> [Item] {
-        []
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache(subviewCount: subviews.count)
     }
 
     func sizeThatFits(
         proposal: ProposedViewSize,
         subviews: Subviews,
-        cache: inout [Item]
+        cache: inout Cache
     ) -> CGSize {
-        cache = frames(for: subviews, maxWidth: proposal.width ?? .greatestFiniteMagnitude)
-        let width = cache.map(\.frame.maxX).max() ?? 0
-        let height = cache.map(\.frame.maxY).max() ?? 0
-        return CGSize(width: width, height: height)
+        updateCache(
+            for: subviews,
+            maxWidth: proposal.width ?? .greatestFiniteMagnitude,
+            cache: &cache
+        )
+        return cache.size
     }
 
     func placeSubviews(
         in bounds: CGRect,
         proposal: ProposedViewSize,
         subviews: Subviews,
-        cache: inout [Item]
+        cache: inout Cache
     ) {
-        cache = frames(for: subviews, maxWidth: bounds.width)
+        updateCache(for: subviews, maxWidth: bounds.width, cache: &cache)
 
-        for item in cache {
+        for item in cache.items {
             subviews[item.index].place(
                 at: CGPoint(x: bounds.minX + item.frame.minX, y: bounds.minY + item.frame.minY),
                 proposal: ProposedViewSize(item.frame.size)
@@ -1790,12 +1815,26 @@ private struct WrappingFlowLayout: Layout {
         }
     }
 
-    private func frames(for subviews: Subviews, maxWidth: CGFloat) -> [Item] {
+    private func updateCache(for subviews: Subviews, maxWidth: CGFloat, cache: inout Cache) {
+        if cache.maxWidth == maxWidth, cache.subviewCount == subviews.count {
+            return
+        }
+
+        let layout = makeLayout(for: subviews, maxWidth: maxWidth)
+        cache.items = layout.items
+        cache.size = layout.size
+        cache.maxWidth = maxWidth
+        cache.subviewCount = subviews.count
+    }
+
+    private func makeLayout(for subviews: Subviews, maxWidth: CGFloat) -> (items: [Item], size: CGSize) {
         let availableWidth = max(maxWidth, 0)
         var items: [Item] = []
         var currentX: CGFloat = 0
         var currentY: CGFloat = 0
         var currentRowHeight: CGFloat = 0
+        var layoutWidth: CGFloat = 0
+        var layoutHeight: CGFloat = 0
 
         for index in subviews.indices {
             let size = subviews[index].sizeThatFits(.unspecified)
@@ -1808,12 +1847,14 @@ private struct WrappingFlowLayout: Layout {
 
             let frame = CGRect(origin: CGPoint(x: currentX, y: currentY), size: size)
             items.append(Item(index: index, frame: frame))
+            layoutWidth = max(layoutWidth, frame.maxX)
+            layoutHeight = max(layoutHeight, frame.maxY)
 
             currentX += size.width + horizontalSpacing
             currentRowHeight = max(currentRowHeight, size.height)
         }
 
-        return items
+        return (items, CGSize(width: layoutWidth, height: layoutHeight))
     }
 }
 

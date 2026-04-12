@@ -50,6 +50,8 @@ class TranscriptionService: ObservableObject {
     private var isProcessingPendingTranscriptions = false
     private var pendingTranscriptionQueue: [UUID: VoiceNote] = [:]
     private var pendingTranscriptionOrder: [UUID] = []
+    private var pendingTranscriptionOrderSet: Set<UUID> = []
+    private var pendingTranscriptionOrderCursor = 0
 
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
@@ -473,20 +475,35 @@ private extension TranscriptionService {
             }
 
             pendingTranscriptionQueue[note.id] = note
-            if !pendingTranscriptionOrder.contains(note.id) {
+            if pendingTranscriptionOrderSet.insert(note.id).inserted {
                 pendingTranscriptionOrder.append(note.id)
             }
         }
     }
 
     func dequeueNextPendingTranscription() -> VoiceNote? {
-        while !pendingTranscriptionOrder.isEmpty {
-            let noteID = pendingTranscriptionOrder.removeFirst()
+        while pendingTranscriptionOrderCursor < pendingTranscriptionOrder.count {
+            let noteID = pendingTranscriptionOrder[pendingTranscriptionOrderCursor]
+            pendingTranscriptionOrderCursor += 1
+            pendingTranscriptionOrderSet.remove(noteID)
+
             guard let note = pendingTranscriptionQueue.removeValue(forKey: noteID) else {
                 continue
             }
+
+            if pendingTranscriptionOrderCursor >= pendingTranscriptionOrder.count {
+                pendingTranscriptionOrder.removeAll(keepingCapacity: true)
+                pendingTranscriptionOrderCursor = 0
+            }
+
             return note
         }
+
+        if !pendingTranscriptionOrder.isEmpty {
+            pendingTranscriptionOrder.removeAll(keepingCapacity: true)
+            pendingTranscriptionOrderCursor = 0
+        }
+
         return nil
     }
 

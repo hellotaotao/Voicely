@@ -484,16 +484,22 @@ class CloudStorageManager: ObservableObject {
         await MainActor.run {
             syncStatus = .checking
         }
-        
-        // Start metadata query to refresh status
-        metadataQuery?.start()
-        
-        // Wait briefly for query to populate
-        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-        
-        // Stop and restart to force refresh
-        metadataQuery?.stop()
-        metadataQuery?.start()
+
+        guard let metadataQuery else {
+            syncStatus = .idle
+            return
+        }
+
+        if !metadataQuery.isStarted {
+            metadataQuery.start()
+        }
+
+        scheduleSyncStatusUpdate()
+
+        // Give iCloud a short window to report fresh metadata, then force one immediate read.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard !Task.isCancelled else { return }
+        updateSyncStatus()
     }
     
     func forceDownloadAll() async {

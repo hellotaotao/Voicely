@@ -22,6 +22,11 @@ struct ContentView: View {
     @State private var didSetupServices = false
     @State private var didAutoProcessPendingAfterModelLoad = false
     @State private var ownershipLeaseRecheckTask: Task<Void, Never>?
+    @State private var pendingProcessingTask: Task<Void, Never>?
+
+    private var isPhoneDevice: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+    }
 
     private var selectedNote: VoiceNote? {
         guard let selectedNoteID else { return nil }
@@ -36,7 +41,6 @@ struct ContentView: View {
             hasher.combine(note.transcriptionOwnerDeviceID ?? "")
             hasher.combine(note.transcriptionAttemptID ?? "")
             hasher.combine(note.transcriptionLeaseExpiresAt?.timeIntervalSince1970 ?? 0)
-            hasher.combine(note.audioFilePath)
         }
         return hasher.finalize()
     }
@@ -55,21 +59,15 @@ struct ContentView: View {
         .onAppear(perform: syncInitialSelection)
         .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
-            Task { @MainActor in
-                await processPendingTranscriptionsIfNeeded()
-            }
+            schedulePendingProcessing()
         }
         .onChange(of: scenePhase) { _, newValue in
             guard newValue == .active else { return }
-            Task { @MainActor in
-                await processPendingTranscriptionsIfNeeded()
-            }
+            schedulePendingProcessing(delay: 0)
         }
         .onChange(of: ownershipSignature) { _, _ in
-            Task { @MainActor in
-                scheduleOwnershipLeaseRecheck()
-                await processPendingTranscriptionsIfNeeded()
-            }
+            scheduleOwnershipLeaseRecheck()
+            schedulePendingProcessing()
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
@@ -79,6 +77,8 @@ struct ContentView: View {
         .onDisappear {
             ownershipLeaseRecheckTask?.cancel()
             ownershipLeaseRecheckTask = nil
+            pendingProcessingTask?.cancel()
+            pendingProcessingTask = nil
         }
     }
     
@@ -338,9 +338,15 @@ struct ContentView: View {
             return
         }
 
-        guard let selectedNoteID,
-              voiceNotes.contains(where: { $0.id == selectedNoteID }) else {
-            self.selectedNoteID = voiceNotes.first?.id
+        guard let selectedNoteID else {
+            if !isPhoneDevice {
+                self.selectedNoteID = voiceNotes.first?.id
+            }
+            return
+        }
+
+        guard voiceNotes.contains(where: { $0.id == selectedNoteID }) else {
+            self.selectedNoteID = isPhoneDevice ? nil : voiceNotes.first?.id
             return
         }
     }
@@ -389,7 +395,7 @@ struct ContentView: View {
     }
 
     private func processPendingTranscriptionsIfNeeded() async {
-        scheduleOwnershipLeaseRecheck()
+        defer { scheduleOwnershipLeaseRecheck() }
 
         guard transcriptionService.isWhisperAvailable() else {
             return
@@ -402,7 +408,18 @@ struct ContentView: View {
         }
 
         await transcriptionService.processPendingTranscriptions(notes: candidates)
-        scheduleOwnershipLeaseRecheck()
+    }
+
+    private func schedulePendingProcessing(delay: TimeInterval = 0.2) {
+        pendingProcessingTask?.cancel()
+        pendingProcessingTask = Task { @MainActor in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+
+            guard !Task.isCancelled else { return }
+            await processPendingTranscriptionsIfNeeded()
+        }
     }
 
     private func scheduleOwnershipLeaseRecheck() {
@@ -448,8 +465,6 @@ struct ContentView: View {
     }
 
     private func deleteNoteAndAudio(_ note: VoiceNote) {
-        let replacementNote = voiceNotes.first { $0.id != note.id }
-
         if transcriptionService.isLocallyTranscribing(note) {
             transcriptionService.cancelTranscription(for: note)
         }
@@ -459,7 +474,11 @@ struct ContentView: View {
         }
 
         if selectedNoteID == note.id {
-            selectedNoteID = replacementNote?.id
+            if isPhoneDevice {
+                selectedNoteID = nil
+            } else {
+                selectedNoteID = voiceNotes.first { $0.id != note.id }?.id
+            }
         }
 
         modelContext.delete(note)

@@ -187,7 +187,13 @@ class ModelManager: ObservableObject {
             let config = WhisperKitConfig(
                 computeOptions: computeOptions,
                 verbose: enableVerboseWhisperLogs,
-                logLevel: enableVerboseWhisperLogs ? .debug : .error,
+                logLevel: {
+#if DEBUG
+                    return enableVerboseWhisperLogs ? .debug : .error
+#else
+                    return .error
+#endif
+                }(),
                 prewarm: false,
                 load: false,
                 download: false

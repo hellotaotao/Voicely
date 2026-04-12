@@ -109,18 +109,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
         Self.didRequestRemoteNotifications = true
 
-    #if targetEnvironment(simulator)
-    #if DEBUG
+        #if targetEnvironment(simulator)
+        #if DEBUG
         print("ℹ️ [DEBUG] Running on Simulator; skipping remote notification registration")
-    #endif
-        return true
-    #endif
-
+        #endif
+        #else
         // Register for remote notifications (required for CloudKit)
-#if DEBUG
+        #if DEBUG
         print("🔍 [DEBUG] Registering for remote notifications...")
-#endif
+        #endif
         application.registerForRemoteNotifications()
+        #endif
         
         return true
     }

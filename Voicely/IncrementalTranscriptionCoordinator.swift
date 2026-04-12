@@ -120,7 +120,7 @@ final class IncrementalTranscriptionCoordinator {
         }
         try? FileManager.default.removeItem(at: segmentURL)
 
-        if let text = textResult, !text.isEmpty {
+        if let text = Self.sanitizedSegmentText(textResult) {
             if accumulatedTranscript.isEmpty {
                 accumulatedTranscript = text
             } else {
@@ -185,5 +185,19 @@ final class IncrementalTranscriptionCoordinator {
             debugLog("⚠️ [IncrementalCoordinator] Segment extraction failed: \(error)")
             return nil
         }
+    }
+
+    nonisolated static func sanitizedSegmentText(_ text: String?) -> String? {
+        guard let text else { return nil }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalized = trimmed.lowercased()
+        if normalized == "[no audio]" || normalized == "no audio" {
+            return nil
+        }
+
+        return trimmed
     }
 }

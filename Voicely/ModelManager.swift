@@ -177,11 +177,17 @@ class ModelManager: ObservableObject {
                 audioEncoderCompute: encoderComputeUnits,
                 textDecoderCompute: decoderComputeUnits
             )
+
+#if DEBUG
+            let enableVerboseWhisperLogs = UserDefaults.standard.bool(forKey: "whisperVerboseLogging")
+#else
+            let enableVerboseWhisperLogs = false
+#endif
             
             let config = WhisperKitConfig(
                 computeOptions: computeOptions,
-                verbose: true,
-                logLevel: .debug,
+                verbose: enableVerboseWhisperLogs,
+                logLevel: enableVerboseWhisperLogs ? .debug : .error,
                 prewarm: false,
                 load: false,
                 download: false

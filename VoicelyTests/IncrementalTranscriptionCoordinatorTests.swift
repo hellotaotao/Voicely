@@ -82,4 +82,18 @@ struct IncrementalTranscriptionCoordinatorTests {
 
         #expect(coordinator.accumulatedTranscript == "hello\nhello")
     }
+
+    @Test @MainActor func noAudioPlaceholderDoesNotPolluteAccumulatedTranscript() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 15)
+        let service = TranscriptionService()
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: service,
+            recordingFileURL: pcmURL
+        )
+        coordinator.transcribeOverride = { @Sendable _ in " [no audio] " }
+
+        await coordinator.transcribeSegment(upToFrame: 160_000)
+
+        #expect(coordinator.accumulatedTranscript.isEmpty)
+    }
 }

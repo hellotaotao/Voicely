@@ -231,8 +231,17 @@ private extension AudioPlayerService {
 
         if CloudStorageManager.shared.isFileReadyForPlayback(at: url) {
             playbackStatusMessage = nil
-        } else {
-            playbackStatusMessage = "Audio is downloading from iCloud. Playback will start after the file becomes available."
+            return
+        }
+
+        playbackStatusMessage = "Audio is downloading from iCloud..."
+
+        while !Task.isCancelled, pendingFilePath == filePath {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if CloudStorageManager.shared.isFileReadyForPlayback(at: url) {
+                playbackStatusMessage = nil
+                return
+            }
         }
     }
 

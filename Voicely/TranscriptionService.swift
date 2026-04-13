@@ -48,6 +48,7 @@ class TranscriptionService: ObservableObject {
     private var progressSmoothingTarget: Float = 0.0
     private var leaseHeartbeatTask: Task<Void, Never>?
     private var isProcessingPendingTranscriptions = false
+    private var needsReprocessing = false
     private var pendingTranscriptionQueue: [UUID: VoiceNote] = [:]
     private var pendingTranscriptionOrder: [UUID] = []
     private var pendingTranscriptionOrderSet: Set<UUID> = []
@@ -146,45 +147,52 @@ class TranscriptionService: ObservableObject {
         enqueueEligibleNotes(notes)
 
         guard !isProcessingPendingTranscriptions else {
-            print("Pending transcription processing already running")
+            needsReprocessing = true
             return
         }
 
         isProcessingPendingTranscriptions = true
-        defer { isProcessingPendingTranscriptions = false }
-
-        while let note = dequeueNextPendingTranscription() {
-            while isTranscribing {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            }
-
-            guard let action = processingAction(for: note, now: nowProvider()) else {
-                continue
-            }
-
-            switch action {
-            case .claimNew(let attemptID, let queuedAt):
-                note.claimTranscription(
-                    ownerDeviceID: currentDeviceID,
-                    attemptID: attemptID,
-                    queuedAt: queuedAt,
-                    leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
-                )
-                note.clearLegacyTranscriptionFlags()
-                await transcribeClaimedNote(note, attemptID: attemptID)
-            case .resumeOwned(let attemptID):
-                note.claimTranscription(
-                    ownerDeviceID: currentDeviceID,
-                    attemptID: attemptID,
-                    queuedAt: note.transcriptionQueuedAt ?? nowProvider(),
-                    leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
-                )
-                note.clearLegacyTranscriptionFlags()
-                await transcribeClaimedNote(note, attemptID: attemptID)
-            }
-
-            try? await Task.sleep(nanoseconds: 200_000_000)
+        defer {
+            isProcessingPendingTranscriptions = false
+            needsReprocessing = false
         }
+
+        repeat {
+            needsReprocessing = false
+
+            while let note = dequeueNextPendingTranscription() {
+                while isTranscribing {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                }
+
+                guard let action = processingAction(for: note, now: nowProvider()) else {
+                    continue
+                }
+
+                switch action {
+                case .claimNew(let attemptID, let queuedAt):
+                    note.claimTranscription(
+                        ownerDeviceID: currentDeviceID,
+                        attemptID: attemptID,
+                        queuedAt: queuedAt,
+                        leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
+                    )
+                    note.clearLegacyTranscriptionFlags()
+                    await transcribeClaimedNote(note, attemptID: attemptID)
+                case .resumeOwned(let attemptID):
+                    note.claimTranscription(
+                        ownerDeviceID: currentDeviceID,
+                        attemptID: attemptID,
+                        queuedAt: note.transcriptionQueuedAt ?? nowProvider(),
+                        leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
+                    )
+                    note.clearLegacyTranscriptionFlags()
+                    await transcribeClaimedNote(note, attemptID: attemptID)
+                }
+
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        } while needsReprocessing
     }
 
     func requestTranscription(

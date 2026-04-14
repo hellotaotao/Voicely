@@ -836,7 +836,15 @@ struct RecordingControls: View {
 
         guard let filePath else { return }
 
-        Task {
+        // Create the note immediately so the user gets instant feedback after stopping recording.
+        let note = VoiceNote(
+            title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
+            audioFilePath: filePath
+        )
+        note.duration = duration
+        onRecordingComplete(note)
+
+        Task { @MainActor in
             let accumulatedTranscript: String
             if let coord = capturedCoordinator {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
@@ -844,22 +852,21 @@ struct RecordingControls: View {
                 accumulatedTranscript = ""
             }
 
-            let note = VoiceNote(
-                title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
-                audioFilePath: filePath
-            )
-            note.duration = duration
+            let trimmedTranscript = accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if accumulatedTranscript.isEmpty {
-                transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
-                onRecordingComplete(note)
-                if isModelLoaded {
-                    await transcriptionService.processPendingTranscriptions(notes: [note])
+            if !trimmedTranscript.isEmpty {
+                if note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    note.transcription = trimmedTranscript
+                    note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
+                        ?? transcriptionService.modelManager?.selectedModel
+                    note.completeTranscription()
                 }
-            } else {
-                note.transcription = accumulatedTranscript
-                note.completeTranscription()
-                onRecordingComplete(note)
+                return
+            }
+
+            transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
+            if isModelLoaded {
+                await transcriptionService.processPendingTranscriptions(notes: [note])
             }
         }
     }

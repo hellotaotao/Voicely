@@ -10,7 +10,6 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \VoiceNote.timestamp, order: .reverse) private var voiceNotes: [VoiceNote]
     @StateObject private var audioService = AudioRecordingService()
     @StateObject private var modelManager = ModelManager()
@@ -20,9 +19,6 @@ struct ContentView: View {
     @State private var selectedNoteID: UUID?
     @State private var showingSettings = false
     @State private var didSetupServices = false
-    @State private var didAutoProcessPendingAfterModelLoad = false
-    @State private var ownershipLeaseRecheckTask: Task<Void, Never>?
-    @State private var pendingProcessingTask: Task<Void, Never>?
 
     private var isPhoneDevice: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
@@ -31,23 +27,6 @@ struct ContentView: View {
     private var selectedNote: VoiceNote? {
         guard let selectedNoteID else { return nil }
         return voiceNotes.first { $0.id == selectedNoteID }
-    }
-
-    private var ownershipSignature: Int {
-        var hasher = Hasher()
-        for note in voiceNotes {
-            // Completed notes no longer participate in pending ownership transitions.
-            if note.transcriptionState == .completed {
-                continue
-            }
-
-            hasher.combine(note.id)
-            hasher.combine(note.transcriptionStateRaw)
-            hasher.combine(note.transcriptionOwnerDeviceID ?? "")
-            hasher.combine(note.transcriptionAttemptID ?? "")
-            hasher.combine(note.transcriptionLeaseExpiresAt?.timeIntervalSince1970 ?? 0)
-        }
-        return hasher.finalize()
     }
 
     var body: some View {
@@ -64,26 +43,6 @@ struct ContentView: View {
         .onAppear(perform: syncInitialSelection)
         .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
-            schedulePendingProcessing()
-        }
-        .onChange(of: scenePhase) { _, newValue in
-            guard newValue == .active else { return }
-            schedulePendingProcessing(delay: 0)
-        }
-        .onChange(of: ownershipSignature) { _, _ in
-            scheduleOwnershipLeaseRecheck()
-            schedulePendingProcessing()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
-            Task { @MainActor in
-                await processPendingTranscriptionsAfterModelLoadIfNeeded()
-            }
-        }
-        .onDisappear {
-            ownershipLeaseRecheckTask?.cancel()
-            ownershipLeaseRecheckTask = nil
-            pendingProcessingTask?.cancel()
-            pendingProcessingTask = nil
         }
     }
     
@@ -368,7 +327,6 @@ struct ContentView: View {
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels(includeRemote: false)
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
-        scheduleOwnershipLeaseRecheck()
 
         // Migrate local files to iCloud if available
         if cloudManager.isCloudEnabled {
@@ -381,88 +339,6 @@ struct ContentView: View {
             Task {
                 let _ = await transcriptionService.loadWhisperModel()
             }
-        } else {
-            await processPendingTranscriptionsAfterModelLoadIfNeeded()
-        }
-    }
-
-    private func processPendingTranscriptionsAfterModelLoadIfNeeded() async {
-        guard transcriptionService.isWhisperAvailable() else {
-            return
-        }
-
-        guard !didAutoProcessPendingAfterModelLoad else {
-            return
-        }
-
-        didAutoProcessPendingAfterModelLoad = true
-        await processPendingTranscriptionsIfNeeded()
-    }
-
-    private func processPendingTranscriptionsIfNeeded() async {
-        defer { scheduleOwnershipLeaseRecheck() }
-
-        guard transcriptionService.isWhisperAvailable() else {
-            return
-        }
-
-        transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
-        let candidates = voiceNotes.filter { note in
-            guard !note.audioFilePath.isEmpty else { return false }
-            return note.transcriptionState != .completed
-        }
-        guard !candidates.isEmpty else {
-            return
-        }
-
-        await transcriptionService.processPendingTranscriptions(notes: candidates)
-    }
-
-    private func schedulePendingProcessing(delay: TimeInterval = 0.2) {
-        pendingProcessingTask?.cancel()
-        pendingProcessingTask = Task { @MainActor in
-            if delay > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            }
-
-            guard !Task.isCancelled else { return }
-            await processPendingTranscriptionsIfNeeded()
-        }
-    }
-
-    private func scheduleOwnershipLeaseRecheck() {
-        ownershipLeaseRecheckTask?.cancel()
-        ownershipLeaseRecheckTask = nil
-
-        let now = Date()
-        let currentDeviceID = DeviceIdentity.currentDeviceID
-        var nextLeaseExpiry: Date?
-        for note in voiceNotes {
-            guard note.transcriptionState == .claimed,
-                  note.transcriptionOwnerDeviceID != currentDeviceID,
-                  let leaseExpiresAt = note.transcriptionLeaseExpiresAt,
-                  leaseExpiresAt > now else {
-                continue
-            }
-
-            if let existing = nextLeaseExpiry {
-                if leaseExpiresAt < existing {
-                    nextLeaseExpiry = leaseExpiresAt
-                }
-            } else {
-                nextLeaseExpiry = leaseExpiresAt
-            }
-        }
-
-        guard let nextLeaseExpiry else {
-            return
-        }
-
-        let delay = max(0.5, nextLeaseExpiry.timeIntervalSince(now) + 0.2)
-        ownershipLeaseRecheckTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            await processPendingTranscriptionsIfNeeded()
         }
     }
 
@@ -1238,13 +1114,6 @@ struct VoiceNoteDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingShareSheet) {
             ShareSheet(activityItems: [shareableTranscriptionText()])
-        }
-        .onChange(of: modelLoadingState) { oldValue, newValue in
-            if newValue == .loaded {
-                Task { @MainActor in
-                    await transcriptionService.processPendingTranscriptions(notes: [note])
-                }
-            }
         }
         .alert("Model Not Loaded", isPresented: $showLoadModelPrompt) {
             Button("Open Settings") { showingSettings = true }

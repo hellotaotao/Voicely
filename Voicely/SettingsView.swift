@@ -312,7 +312,7 @@ struct SettingsView: View {
                     .foregroundStyle(isLocal ? .green : .gray)
                     .font(.title3)
                 
-                Text(model.replacingOccurrences(of: "_", with: " ").capitalized)
+                Text(ModelManager.displayName(for: model))
                     .font(.body)
                     .foregroundColor(.primary)
                 

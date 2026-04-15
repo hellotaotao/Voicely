@@ -34,6 +34,50 @@ enum ModelState: CustomStringConvertible {
 
 @MainActor
 class ModelManager: ObservableObject {
+    private static let oldIPhoneModelThreshold = 12
+    private static let oldIPadModelThreshold = 12
+
+    static var platformDefaultModel: String {
+#if targetEnvironment(macCatalyst)
+        return "openai_whisper-large-v3_turbo_954MB"
+#else
+        let deviceIdentifier = WhisperKit.deviceName()
+
+        if isOldAndWeakIOSDevice(deviceIdentifier) {
+            return "openai_whisper-base"
+        }
+
+        return "openai_whisper-small"
+#endif
+    }
+
+    private static func isOldAndWeakIOSDevice(_ deviceIdentifier: String) -> Bool {
+        if let iPhoneGeneration = numericGeneration(from: deviceIdentifier, prefix: "iPhone") {
+            return iPhoneGeneration <= oldIPhoneModelThreshold
+        }
+
+        if let iPadGeneration = numericGeneration(from: deviceIdentifier, prefix: "iPad") {
+            return iPadGeneration <= oldIPadModelThreshold
+        }
+
+        return false
+    }
+
+    private static func numericGeneration(from deviceIdentifier: String, prefix: String) -> Int? {
+        guard deviceIdentifier.hasPrefix(prefix) else {
+            return nil
+        }
+
+        let suffix = deviceIdentifier.dropFirst(prefix.count)
+        let digits = suffix.prefix { $0.isNumber }
+
+        guard !digits.isEmpty else {
+            return nil
+        }
+
+        return Int(digits)
+    }
+
     @Published var whisperKit: WhisperKit?
     @Published var modelState: ModelState = .unloaded {
         didSet {
@@ -45,7 +89,7 @@ class ModelManager: ObservableObject {
     }
     @Published var localModels: [String] = []
     @Published var availableModels: [String] = []
-    @Published var selectedModel: String = "small" {
+    @Published var selectedModel: String = ModelManager.platformDefaultModel {
         didSet {
             // Save selected model to UserDefaults
             UserDefaults.standard.set(selectedModel, forKey: .selectedModelKey)
@@ -63,66 +107,56 @@ class ModelManager: ObservableObject {
     private let specializationProgressRatio: Float = 0.7
     
     init() {
-        // Read selected model from UserDefaults if available
+        // Preserve user's previous selection. Apply platform default only when no saved model exists.
         if let savedModel = UserDefaults.standard.string(forKey: .selectedModelKey) {
-            selectedModel = savedModel
-            print("Loaded saved model selection from UserDefaults: \(savedModel)")
-        } else {
-            var defaultModel = WhisperKit.recommendedModels().default
-            // If recommended default contains "base", use "openai_whisper-small" instead
-            if defaultModel.contains("base") {
-                defaultModel = "openai_whisper-small"
+            if !savedModel.isEmpty {
+                selectedModel = savedModel
+                print("Loaded saved model selection from UserDefaults: \(savedModel)")
+            } else {
+                selectedModel = Self.platformDefaultModel
+                UserDefaults.standard.set(selectedModel, forKey: .selectedModelKey)
+                print("Saved model is empty. Falling back to default: \(selectedModel)")
             }
-            // Use the default model if it passes our filter, otherwise use small model
-            selectedModel = shouldIncludeModel(defaultModel) ? defaultModel : selectedModel
+        } else {
+            selectedModel = Self.platformDefaultModel
             print("Using default model: \(selectedModel)")
-            // On initialization, save the selected model to UserDefaults
             UserDefaults.standard.set(selectedModel, forKey: .selectedModelKey)
         }
     }
     
     func fetchModels(includeRemote: Bool = true) async {
-        availableModels = []
-        
-        // Add selected model only if it passes filter
-        if shouldIncludeModel(selectedModel) {
-            availableModels.append(selectedModel)
-        }
-        
-        // Check what's already downloaded locally
         await checkLocalModels()
-        
-        // Add local models to available models
-        for model in localModels {
-            if !availableModels.contains(model) && shouldIncludeModel(model) {
-                availableModels.append(model)
+        var orderedModels: [String] = []
+        var seenModels = Set<String>()
+
+        func addModel(_ model: String) {
+            guard shouldIncludeModel(model), !seenModels.contains(model) else {
+                return
             }
+
+            seenModels.insert(model)
+            orderedModels.append(model)
         }
-        
+
         if includeRemote {
-            // Fetch remote models
             let remoteModelSupport = await WhisperKit.recommendedRemoteModels()
             for model in remoteModelSupport.supported {
-                if !availableModels.contains(model) && shouldIncludeModel(model) {
-                    availableModels.append(model)
-                }
+                addModel(model)
             }
-            for model in remoteModelSupport.disabled {
-                if !disabledModels.contains(model) {
-                    disabledModels.append(model)
-                }
-            }
+            disabledModels = remoteModelSupport.disabled
             print("recommendedRemoteModels: \(remoteModelSupport.supported)")
-            
-            // Always include large-v3-turbo multilingual model regardless of device recommendations
-            // The multilingual version uses hyphen: openai_whisper-large-v3-turbo
-            // The MB suffix versions (954MB) are English-only which we filter out
-            let largeTurboModel = "openai_whisper-large-v3-turbo"
-            if !availableModels.contains(largeTurboModel) {
-                availableModels.append(largeTurboModel)
-                print("Force-added large-v3-turbo multilingual model: \(largeTurboModel)")
-            }
+        } else {
+            disabledModels = []
         }
+
+        for model in localModels {
+            addModel(model)
+        }
+
+        // Keep selected model visible even if it is outside current recommendation set.
+        addModel(selectedModel)
+
+        availableModels = orderedModels
 
         print("Available models: \(availableModels)")
     }
@@ -302,8 +336,7 @@ class ModelManager: ObservableObject {
             if selectedModel == model || currentLoadedModel == model {
                 // If deleting the currently selected/loaded model, default to an available model
                 if selectedModel == model && !availableModels.isEmpty {
-                    // Choose the first non-local model, or default back to "small"
-                    let newModel = availableModels.first(where: { $0 != model }) ?? "small"
+                    let newModel = availableModels.first(where: { $0 != model }) ?? Self.platformDefaultModel
                     selectedModel = newModel // This triggers didSet to persist to UserDefaults
                     print("Changed selected model to \(newModel) after deletion")
                 }
@@ -369,35 +402,7 @@ class ModelManager: ObservableObject {
     }
     
     private func shouldIncludeModel(_ model: String) -> Bool {
-        let modelLower = model.lowercased()
-        
-        // Remove all English-only models (including those with MB suffix like 947mb, 954mb)
-        if modelLower.contains("english") || modelLower.contains(".en") {
-            return false
-        }
-        
-        // Remove English-only models with MB suffix (e.g., large-v3_947mb, large-v3-turbo_954mb)
-        // These are English-only variants that don't support multilingual transcription
-        if modelLower.contains("mb") && (modelLower.contains("947") || modelLower.contains("954") || modelLower.contains("_9")) {
-            return false
-        }
-        
-        // Remove tiny models
-        if modelLower.contains("tiny") {
-            return false
-        }
-        
-        // Remove all distill models
-        if modelLower.contains("distil") {
-            return false
-        }
-        
-        // For large models, remove v2
-        if modelLower.contains("large") && modelLower.contains("v2") {
-            return false
-        }
-
-        return true
+        !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     nonisolated static func displayName(for modelIdentifier: String) -> String {

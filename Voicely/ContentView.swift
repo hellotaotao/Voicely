@@ -514,6 +514,14 @@ struct VoiceNoteRow: View {
         transcriptionService.isLocallyTranscribing(note)
     }
 
+    private var isAwaitingTranscription: Bool {
+        note.isAwaitingTranscription
+    }
+
+    private var isTranscribingHere: Bool {
+        isLocallyTranscribing || isAwaitingTranscription
+    }
+
     private var isRemoteTranscribing: Bool {
         transcriptionService.isTranscribingOnAnotherDevice(note)
     }
@@ -523,7 +531,11 @@ struct VoiceNoteRow: View {
     }
 
     private var localProgress: Float {
-        transcriptionService.localProgress(for: note)
+        if isLocallyTranscribing {
+            return transcriptionService.localProgress(for: note)
+        }
+
+        return max(0, min(note.transcriptionProgress, 1))
     }
 
     private var lastTranscriptionFailureMessage: String? {
@@ -582,6 +594,19 @@ struct VoiceNoteRow: View {
                     ProgressView(value: localProgress)
                         .tint(.accentColor)
                 }
+            } else if isAwaitingTranscription {
+                VStack(alignment: .leading, spacing: 8) {
+                    StatusBadge(
+                        title: "Queued for transcription",
+                        systemImage: "clock.arrow.circlepath",
+                        tint: .orange
+                    )
+
+                    Text("This note is waiting for transcription to start.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             } else if isRemoteTranscribing {
                 Text("Transcription in progress on another device.")
                     .font(.subheadline)
@@ -609,6 +634,12 @@ struct VoiceNoteRow: View {
                     title: "Transcribing here",
                     systemImage: "waveform.badge.magnifyingglass",
                     tint: .accentColor
+                )
+            } else if isAwaitingTranscription {
+                StatusBadge(
+                    title: "Queued",
+                    systemImage: "clock.arrow.circlepath",
+                    tint: .orange
                 )
             } else if isRemoteTranscribing {
                 StatusBadge(
@@ -842,9 +873,15 @@ struct RecordingControls: View {
             audioFilePath: filePath
         )
         note.duration = duration
+        note.pendingTranscription = true
+        note.transcriptionProgress = 0.0
         onRecordingComplete(note)
 
         Task { @MainActor in
+            capturedCoordinator?.progressCallback = { progress in
+                note.transcriptionProgress = max(0, min(progress, 1))
+            }
+
             let accumulatedTranscript: String
             if let coord = capturedCoordinator {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
@@ -860,6 +897,7 @@ struct RecordingControls: View {
                     note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                         ?? transcriptionService.modelManager?.selectedModel
                     note.completeTranscription()
+                    note.clearTransientTranscriptionFlags()
                 }
                 return
             }
@@ -1082,6 +1120,14 @@ struct VoiceNoteDetailView: View {
         transcriptionService.isLocallyTranscribing(note)
     }
 
+    private var isAwaitingTranscription: Bool {
+        note.isAwaitingTranscription
+    }
+
+    private var isTranscribingHere: Bool {
+        isLocallyTranscribing || isAwaitingTranscription
+    }
+
     private var isRemoteTranscribing: Bool {
         transcriptionService.isTranscribingOnAnotherDevice(note)
     }
@@ -1095,7 +1141,11 @@ struct VoiceNoteDetailView: View {
     }
 
     private var localTranscriptionProgress: Float {
-        transcriptionService.localProgress(for: note)
+        if isLocallyTranscribing {
+            return transcriptionService.localProgress(for: note)
+        }
+
+        return max(0, min(note.transcriptionProgress, 1))
     }
 
     private var lastTranscriptionFailureMessage: String? {
@@ -1339,6 +1389,8 @@ struct VoiceNoteDetailView: View {
                 Group {
                     if isLocallyTranscribing {
                         transcriptionProgressContent
+                    } else if isAwaitingTranscription {
+                        queuedTranscriptionContent
                     } else if isRemoteTranscribing {
                         remoteTranscriptionContent
                     } else if !note.transcription.isEmpty {
@@ -1431,7 +1483,7 @@ struct VoiceNoteDetailView: View {
             Label("Transcribe", systemImage: "arrow.clockwise")
         }
         .buttonStyle(.borderedProminent)
-        .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
+        .disabled(note.audioFilePath.isEmpty || isTranscribingHere || isRemoteTranscribing)
         .fixedSize(horizontal: true, vertical: true)
     }
 
@@ -1441,7 +1493,7 @@ struct VoiceNoteDetailView: View {
         }
         .buttonStyle(.bordered)
         .help("Runs transcription again using the model currently selected in Settings.")
-        .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing || isRemoteTranscribing)
+        .disabled(note.audioFilePath.isEmpty || isTranscribingHere || isRemoteTranscribing)
         .fixedSize(horizontal: true, vertical: true)
     }
 
@@ -1460,10 +1512,12 @@ struct VoiceNoteDetailView: View {
             ProgressView(value: localTranscriptionProgress)
                 .tint(.accentColor)
 
-            Button(role: .cancel, action: cancelCurrentTranscription) {
-                Label("Cancel Transcription", systemImage: "xmark.circle")
+            if isLocallyTranscribing {
+                Button(role: .cancel, action: cancelCurrentTranscription) {
+                    Label("Cancel Transcription", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
         }
     }
 
@@ -1616,6 +1670,12 @@ struct VoiceNoteDetailView: View {
                 systemImage: "waveform.badge.magnifyingglass",
                 tint: Color.accentColor
             )
+        } else if isAwaitingTranscription {
+            StatusBadge(
+                title: "Queued",
+                systemImage: "clock.arrow.circlepath",
+                tint: .orange
+            )
         } else if isRemoteTranscribing {
             StatusBadge(
                 title: "Another device",
@@ -1702,6 +1762,20 @@ struct VoiceNoteDetailView: View {
             if didStart, !isEditing {
                 editedTranscription = note.transcription
             }
+        }
+    }
+
+    private var queuedTranscriptionContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            StatusBadge(
+                title: "Queued for transcription",
+                systemImage: "clock.arrow.circlepath",
+                tint: .orange
+            )
+
+            Text("This note is waiting in the transcription queue and will switch to live progress once the local task starts.")
+                .font(.body)
+                .foregroundStyle(.secondary)
         }
     }
 

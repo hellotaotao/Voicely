@@ -22,6 +22,9 @@ final class IncrementalTranscriptionCoordinator {
     /// Closure that returns the current number of frames written to the recording file.
     var frameCountProvider: () -> AVAudioFramePosition = { 0 }
 
+    /// Optional progress relay for UI updates when a segment is being transcribed.
+    var progressCallback: ((Float) -> Void)? = nil
+
     // MARK: Private
 
     private let transcriptionService: TranscriptionService
@@ -116,7 +119,11 @@ final class IncrementalTranscriptionCoordinator {
         if let override = transcribeOverride {
             textResult = await override(segmentURL.path)
         } else {
-            textResult = await transcriptionService.transcribeAudio(filePath: segmentURL.path)?.text
+            textResult = await transcriptionService.transcribeAudio(filePath: segmentURL.path) { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    self?.progressCallback?(progress)
+                }
+            }?.text
         }
         try? FileManager.default.removeItem(at: segmentURL)
 

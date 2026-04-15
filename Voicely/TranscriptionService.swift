@@ -97,7 +97,7 @@ class TranscriptionService: ObservableObject {
         note.transcription = ""
         note.lastTranscriptionDuration = 0
         note.transcriptionModelIdentifier = nil
-        note.clearLegacyTranscriptionFlags()
+        note.clearTransientTranscriptionFlags()
 
         if shouldStartImmediately {
             let attemptID = UUID().uuidString
@@ -128,7 +128,7 @@ class TranscriptionService: ObservableObject {
                 note.completeTranscription()
             }
 
-            note.clearLegacyTranscriptionFlags()
+            note.clearTransientTranscriptionFlags()
         }
 
         if migratedAny {
@@ -177,7 +177,7 @@ class TranscriptionService: ObservableObject {
                         queuedAt: queuedAt,
                         leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
                     )
-                    note.clearLegacyTranscriptionFlags()
+                    note.clearTransientTranscriptionFlags()
                     await transcribeClaimedNote(note, attemptID: attemptID)
                 case .resumeOwned(let attemptID):
                     note.claimTranscription(
@@ -186,7 +186,7 @@ class TranscriptionService: ObservableObject {
                         queuedAt: note.transcriptionQueuedAt ?? nowProvider(),
                         leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
                     )
-                    note.clearLegacyTranscriptionFlags()
+                    note.clearTransientTranscriptionFlags()
                     await transcribeClaimedNote(note, attemptID: attemptID)
                 }
 
@@ -223,7 +223,7 @@ class TranscriptionService: ObservableObject {
             queuedAt: queuedAt,
             leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
         )
-        note.clearLegacyTranscriptionFlags()
+        note.clearTransientTranscriptionFlags()
         await processPendingTranscriptions(notes: [note])
         return true
     }
@@ -560,7 +560,7 @@ private extension TranscriptionService {
             requeueNote(note, queuedAt: nowProvider())
         }
 
-        note.clearLegacyTranscriptionFlags()
+        note.clearTransientTranscriptionFlags()
     }
 
     func beginLocalTranscription(for note: VoiceNote, attemptID: String) {
@@ -574,7 +574,7 @@ private extension TranscriptionService {
             queuedAt: note.transcriptionQueuedAt ?? nowProvider(),
             leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
         )
-        note.clearLegacyTranscriptionFlags()
+        note.clearTransientTranscriptionFlags()
     }
 
     func endLocalTranscription(for noteID: UUID) {
@@ -587,7 +587,7 @@ private extension TranscriptionService {
 
     func requeueNote(_ note: VoiceNote, queuedAt: Date) {
         note.queueTranscription(at: queuedAt)
-        note.clearLegacyTranscriptionFlags()
+        note.clearTransientTranscriptionFlags()
     }
 
     func startLeaseHeartbeat(for note: VoiceNote, attemptID: String) {

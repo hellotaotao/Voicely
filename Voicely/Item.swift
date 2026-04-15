@@ -71,12 +71,24 @@ extension VoiceNote {
         !transcriptionStateRaw.isEmpty
     }
 
+    var isAwaitingTranscription: Bool {
+        get {
+            pendingTranscription
+        }
+        set {
+            pendingTranscription = newValue
+        }
+    }
+
     func queueTranscription(at queuedAt: Date) {
         transcriptionState = .queued
         transcriptionQueuedAt = queuedAt
         transcriptionOwnerDeviceID = nil
         transcriptionAttemptID = nil
         transcriptionLeaseExpiresAt = nil
+        pendingTranscription = true
+        isTranscribing = false
+        transcriptionProgress = 0.0
     }
 
     func claimTranscription(
@@ -91,6 +103,7 @@ extension VoiceNote {
         transcriptionQueuedAt = queuedAt
         transcriptionLeaseExpiresAt = leaseExpiresAt
         transcriptionLastErrorMessage = nil
+        pendingTranscription = false
     }
 
     func completeTranscription() {
@@ -99,15 +112,17 @@ extension VoiceNote {
         transcriptionAttemptID = nil
         transcriptionLeaseExpiresAt = nil
         transcriptionLastErrorMessage = nil
+        pendingTranscription = false
     }
 
     func markTranscriptionFailure(_ message: String) {
         transcriptionLastErrorMessage = message
     }
 
-    func clearLegacyTranscriptionFlags() {
+    func clearTransientTranscriptionFlags() {
         isTranscribing = false
         transcriptionProgress = 0.0
         pendingTranscription = false
     }
+
 }

@@ -38,19 +38,20 @@ struct ContentView: View {
                     defaultNavigationView
                 }
             }
-            .background(Color(.systemGroupedBackground))
+            .background(VoicelyTheme.groupedBackground)
         }
+        .tint(VoicelyTheme.accent)
         .onAppear(perform: syncInitialSelection)
         .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
         }
     }
-    
+
     private func shouldUseHorizontalLayout(geometry: GeometryProxy) -> Bool {
         return geometry.size.width > geometry.size.height
             && UIDevice.current.userInterfaceIdiom == .phone
     }
-    
+
     private func horizontalSplitView(geometry: GeometryProxy) -> some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
@@ -58,7 +59,7 @@ struct ContentView: View {
                 noteLibraryList(usesSplitNavigationSelection: false)
             }
             .frame(width: sidebarWidth(for: geometry))
-            .background(Color(.systemGroupedBackground))
+            .background(VoicelyTheme.groupedBackground)
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
                     .environmentObject(modelManager)
@@ -66,48 +67,51 @@ struct ContentView: View {
             .task {
                 await setupServices()
             }
-            
+
             Divider()
-            
+
             detailPane
         }
     }
-    
+
     private var defaultNavigationView: some View {
         NavigationSplitView {
             noteLibraryList(usesSplitNavigationSelection: true)
-            .navigationTitle("Voice Notes")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape.fill")
+                .navigationTitle("Voicely")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            showingSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.body.weight(.regular))
+                        }
+                        .tint(VoicelyTheme.accent)
+                        .accessibilityLabel("Settings")
+                        .accessibilityIdentifier("SettingsButton")
                     }
-                    .accessibilityLabel("Settings")
-                    .accessibilityIdentifier("SettingsButton")
-                }
 
-                ToolbarItem(placement: .principal) {
-                    if cloudManager.isCloudEnabled {
-                        SyncStatusView()
-                            .environmentObject(cloudManager)
+                    ToolbarItem(placement: .principal) {
+                        if cloudManager.isCloudEnabled {
+                            SyncStatusView()
+                                .environmentObject(cloudManager)
+                        }
+                    }
+
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        EditButton()
+                            .tint(VoicelyTheme.accent)
                     }
                 }
-
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
+                .toolbarBackground(.visible, for: .navigationBar)
+                .sheet(isPresented: $showingSettings) {
+                    SettingsView()
+                        .environmentObject(modelManager)
                 }
-            }
-            .toolbarBackground(.visible, for: .navigationBar)
-            .sheet(isPresented: $showingSettings) {
-                SettingsView()
-                    .environmentObject(modelManager)
-            }
-            .task {
-                await setupServices()
-            }
+                .task {
+                    await setupServices()
+                }
         } detail: {
             detailPane
         }
@@ -119,44 +123,41 @@ struct ContentView: View {
 
     private var compactSplitHeader: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Voice Notes")
-                    .font(.title2.weight(.semibold))
-
-                Text(librarySubtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
             Button {
                 showingSettings = true
             } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
-                    .background(Color(.secondarySystemGroupedBackground))
-                    .clipShape(Circle())
+                Image(systemName: "gearshape")
+                    .font(.body.weight(.regular))
+                    .foregroundStyle(VoicelyTheme.accent)
+                    .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
+
+            Spacer()
+
+            if cloudManager.isCloudEnabled {
+                SyncStatusView()
+                    .environmentObject(cloudManager)
+            }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.5)
+        }
     }
 
     private func noteLibraryList(usesSplitNavigationSelection: Bool) -> some View {
         ZStack(alignment: .bottom) {
             noteList(usesSplitNavigationSelection: usesSplitNavigationSelection)
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Color(.systemGroupedBackground))
-            .contentMargins(.bottom, sidebarRecordingOverlayInset, for: .scrollContent)
-            .refreshable {
-                await cloudManager.refreshSync()
-            }
-            
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(VoicelyTheme.groupedBackground)
+                .contentMargins(.bottom, sidebarRecordingOverlayInset, for: .scrollContent)
+                .refreshable {
+                    await cloudManager.refreshSync()
+                }
+
             RecordingControls(
                 audioService: audioService,
                 transcriptionService: transcriptionService,
@@ -168,11 +169,11 @@ struct ContentView: View {
                     selectedNoteID = note.id
                 }
             )
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .padding(.bottom, 12)
             .zIndex(1)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(VoicelyTheme.groupedBackground)
     }
 
     @ViewBuilder
@@ -207,22 +208,22 @@ struct ContentView: View {
                         }
                     }
                 )
-                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0))
+                .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 6, trailing: 12))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
         }
 
-        Section(voiceNotes.isEmpty ? "Get Started" : "Recent Recordings") {
+        Section {
             if voiceNotes.isEmpty {
                 EmptyLibraryCard()
-                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 10, trailing: 0))
+                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 10, trailing: 12))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             } else {
                 ForEach(voiceNotes) { note in
                     noteRow(note: note, usesSplitNavigationSelection: usesSplitNavigationSelection)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .contextMenu {
@@ -243,6 +244,14 @@ struct ContentView: View {
                 }
                 .onDelete(perform: deleteNotes)
             }
+        } header: {
+            if !voiceNotes.isEmpty {
+                SectionHeaderLabel(text: "Recordings")
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+                    .padding(.bottom, 2)
+                    .listRowInsets(EdgeInsets())
+            }
         }
     }
 
@@ -256,15 +265,13 @@ struct ContentView: View {
         return Group {
             if usesSplitNavigationSelection {
                 NavigationLink(value: note.id) {
-                    row
-                        .foregroundStyle(.primary)
+                    row.foregroundStyle(.primary)
                 }
             } else {
                 Button {
                     selectedNoteID = note.id
                 } label: {
-                    row
-                        .foregroundStyle(.primary)
+                    row.foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
             }
@@ -280,7 +287,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemGroupedBackground))
+        .background(VoicelyTheme.groupedBackground)
     }
 
     private func detailView(_ note: VoiceNote) -> some View {
@@ -288,12 +295,8 @@ struct ContentView: View {
             .environmentObject(transcriptionService)
     }
 
-    private var librarySubtitle: String {
-        voiceNotes.isEmpty ? "Ready to capture your first recording." : "\(voiceNotes.count) recordings"
-    }
-
     private var sidebarRecordingOverlayInset: CGFloat {
-        120
+        96
     }
 
     private func syncInitialSelection() {
@@ -328,13 +331,11 @@ struct ContentView: View {
         await modelManager.fetchModels(includeRemote: false)
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
 
-        // Migrate local files to iCloud if available
         if cloudManager.isCloudEnabled {
             await cloudManager.migrateLocalFilesToCloudIfNeeded()
             await cloudManager.refreshSync()
         }
 
-        // Always preload model on startup to optimize user experience
         if !transcriptionService.isWhisperAvailable() {
             Task {
                 let _ = await transcriptionService.loadWhisperModel()
@@ -349,7 +350,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func deleteNote(_ note: VoiceNote) {
         withAnimation {
             deleteNoteAndAudio(note)
@@ -375,11 +376,13 @@ struct ContentView: View {
 
         modelContext.delete(note)
     }
-    
+
     private func cancelTranscription(for note: VoiceNote) {
         transcriptionService.cancelTranscription(for: note)
     }
 }
+
+// MARK: - Voice Note Row
 
 struct VoiceNoteRow: View {
     let note: VoiceNote
@@ -394,10 +397,6 @@ struct VoiceNoteRow: View {
         note.isAwaitingTranscription
     }
 
-    private var isTranscribingHere: Bool {
-        isLocallyTranscribing || isAwaitingTranscription
-    }
-
     private var isRemoteTranscribing: Bool {
         transcriptionService.isTranscribingOnAnotherDevice(note)
     }
@@ -410,7 +409,6 @@ struct VoiceNoteRow: View {
         if isLocallyTranscribing {
             return transcriptionService.localProgress(for: note)
         }
-
         return max(0, min(note.transcriptionProgress, 1))
     }
 
@@ -422,171 +420,120 @@ struct VoiceNoteRow: View {
         return message
     }
 
-    private var pendingBadgeTitle: String {
-        lastTranscriptionFailureMessage == nil ? "Transcription pending" : "Retry queued"
+    private var previewText: String? {
+        let trimmed = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        if isLocallyTranscribing { return "Transcribing…" }
+        if isAwaitingTranscription { return "Queued for transcription." }
+        if isRemoteTranscribing { return "Transcribing on another device." }
+        if let lastTranscriptionFailureMessage { return lastTranscriptionFailureMessage }
+        return nil
     }
 
-    private var pendingBadgeTint: Color {
-        lastTranscriptionFailureMessage == nil ? .orange : .red
+    private var statusBadge: PillBadge? {
+        if isLocallyTranscribing {
+            return PillBadge(text: "Transcribing…", systemImage: "waveform", variant: .accent)
+        } else if isAwaitingTranscription {
+            return PillBadge(text: "Queued", systemImage: "clock.arrow.circlepath", variant: .warning)
+        } else if isRemoteTranscribing {
+            return PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
+        } else if isPending {
+            let title = lastTranscriptionFailureMessage == nil ? "Transcription pending" : "Retry queued"
+            let variant: PillBadge.Variant = lastTranscriptionFailureMessage == nil ? .warning : .danger
+            return PillBadge(text: title, systemImage: "clock.arrow.circlepath", variant: variant)
+        }
+        return nil
+    }
+
+    private var durationText: String {
+        formatDuration(note.duration)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(note.title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
+        HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(isSelected ? VoicelyTheme.accent : Color.clear)
+                .frame(width: 2.5)
+                .padding(.vertical, 10)
 
-                    Text(note.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(note.title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(isSelected ? VoicelyTheme.accent : .primary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+
+                    HStack(spacing: 3) {
+                        Image(systemName: "waveform")
+                            .font(.caption2)
+                        Text(durationText)
+                            .font(.caption)
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(.tertiary)
                 }
 
-                Spacer(minLength: 8)
+                Text(note.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
 
-                StatusBadge(
-                    title: formatDuration(note.duration),
-                    systemImage: "clock",
-                    tint: .secondary
-                )
-            }
+                if let previewText {
+                    Text(previewText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .padding(.top, 2)
+                }
 
-            if isLocallyTranscribing {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Transcribing")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Text("\(Int(localProgress * 100))%")
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-
+                if isLocallyTranscribing {
                     ProgressView(value: localProgress)
                         .tint(.accentColor)
+                        .padding(.top, 4)
                 }
-            } else if isAwaitingTranscription {
-                VStack(alignment: .leading, spacing: 8) {
-                    StatusBadge(
-                        title: "Queued for transcription",
-                        systemImage: "clock.arrow.circlepath",
-                        tint: .orange
-                    )
 
-                    Text("This note is waiting for transcription to start.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                if let statusBadge {
+                    statusBadge
+                        .padding(.top, 2)
                 }
-            } else if isRemoteTranscribing {
-                Text("Transcription in progress on another device.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else if !note.transcription.isEmpty {
-                Text(note.transcription)
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(3)
-            } else if isPending {
-                Text(lastTranscriptionFailureMessage ?? "Audio saved and waiting for transcription.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else {
-                Text("Open the note to play back or edit the transcript.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(rowBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isSelected ? VoicelyTheme.accent.opacity(0.32) : Color.clear, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .animation(.easeOut(duration: 0.12), value: isSelected)
+    }
 
-            if isLocallyTranscribing {
-                StatusBadge(
-                    title: "Transcribing here",
-                    systemImage: "waveform.badge.magnifyingglass",
-                    tint: .accentColor
-                )
-            } else if isAwaitingTranscription {
-                StatusBadge(
-                    title: "Queued",
-                    systemImage: "clock.arrow.circlepath",
-                    tint: .orange
-                )
-            } else if isRemoteTranscribing {
-                StatusBadge(
-                    title: "Another device",
-                    systemImage: "desktopcomputer.and.iphone",
-                    tint: .blue
-                )
-            } else if isPending {
-                StatusBadge(
-                    title: pendingBadgeTitle,
-                    systemImage: "clock.arrow.circlepath",
-                    tint: pendingBadgeTint
-                )
+    private var rowBackground: some View {
+        Group {
+            if isSelected {
+                VoicelyTheme.accent.opacity(0.12)
+            } else {
+                Color.clear
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(backgroundShape)
-        .overlay(borderShape)
-        .shadow(color: isSelected ? Color.black.opacity(0.08) : .clear, radius: 12, y: 6)
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.minute, .second]
-        formatter.unitsStyle = .abbreviated
-        if let formatted = formatter.string(from: duration), !formatted.isEmpty {
-            return formatted
+        let total = Int(duration.rounded())
+        let minutes = total / 60
+        let seconds = total % 60
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
         }
-        return "0s"
-    }
-
-    private var backgroundShape: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(
-                isSelected
-                    ? Color.accentColor.opacity(0.10)
-                    : Color(.secondarySystemGroupedBackground)
-            )
-    }
-
-    private var borderShape: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .stroke(
-                isSelected
-                    ? Color.accentColor.opacity(0.28)
-                    : Color.primary.opacity(0.05),
-                lineWidth: 1
-            )
+        return "\(seconds)s"
     }
 }
 
-private struct FloatingPanelBackground: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, macCatalyst 26.0, *) {
-            content
-                .glassEffect(
-                    .regular.interactive(),
-                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)
-                )
-        } else {
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.9)
-                )
-        }
-    }
-}
+// MARK: - Recording Controls
 
 struct RecordingControls: View {
     @ObservedObject var audioService: AudioRecordingService
@@ -619,47 +566,18 @@ struct RecordingControls: View {
         return ModelManager.displayName(for: selectedModel)
     }
 
-    private var selectedModelStatusTitle: String {
-        if !audioService.hasPermission {
-            return "Mic Off"
-        }
-
-        guard let modelManager else {
-            return "Manage"
-        }
-
+    private var statusTint: Color {
+        if !audioService.hasPermission { return .orange }
+        guard let modelManager else { return .secondary }
         switch modelManager.modelState {
-        case .loaded:
-            return "Ready"
-        case .loading, .downloading, .prewarming:
-            return "Loading"
-        case .unloaded:
-            return modelManager.isSelectedModelDownloaded() ? "Local" : "Manage"
-        }
-    }
-
-    private var selectedModelStatusTint: Color {
-        if !audioService.hasPermission {
-            return .orange
-        }
-
-        guard let modelManager else {
-            return .secondary
-        }
-
-        switch modelManager.modelState {
-        case .loaded:
-            return .green
-        case .loading, .downloading, .prewarming:
-            return .orange
-        case .unloaded:
-            return modelManager.isSelectedModelDownloaded() ? .secondary : .accentColor
+        case .loaded: return .green
+        case .loading, .downloading, .prewarming: return .orange
+        case .unloaded: return modelManager.isSelectedModelDownloaded() ? .secondary : .accentColor
         }
     }
 
     private var quickSelectableModels: [String] {
         guard let modelManager else { return [] }
-
         return modelManager.localModels.sorted { lhs, rhs in
             ModelManager.displayName(for: lhs).localizedCaseInsensitiveCompare(ModelManager.displayName(for: rhs)) == .orderedAscending
         }
@@ -669,23 +587,19 @@ struct RecordingControls: View {
         if quickSelectableModels.isEmpty {
             return "Download a model in Settings to make it available here."
         }
-
         return "Choose a downloaded model for new transcriptions."
     }
 
     var body: some View {
-        HStack(spacing: 14) {
-            waveformRail
-            controlsCluster
+        Group {
+            if audioService.isRecording {
+                recordingLayout
+            } else {
+                idleLayout
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 14)
-        .frame(height: 92)
-        .frame(maxWidth: .infinity)
-        .modifier(FloatingPanelBackground())
-        .shadow(color: Color.black.opacity(0.18), radius: 28, y: 14)
-        .animation(.spring(response: 0.26, dampingFraction: 0.84), value: audioService.isRecording)
-        .animation(.spring(response: 0.26, dampingFraction: 0.84), value: audioService.isPaused)
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: audioService.isRecording)
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: audioService.isPaused)
         .confirmationDialog(
             "Transcription Model",
             isPresented: $showingModelPicker,
@@ -699,15 +613,124 @@ struct RecordingControls: View {
                     .disabled(isModelLoading)
                 }
             }
-
-            Button("Manage Models…") {
-                onManageModels()
-            }
-
+            Button("Manage Models…") { onManageModels() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(modelPickerMessage)
         }
+    }
+
+    private var idleLayout: some View {
+        HStack(spacing: 10) {
+            Button {
+                showingModelPicker = true
+            } label: {
+                HStack(spacing: 10) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(statusTint)
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Model")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(selectedModelDisplayName)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(VoicelyTheme.surface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(VoicelyTheme.subtleBorder, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            recordButton
+        }
+    }
+
+    private var recordingLayout: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
+                    .opacity(audioService.isPaused ? 0.4 : 1.0)
+
+                AudioWaveformView(
+                    isAnimating: audioService.isRecording && !audioService.isPaused,
+                    audioService: audioService
+                )
+                .frame(height: 22)
+                .frame(maxWidth: .infinity)
+
+                Text(formatDuration(audioService.recordingDuration))
+                    .font(.footnote.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.red)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.red.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.red.opacity(0.22), lineWidth: 1)
+            )
+
+            Button(action: togglePauseResume) {
+                Image(systemName: audioService.isPaused ? "play.fill" : "pause.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 40, height: 40)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(.plain)
+
+            stopButton
+        }
+    }
+
+    private var recordButton: some View {
+        Button(action: audioService.isRecording ? stopRecording : startRecording) {
+            Image(systemName: audioService.hasPermission ? "mic.fill" : "mic.slash.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.black)
+                .frame(width: 44, height: 44)
+                .background(
+                    Circle().fill(audioService.hasPermission ? VoicelyTheme.accent : Color.gray)
+                )
+                .shadow(color: audioService.hasPermission ? VoicelyTheme.accent.opacity(0.35) : .clear, radius: 12, y: 4)
+        }
+        .buttonStyle(.plain)
+        .disabled(!audioService.hasPermission)
+    }
+
+    private var stopButton: some View {
+        Button(action: stopRecording) {
+            Image(systemName: "stop.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(Color.red))
+                .shadow(color: Color.red.opacity(0.35), radius: 12, y: 4)
+        }
+        .buttonStyle(.plain)
     }
 
     private func startRecording() {
@@ -743,7 +766,6 @@ struct RecordingControls: View {
 
         guard let filePath else { return }
 
-        // Create the note immediately so the user gets instant feedback after stopping recording.
         let note = VoiceNote(
             title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
             audioFilePath: filePath
@@ -791,89 +813,6 @@ struct RecordingControls: View {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    private var waveformRail: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(audioService.isRecording ? Color.accentColor.opacity(0.08) : Color(.quaternarySystemFill))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
-            )
-            .overlay {
-                Group {
-                    if audioService.isRecording {
-                        recordingWaveformRailContent
-                    } else {
-                        modelSelectionRailContent
-                    }
-                }
-                .padding(.horizontal, 14)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-    }
-
-    private var recordingWaveformRailContent: some View {
-        HStack(spacing: 12) {
-            AudioWaveformView(
-                isAnimating: audioService.isRecording && !audioService.isPaused,
-                audioService: audioService,
-                visualStyle: .active
-            )
-            .frame(width: 92, height: 24)
-
-            Spacer(minLength: 8)
-
-            Text(formatDuration(audioService.recordingDuration))
-                .font(.subheadline.weight(.semibold))
-                .monospacedDigit()
-                .foregroundStyle(.primary)
-                .frame(width: 44, alignment: .trailing)
-        }
-    }
-
-    private var modelSelectionRailContent: some View {
-        Button {
-            showingModelPicker = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "cpu")
-                    .font(.headline)
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 30, height: 30)
-                    .background(Color.accentColor.opacity(0.12), in: Circle())
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Transcription Model")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    Text(selectedModelDisplayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(selectedModelStatusTitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(selectedModelStatusTint)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(selectedModelStatusTint.opacity(0.12), in: Capsule())
-
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     private func modelPickerButtonTitle(for model: String) -> String {
         let displayName = ModelManager.displayName(for: model)
         if modelManager?.selectedModel == model {
@@ -900,67 +839,9 @@ struct RecordingControls: View {
             await modelManager.loadModel(model)
         }
     }
-
-    private var controlsCluster: some View {
-        Group {
-            if audioService.isRecording {
-                HStack(spacing: 12) {
-                    secondaryControlSlot
-                    primaryActionButton
-                }
-                .frame(width: 128, alignment: .trailing)
-            } else {
-                primaryActionButton
-            }
-        }
-    }
-
-    private var secondaryControlSlot: some View {
-        VStack(spacing: 6) {
-            Button(action: togglePauseResume) {
-                Image(systemName: audioService.isPaused ? "play.fill" : "pause.fill")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(audioService.isPaused ? .green : .orange)
-                    .frame(width: 40, height: 40)
-                    .background(Color(.tertiarySystemFill))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-
-            Text(audioService.isPaused ? "Paused" : "Recording")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(width: 68, height: 60, alignment: .center)
-    }
-
-    private var primaryActionButton: some View {
-        Button(action: audioService.isRecording ? stopRecording : startRecording) {
-            Image(systemName: audioService.isRecording ? "stop.fill" : "mic.fill")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(
-                    Circle().fill(
-                        audioService.isRecording
-                            ? AnyShapeStyle(Color.red.gradient)
-                            : AnyShapeStyle(audioService.hasPermission ? Color.accentColor.gradient : Color.gray.gradient)
-                    )
-                )
-                .shadow(
-                    color: audioService.isRecording
-                        ? Color.red.opacity(0.24)
-                        : audioService.hasPermission ? Color.accentColor.opacity(0.22) : .clear,
-                    radius: 10,
-                    y: 5
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(!audioService.hasPermission && !audioService.isRecording)
-    }
 }
+
+// MARK: - Voice Note Detail
 
 struct VoiceNoteDetailView: View {
     let note: VoiceNote
@@ -973,16 +854,12 @@ struct VoiceNoteDetailView: View {
     @State private var showingRetranscribeConfirmation = false
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
+    @State private var copyConfirmVisible = false
     @StateObject private var audioPlayer = AudioPlayerService()
 
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
         return modelManager.isModelLoaded()
-    }
-
-    // Monitor model loading state changes
-    private var modelLoadingState: ModelState {
-        return transcriptionService.modelManager?.modelState ?? .unloaded
     }
 
     private var selectedModelDisplayName: String? {
@@ -1020,7 +897,6 @@ struct VoiceNoteDetailView: View {
         if isLocallyTranscribing {
             return transcriptionService.localProgress(for: note)
         }
-
         return max(0, min(note.transcriptionProgress, 1))
     }
 
@@ -1032,54 +908,8 @@ struct VoiceNoteDetailView: View {
         return message
     }
 
-    private var pendingStatusTitle: String {
-        lastTranscriptionFailureMessage == nil ? "Waiting for transcription" : "Retry queued"
-    }
-
-    private var pendingStatusTint: Color {
-        lastTranscriptionFailureMessage == nil ? .orange : .red
-    }
-
     private var usesCompactDetailLayout: Bool {
         UIDevice.current.userInterfaceIdiom == .phone && horizontalSizeClass == .compact
-    }
-
-    private var transcriptionSummaryText: String? {
-        guard !note.transcription.isEmpty else {
-            if let lastTranscriptionFailureMessage {
-                return lastTranscriptionFailureMessage
-            }
-            return note.lastTranscriptionDuration > 0
-                ? "Last run: \(transcriptionService.formatTranscriptionDuration(note.lastTranscriptionDuration))."
-                : nil
-        }
-
-        var parts: [String] = []
-
-        if note.lastTranscriptionDuration > 0 {
-            var lastRun = "Last run: \(transcriptionService.formatTranscriptionDuration(note.lastTranscriptionDuration))"
-            if let modelName = note.transcriptionModelDisplayName {
-                lastRun += " using \(modelName)"
-            }
-            parts.append(lastRun + ".")
-        } else if let modelName = note.transcriptionModelDisplayName {
-            parts.append("Transcribed with \(modelName).")
-        }
-
-        if note.transcriptionModelDisplayName == nil {
-            parts.append("Model not recorded for this transcript.")
-        }
-
-        if let selectedModelDisplayName,
-           note.transcriptionModelDisplayName != selectedModelDisplayName {
-            parts.append("Selected now: \(selectedModelDisplayName).")
-        }
-
-        if let lastTranscriptionFailureMessage {
-            parts.append(lastTranscriptionFailureMessage)
-        }
-
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private var retranscribeConfirmationMessage: String {
@@ -1097,10 +927,18 @@ struct VoiceNoteDetailView: View {
         return "This will run transcription again using \(nextModel) and replace the current transcript."
     }
 
+    private var durationLabel: String {
+        let total = Int(note.duration.rounded())
+        let minutes = total / 60
+        let seconds = total % 60
+        return minutes > 0 ? "\(minutes)m \(seconds)s" : "\(seconds)s"
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: usesCompactDetailLayout ? 16 : 20) {
-                detailHeaderCard
+            VStack(alignment: .leading, spacing: 16) {
+                headerBlock
+                metadataRow
 
                 if !note.audioFilePath.isEmpty {
                     audioPlayerCard
@@ -1110,8 +948,19 @@ struct VoiceNoteDetailView: View {
             }
             .padding(usesCompactDetailLayout ? 16 : 20)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(VoicelyTheme.groupedBackground)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if usesCompactDetailLayout {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: toggleEdit) {
+                        Text(isEditing ? "Done" : "Edit")
+                            .font(.body.weight(.medium))
+                    }
+                    .tint(VoicelyTheme.accent)
+                }
+            }
+        }
         .sheet(isPresented: $showingShareSheet) {
             ShareSheet(activityItems: [shareableTranscriptionText()])
         }
@@ -1126,9 +975,7 @@ struct VoiceNoteDetailView: View {
             isPresented: $showingRetranscribeConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Re-transcribe") {
-                requestTranscription(force: true)
-            }
+            Button("Re-transcribe") { requestTranscription(force: true) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(retranscribeConfirmationMessage)
@@ -1146,323 +993,359 @@ struct VoiceNoteDetailView: View {
         }
     }
 
-    private var detailHeaderCard: some View {
-        SectionCard(contentPadding: 14) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    headerIcon
-
-                    headerTitleContent
-
-                    Spacer(minLength: 8)
-
-                    editButton
+    private var headerBlock: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                if isEditing {
+                    TextField("Note title", text: $editedTitle)
+                        .font(.title.weight(.bold))
+                        .textFieldStyle(.plain)
+                } else {
+                    Text(note.title)
+                        .font(.title.weight(.bold))
+                        .tracking(-0.5)
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
                 }
+                Text(note.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
 
-                WrappingFlowLayout(horizontalSpacing: 8, verticalSpacing: 8) {
-                    headerStatusBadges
+            if !usesCompactDetailLayout {
+                Button(action: toggleEdit) {
+                    HStack(spacing: 5) {
+                        Image(systemName: isEditing ? "checkmark" : "pencil")
+                            .font(.caption.weight(.semibold))
+                        Text(isEditing ? "Done" : "Edit")
+                            .font(.footnote.weight(.medium))
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(VoicelyTheme.surface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(VoicelyTheme.hairline, lineWidth: 1)
+                    )
                 }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var metadataRow: some View {
+        WrappingFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+            PillBadge(text: durationLabel, systemImage: "clock", variant: .neutral)
+
+            if isLocallyTranscribing {
+                PillBadge(text: "Processing", systemImage: "waveform", variant: .accent)
+            } else if isAwaitingTranscription {
+                PillBadge(text: "Queued", systemImage: "clock.arrow.circlepath", variant: .warning)
+            } else if isRemoteTranscribing {
+                PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
+            } else if shouldShowPendingState {
+                PillBadge(text: "Pending", systemImage: "clock.arrow.circlepath", variant: .warning)
+            } else if !note.transcription.isEmpty {
+                PillBadge(text: "Transcript", systemImage: "checkmark", variant: .success)
+                PillBadge(
+                    text: note.transcriptionModelDisplayName ?? "Model Unknown",
+                    systemImage: note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu",
+                    variant: note.transcriptionModelDisplayName == nil ? .neutral : .info
+                )
             }
         }
     }
 
     private var audioPlayerCard: some View {
-        SectionCard(contentPadding: 14) {
-            VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    timeProgressRow
-                    playbackRateMenu
-                }
+        SurfaceCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 14) {
+                WaveformBars(
+                    seed: waveformSeed,
+                    progress: waveformProgress,
+                    activeTint: VoicelyTheme.accent,
+                    inactiveTint: .secondary,
+                    height: usesCompactDetailLayout ? 54 : 56,
+                    onSeek: { ratio in
+                        let target = ratio * max(audioPlayer.duration, 0)
+                        audioPlayer.seek(to: target)
+                    }
+                )
 
-                HStack(spacing: 14) {
-                    Spacer()
+                HStack(spacing: 12) {
+                    Text(formatTime(audioPlayer.currentTime))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 44, alignment: .leading)
 
-                    transportButton(systemImage: "gobackward.5", size: 38) {
-                        audioPlayer.seekBackward()
+                    HStack(spacing: 18) {
+                        Spacer(minLength: 0)
+                        transportButton(systemImage: "gobackward.15") {
+                            audioPlayer.seekBackward(seconds: 15)
+                        }
+                        playButton
+                        transportButton(systemImage: "goforward.15") {
+                            audioPlayer.seekForward(seconds: 15)
+                        }
+                        Spacer(minLength: 0)
                     }
 
-                    Button(action: { audioPlayer.togglePlayPause() }) {
-                        Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 54, height: 54)
-                            .background(Circle().fill(Color.accentColor.gradient))
-                            .shadow(color: Color.accentColor.opacity(0.24), radius: 10, y: 5)
+                    HStack(spacing: 6) {
+                        Text(formatTime(audioPlayer.duration))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                        Button(action: cyclePlaybackRate) {
+                            Text(String(format: "%.2g×", audioPlayer.playbackRate))
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .fill(VoicelyTheme.surfaceRaised)
+                                )
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-
-                    transportButton(systemImage: "goforward.5", size: 38) {
-                        audioPlayer.seekForward()
-                    }
-
-                    Spacer()
+                    .frame(minWidth: 90, alignment: .trailing)
                 }
 
                 if audioPlayer.isPreparingAudio {
                     HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(audioPlayer.playbackStatusMessage ?? "Preparing audio...")
+                        ProgressView().controlSize(.small)
+                        Text(audioPlayer.playbackStatusMessage ?? "Preparing audio…")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else if let playbackStatusMessage = audioPlayer.playbackStatusMessage {
-                    Text(playbackStatusMessage)
+                } else if let msg = audioPlayer.playbackStatusMessage {
+                    Text(msg)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
     }
 
-    private var playbackRateMenu: some View {
-        Menu {
-            Picker("Speed", selection: $audioPlayer.playbackRate) {
-                Text("0.5x").tag(Float(0.5))
-                Text("0.75x").tag(Float(0.75))
-                Text("1x").tag(Float(1.0))
-                Text("1.25x").tag(Float(1.25))
-                Text("1.5x").tag(Float(1.5))
-                Text("2x").tag(Float(2.0))
-            }
-            .onChange(of: audioPlayer.playbackRate) { _, newRate in
-                audioPlayer.setPlaybackRate(newRate)
-            }
-        } label: {
-            Text(String(format: "%.2gx", audioPlayer.playbackRate))
-                .font(.footnote.weight(.semibold))
+    private var waveformSeed: Int {
+        abs(note.id.uuidString.hashValue) % 10_000
+    }
+
+    private var waveformProgress: Double {
+        guard audioPlayer.duration > 0 else { return 0 }
+        return min(max(audioPlayer.currentTime / audioPlayer.duration, 0), 1)
+    }
+
+    private var playButton: some View {
+        Button(action: { audioPlayer.togglePlayPause() }) {
+            Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(Color.black)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(VoicelyTheme.accent))
+                .shadow(color: VoicelyTheme.accent.opacity(0.35), radius: 10, y: 4)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.plain)
+    }
+
+    private func transportButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.regular))
+                .foregroundStyle(.secondary)
+                .frame(width: 38, height: 38)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func cyclePlaybackRate() {
+        let current = audioPlayer.playbackRate
+        let next: Float
+        if current < 1.0 - 0.01 { next = 1.0 }
+        else if current < 1.5 - 0.01 { next = 1.5 }
+        else if current < 2.0 - 0.01 { next = 2.0 }
+        else { next = 1.0 }
+        audioPlayer.setPlaybackRate(next)
     }
 
     private var transcriptionCard: some View {
-        SectionCard {
-            VStack(alignment: .leading, spacing: 16) {
-                if usesCompactDetailLayout {
-                    VStack(alignment: .leading, spacing: 12) {
-                        transcriptionHeaderContent
-                        compactTranscriptionActions
+        SurfaceCard(padding: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Transcription")
+                        .font(.subheadline.weight(.semibold))
+                    if let modelName = note.transcriptionModelDisplayName {
+                        Text(modelName)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
                     }
-                } else {
-                    HStack(alignment: .top, spacing: 12) {
-                        transcriptionHeaderContent
-
-                        Spacer()
-
-                        regularTranscriptionActions
-                    }
+                    Spacer(minLength: 8)
+                    transcriptionToolbar
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
 
-                Group {
-                    if isLocallyTranscribing {
-                        transcriptionProgressContent
-                    } else if isAwaitingTranscription {
-                        queuedTranscriptionContent
-                    } else if isRemoteTranscribing {
-                        remoteTranscriptionContent
-                    } else if !note.transcription.isEmpty {
-                        transcriptionTextContent
-                    } else if shouldShowPendingState {
-                        pendingTranscriptionContent
-                    } else {
-                        emptyTranscriptionContent
-                    }
-                }
+                Divider().opacity(0.5)
+
+                transcriptionBody
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
             }
         }
     }
 
-    private var regularTranscriptionActions: some View {
-        HStack(spacing: 10) {
+    @ViewBuilder
+    private var transcriptionToolbar: some View {
+        HStack(spacing: 6) {
             if !note.transcription.isEmpty {
-                copyButton
-                shareButton
+                Button(action: copyTranscription) {
+                    Image(systemName: copyConfirmVisible ? "checkmark" : "doc.on.doc")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(copyConfirmVisible ? Color.green : .secondary)
+                        .frame(width: 32, height: 28)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.05))
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: shareTranscription) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 28)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.05))
+                        )
+                }
+                .buttonStyle(.plain)
             }
 
             if shouldShowTakeOverAction {
-                takeOverButton
+                retranscribeActionButton(title: "Take over", systemImage: "arrow.triangle.branch") {
+                    requestTranscription(takeOver: true)
+                }
             } else if note.transcription.isEmpty {
-                transcribeButton
+                retranscribeActionButton(title: "Transcribe", systemImage: "wand.and.stars") {
+                    requestTranscription()
+                }
             } else {
-                retranscribeButton
+                retranscribeActionButton(title: "Re-transcribe", systemImage: "arrow.clockwise") {
+                    showingRetranscribeConfirmation = true
+                }
             }
         }
     }
 
-    private var compactTranscriptionActions: some View {
-        WrappingFlowLayout(horizontalSpacing: 10, verticalSpacing: 10) {
-            if !note.transcription.isEmpty {
-                copyButton
-                shareButton
+    private func retranscribeActionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                Text(title)
+                    .font(.footnote.weight(.medium))
             }
-
-            if shouldShowTakeOverAction {
-                takeOverButton
-            } else if note.transcription.isEmpty {
-                transcribeButton
-            } else {
-                retranscribeButton
-            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(VoicelyTheme.surfaceRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(VoicelyTheme.hairline, lineWidth: 1)
+            )
         }
-    }
-
-    private var transcriptionHeaderContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Transcription")
-                .font(.headline)
-
-            if let transcriptionSummaryText {
-                Text(transcriptionSummaryText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var copyButton: some View {
-        Button(action: copyTranscription) {
-            Image(systemName: "square.on.square")
-        }
-        .buttonStyle(.bordered)
-        .fixedSize(horizontal: true, vertical: true)
-    }
-
-    private var shareButton: some View {
-        Button(action: shareTranscription) {
-            Image(systemName: "square.and.arrow.up")
-        }
-        .buttonStyle(.bordered)
-        .fixedSize(horizontal: true, vertical: true)
-    }
-
-    private var takeOverButton: some View {
-        Button(action: { requestTranscription(takeOver: true) }) {
-            Label("Take over on this device", systemImage: "arrow.triangle.branch")
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(note.audioFilePath.isEmpty || isLocallyTranscribing)
-        .help("Claims the current transcription on this device and lets the other device finish without saving.")
-        .fixedSize(horizontal: true, vertical: true)
-    }
-
-    private var transcribeButton: some View {
-        Button(action: { requestTranscription() }) {
-            Label("Transcribe", systemImage: "arrow.clockwise")
-        }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.plain)
         .disabled(note.audioFilePath.isEmpty || isTranscribingHere || isRemoteTranscribing)
-        .fixedSize(horizontal: true, vertical: true)
     }
 
-    private var retranscribeButton: some View {
-        Button(action: { showingRetranscribeConfirmation = true }) {
-            Label("Re-transcribe", systemImage: "arrow.clockwise")
-        }
-        .buttonStyle(.bordered)
-        .help("Runs transcription again using the model currently selected in Settings.")
-        .disabled(note.audioFilePath.isEmpty || isTranscribingHere || isRemoteTranscribing)
-        .fixedSize(horizontal: true, vertical: true)
-    }
-
-    private var transcriptionProgressContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                ProgressView()
-                Text("Transcribing audio…")
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Text("\(Int(localTranscriptionProgress * 100))%")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            ProgressView(value: localTranscriptionProgress)
-                .tint(.accentColor)
-
-            if isLocallyTranscribing {
+    @ViewBuilder
+    private var transcriptionBody: some View {
+        if isLocallyTranscribing {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    ProgressView()
+                    Text("Transcribing audio…")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Text("\(Int(localTranscriptionProgress * 100))%")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: localTranscriptionProgress)
+                    .tint(.accentColor)
                 Button(role: .cancel, action: cancelCurrentTranscription) {
                     Label("Cancel Transcription", systemImage: "xmark.circle")
                 }
                 .buttonStyle(.bordered)
             }
-        }
-    }
-
-    private var remoteTranscriptionContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            StatusBadge(
-                title: "Transcribing on another device",
-                systemImage: "desktopcomputer.and.iphone",
-                tint: .blue
-            )
-
-            Text("This recording is currently being transcribed elsewhere. The transcript will appear here after sync finishes.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var transcriptionTextContent: some View {
-        Group {
+        } else if isAwaitingTranscription {
+            VStack(alignment: .leading, spacing: 10) {
+                PillBadge(text: "Queued for transcription", systemImage: "clock.arrow.circlepath", variant: .warning)
+                Text("This note is waiting in the transcription queue and will switch to live progress once the local task starts.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } else if isRemoteTranscribing {
+            VStack(alignment: .leading, spacing: 10) {
+                PillBadge(text: "Transcribing on another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
+                Text("This recording is currently being transcribed elsewhere. The transcript will appear here after sync finishes.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } else if !note.transcription.isEmpty {
             if isEditing {
                 TextEditor(text: $editedTranscription)
                     .font(.body)
-                    .frame(minHeight: 240)
+                    .frame(minHeight: 220)
                     .padding(12)
-                    .background(Color(.tertiarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(VoicelyTheme.surfaceRaised)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
                 Text(note.transcription)
                     .font(.body)
+                    .lineSpacing(6)
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
-    }
-
-    private var pendingTranscriptionContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            StatusBadge(
-                title: pendingStatusTitle,
-                systemImage: "clock.arrow.circlepath",
-                tint: pendingStatusTint
-            )
-
-            if let lastTranscriptionFailureMessage {
-                Text(lastTranscriptionFailureMessage)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-
-                Text("The note stays queued until this device or another eligible device retries it.")
+        } else if shouldShowPendingState {
+            VStack(alignment: .leading, spacing: 10) {
+                PillBadge(
+                    text: lastTranscriptionFailureMessage == nil ? "Waiting for transcription" : "Retry queued",
+                    systemImage: "clock.arrow.circlepath",
+                    variant: lastTranscriptionFailureMessage == nil ? .warning : .danger
+                )
+                if let lastTranscriptionFailureMessage {
+                    Text(lastTranscriptionFailureMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("This recording is waiting for an eligible device to start transcription.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Button(action: { requestTranscription() }) {
+                    Label("Transcribe Now", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(VoicelyTheme.accent)
+                .foregroundStyle(Color.black)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                PillBadge(text: "No transcript yet", systemImage: "text.badge.xmark", variant: .neutral)
+                Text("Recordings without transcription can still be played back, renamed, and shared later.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            } else {
-                Text("This recording is waiting for an eligible device to start transcription.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
             }
-
-            Button(action: { requestTranscription() }) {
-                Label("Transcribe Now", systemImage: "wand.and.stars")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-    }
-
-    private var emptyTranscriptionContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            StatusBadge(
-                title: "No transcript yet",
-                systemImage: "text.badge.xmark",
-                tint: .secondary
-            )
-
-            Text("Recordings without transcription can still be played back, renamed, and shared later.")
-                .font(.body)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -1472,128 +1355,14 @@ struct VoiceNoteDetailView: View {
         }
     }
 
-    private var headerIcon: some View {
-        ZStack {
-            Circle()
-                .fill(Color.accentColor.opacity(0.12))
-                .frame(width: 42, height: 42)
-
-            Image(systemName: note.transcription.isEmpty ? "waveform.circle.fill" : "text.quote")
-                .font(.headline)
-                .foregroundStyle(Color.accentColor)
-        }
-    }
-
-    private var headerTitleContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if isEditing {
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("Note title", text: $editedTitle)
-                        .font(.title3.weight(.semibold))
-                        .textFieldStyle(.plain)
-
-                    Divider()
-
-                    timestampText
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(note.title)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(2)
-
-                    timestampText
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var timestampText: some View {
-        Text(
-            note.timestamp,
-            format: Date.FormatStyle(date: .abbreviated, time: .shortened)
-        )
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-    }
-
-    private var editButton: some View {
-        Button(action: toggleEdit) {
-            Text(isEditing ? "Done" : "Edit")
-        }
-        .buttonStyle(.bordered)
-    }
-
-    @ViewBuilder
-    private var headerStatusBadges: some View {
-        StatusBadge(
-            title: formatDuration(note.duration),
-            systemImage: "clock",
-            tint: .secondary
-        )
-
-        if isLocallyTranscribing {
-            StatusBadge(
-                title: "Processing",
-                systemImage: "waveform.badge.magnifyingglass",
-                tint: Color.accentColor
-            )
-        } else if isAwaitingTranscription {
-            StatusBadge(
-                title: "Queued",
-                systemImage: "clock.arrow.circlepath",
-                tint: .orange
-            )
-        } else if isRemoteTranscribing {
-            StatusBadge(
-                title: "Another device",
-                systemImage: "desktopcomputer.and.iphone",
-                tint: .blue
-            )
-        } else if shouldShowPendingState {
-            StatusBadge(
-                title: "Pending",
-                systemImage: "clock.arrow.circlepath",
-                tint: .orange
-            )
-        } else if !note.transcription.isEmpty {
-            StatusBadge(
-                title: "Transcript",
-                systemImage: "checkmark.circle.fill",
-                tint: .green
-            )
-            TranscriptionModelBadge(note: note)
-        }
-    }
-
-    private var timeProgressRow: some View {
-        HStack(spacing: 10) {
-            Text(formatTime(audioPlayer.currentTime))
-                .font(.footnote.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 40, alignment: .leading)
-
-            ProgressView(value: audioPlayer.currentTime, total: max(audioPlayer.duration, 1))
-                .tint(.accentColor)
-
-            Text(formatTime(audioPlayer.duration))
-                .font(.footnote.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 40, alignment: .trailing)
-        }
-    }
-
     private func toggleEdit() {
         if isEditing {
-            // Save changes
             note.title = editedTitle
             note.transcription = editedTranscription
             if editedTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.transcriptionModelIdentifier = nil
             }
         } else {
-            // Enter edit mode
             editedTitle = note.title
             editedTranscription = note.transcription
         }
@@ -1608,6 +1377,11 @@ struct VoiceNoteDetailView: View {
 
     private func copyTranscription() {
         UIPasteboard.general.string = shareableTranscriptionText()
+        copyConfirmVisible = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            copyConfirmVisible = false
+        }
     }
 
     private func shareTranscription() {
@@ -1616,12 +1390,10 @@ struct VoiceNoteDetailView: View {
 
     private func requestTranscription(force: Bool = false, takeOver: Bool = false) {
         guard !note.audioFilePath.isEmpty else { return }
-
         guard isModelLoaded else {
             showLoadModelPrompt = true
             return
         }
-
         Task { @MainActor in
             let didStart = await transcriptionService.requestTranscription(
                 for: note,
@@ -1634,89 +1406,24 @@ struct VoiceNoteDetailView: View {
         }
     }
 
-    private var queuedTranscriptionContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            StatusBadge(
-                title: "Queued for transcription",
-                systemImage: "clock.arrow.circlepath",
-                tint: .orange
-            )
-
-            Text("This note is waiting in the transcription queue and will switch to live progress once the local task starts.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private func shareableTranscriptionText() -> String {
         guard note.lastTranscriptionDuration > 0 else {
             return note.transcription
         }
-
         return transcriptionService.annotatedText(
             text: note.transcription,
             duration: note.lastTranscriptionDuration
         )
     }
 
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.minute, .second]
-        formatter.unitsStyle = .full
-        return formatter.string(from: duration) ?? "0 seconds"
-    }
-    
     private func cancelCurrentTranscription() {
         transcriptionService.cancelTranscription(for: note)
     }
-
-    private func transportButton(systemImage: String, size: CGFloat, action: @escaping () -> Void)
-        -> some View
-    {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: size, height: size)
-                .background(Color(.tertiarySystemGroupedBackground))
-                .clipShape(Circle())
-        }
-        .buttonStyle(.plain)
-    }
 }
 
-private struct SectionCard<Content: View>: View {
-    private let backgroundColor: Color
-    private let borderColor: Color
-    private let contentPadding: CGFloat
-    private let content: Content
+// MARK: - Supporting layouts and components
 
-    init(
-        backgroundColor: Color = Color(.secondarySystemGroupedBackground),
-        borderColor: Color = Color.primary.opacity(0.05),
-        contentPadding: CGFloat = 18,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.backgroundColor = backgroundColor
-        self.borderColor = borderColor
-        self.contentPadding = contentPadding
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .padding(contentPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(backgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(borderColor, lineWidth: 1)
-            )
-    }
-}
-
-private struct WrappingFlowLayout: Layout {
+struct WrappingFlowLayout: Layout {
     struct Item {
         let index: Int
         let frame: CGRect
@@ -1736,27 +1443,13 @@ private struct WrappingFlowLayout: Layout {
         Cache(subviewCount: subviews.count)
     }
 
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout Cache
-    ) -> CGSize {
-        updateCache(
-            for: subviews,
-            maxWidth: proposal.width ?? .greatestFiniteMagnitude,
-            cache: &cache
-        )
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        updateCache(for: subviews, maxWidth: proposal.width ?? .greatestFiniteMagnitude, cache: &cache)
         return cache.size
     }
 
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout Cache
-    ) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         updateCache(for: subviews, maxWidth: bounds.width, cache: &cache)
-
         for item in cache.items {
             subviews[item.index].place(
                 at: CGPoint(x: bounds.minX + item.frame.minX, y: bounds.minY + item.frame.minY),
@@ -1769,7 +1462,6 @@ private struct WrappingFlowLayout: Layout {
         if cache.maxWidth == maxWidth, cache.subviewCount == subviews.count {
             return
         }
-
         let layout = makeLayout(for: subviews, maxWidth: maxWidth)
         cache.items = layout.items
         cache.size = layout.size
@@ -1788,190 +1480,143 @@ private struct WrappingFlowLayout: Layout {
 
         for index in subviews.indices {
             let size = subviews[index].sizeThatFits(.unspecified)
-
             if currentX > 0 && currentX + size.width > availableWidth {
                 currentX = 0
                 currentY += currentRowHeight + verticalSpacing
                 currentRowHeight = 0
             }
-
             let frame = CGRect(origin: CGPoint(x: currentX, y: currentY), size: size)
             items.append(Item(index: index, frame: frame))
             layoutWidth = max(layoutWidth, frame.maxX)
             layoutHeight = max(layoutHeight, frame.maxY)
-
             currentX += size.width + horizontalSpacing
             currentRowHeight = max(currentRowHeight, size.height)
         }
-
         return (items, CGSize(width: layoutWidth, height: layoutHeight))
     }
 }
 
-private struct StatusBadge: View {
-    let title: String
-    let systemImage: String
-    let tint: Color
-
-    private var displayTitle: String {
-        title.isEmpty ? "0s" : title
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.footnote.weight(.medium))
-
-            Text(displayTitle)
-                .font(.footnote.weight(.medium))
-                .lineLimit(1)
-        }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(tint.opacity(0.12))
-        .clipShape(Capsule())
-        .fixedSize(horizontal: true, vertical: true)
-    }
-}
-
-private struct TranscriptionModelBadge: View {
-    let note: VoiceNote
-
-    private var title: String {
-        note.transcriptionModelDisplayName ?? "Model Unknown"
-    }
-
-    private var systemImage: String {
-        note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu"
-    }
-
-    private var tint: Color {
-        note.transcriptionModelDisplayName == nil ? .orange : .blue
-    }
-
-    var body: some View {
-        StatusBadge(title: title, systemImage: systemImage, tint: tint)
-    }
-}
-
-private struct RecorderStatusChip: View {
-    let title: String
-    let systemImage: String
-    let tint: Color
-
-    var body: some View {
-        Label(title, systemImage: systemImage)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(tint.opacity(0.12))
-            .clipShape(Capsule())
-    }
-}
-
-private struct SyncStatusBannerCard: View {
+struct SyncStatusBannerCard: View {
     let description: String
     let tint: Color
     let showsRetry: Bool
     let retryAction: () -> Void
 
     var body: some View {
-        SectionCard(
-            backgroundColor: tint.opacity(0.08),
-            borderColor: tint.opacity(0.18)
-        ) {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(tint)
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.title3)
+                .foregroundStyle(tint)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Sync Status")
-                        .font(.subheadline.weight(.medium))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sync Status")
+                    .font(.subheadline.weight(.medium))
+                Text(description)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
-                    Text(description)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            Spacer()
 
-                Spacer()
-
-                if showsRetry {
-                    Button("Retry", action: retryAction)
-                        .buttonStyle(.bordered)
-                }
+            if showsRetry {
+                Button("Retry", action: retryAction)
+                    .buttonStyle(.bordered)
+                    .tint(tint)
             }
         }
-    }
-}
-
-private struct EmptyLibraryCard: View {
-    var body: some View {
-        SectionCard {
-            ContentUnavailableView(
-                "No Recordings Yet",
-                systemImage: "mic.circle",
-                description: Text("Use the record control below to create your first voice note.")
-            )
-            .frame(maxWidth: .infinity, alignment: .center)
-        }
-    }
-}
-
-private struct DetailPlaceholderView: View {
-    var body: some View {
-        ContentUnavailableView(
-            "Select a Recording",
-            systemImage: "waveform.circle",
-            description: Text("Choose a note from the library or start a new recording.")
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(tint.opacity(0.1))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(tint.opacity(0.22), lineWidth: 1)
+        )
+    }
+}
+
+struct EmptyLibraryCard: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "waveform")
+                .font(.largeTitle)
+                .foregroundStyle(Color.accentColor.opacity(0.55))
+                .frame(width: 60, height: 60)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(VoicelyTheme.surface)
+                )
+            Text("No Recordings Yet")
+                .font(.headline)
+            Text("Tap the microphone to create your first voice note.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct DetailPlaceholderView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "waveform")
+                .font(.largeTitle)
+                .foregroundStyle(.tertiary)
+                .frame(width: 60, height: 60)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(VoicelyTheme.surface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(VoicelyTheme.hairline, lineWidth: 1)
+                )
+            VStack(spacing: 4) {
+                Text("Select a recording")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text("Choose a note or start a new recording.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 struct AudioWaveformView: View {
-    enum VisualStyle {
-        case active
-        case placeholder
-    }
-
     let isAnimating: Bool
     @ObservedObject var audioService: AudioRecordingService
-    var visualStyle: VisualStyle = .active
-    @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 18)
+    @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 22)
 
     var body: some View {
-        if isAnimating {
-            TimelineView(.animation(minimumInterval: 0.1)) { timeline in
-                HStack(alignment: .center, spacing: 2) {
-                    ForEach(0..<18, id: \.self) { index in
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(barColor)
-                            .frame(width: barWidth)
-                            .scaleEffect(y: waveHeights[index], anchor: .center)
-                    }
+        Group {
+            if isAnimating {
+                TimelineView(.animation(minimumInterval: 0.08)) { timeline in
+                    barsView
+                        .onChange(of: timeline.date) { _, _ in
+                            updateWaveHeights()
+                        }
                 }
-                .frame(height: 24)
-                .onAppear {
-                    updateWaveHeights()
-                }
-                .onChange(of: timeline.date) { _, _ in
-                    updateWaveHeights()
-                }
+            } else {
+                barsView
             }
-        } else {
-            HStack(alignment: .center, spacing: 2) {
-                ForEach(0..<18, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(barColor)
-                        .frame(width: barWidth)
-                        .scaleEffect(y: restingHeight(at: index), anchor: .center)
-                }
-            }
-            .frame(height: 24)
         }
+    }
+
+    private var barsView: some View {
+        HStack(alignment: .center, spacing: 1.5) {
+            ForEach(0..<waveHeights.count, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(Color.red.opacity(0.72))
+                    .frame(width: 2)
+                    .scaleEffect(y: waveHeights[index], anchor: .center)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func updateWaveHeights() {
@@ -1979,7 +1624,7 @@ struct AudioWaveformView: View {
         newHeights.removeFirst()
         let base = CGFloat(max(0, min(1, audioService.audioLevel)))
         let adjusted = pow(base, 0.6)
-        let variation = CGFloat.random(in: 0.9...1.1)
+        let variation = CGFloat.random(in: 0.85...1.1)
         let level = adjusted * variation
         let minH: CGFloat = 0.2
         let maxH: CGFloat = 1.35
@@ -1987,56 +1632,19 @@ struct AudioWaveformView: View {
         newHeights.append(max(minH, min(maxH, newH)))
         waveHeights = newHeights
     }
-
-    private var barColor: Color {
-        switch visualStyle {
-        case .active:
-            return Color.accentColor
-        case .placeholder:
-            return Color.accentColor.opacity(0.26)
-        }
-    }
-
-    private var barWidth: CGFloat {
-        switch visualStyle {
-        case .active:
-            return 3
-        case .placeholder:
-            return 2.8
-        }
-    }
-
-    private func restingHeight(at index: Int) -> CGFloat {
-        let placeholderHeights: [CGFloat] = [
-            0.24, 0.34, 0.2, 0.3, 0.18, 0.28, 0.22, 0.36, 0.2,
-            0.3, 0.18, 0.26, 0.22, 0.32, 0.2, 0.28, 0.18, 0.24
-        ]
-
-        switch visualStyle {
-        case .active:
-            return 0.26
-        case .placeholder:
-            return placeholderHeights[index]
-        }
-    }
 }
 
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
     let applicationActivities: [UIActivity]? = nil
 
-    func makeUIViewController(context: UIViewControllerRepresentableContext<ShareSheet>)
-        -> UIActivityViewController
-    {
+    func makeUIViewController(context: UIViewControllerRepresentableContext<ShareSheet>) -> UIActivityViewController {
         let controller = UIActivityViewController(
             activityItems: activityItems, applicationActivities: applicationActivities)
-
-        // For iPad and Mac Catalyst, we need to configure the popover presentation
         if let popover = controller.popoverPresentationController {
             popover.sourceView = UIView()
             popover.sourceRect = CGRect(x: 0, y: 0, width: 1, height: 1)
         }
-
         return controller
     }
 

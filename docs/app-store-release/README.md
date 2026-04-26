@@ -8,6 +8,7 @@ This folder contains the local release-prep package for Voicely's first official
 - `privacy-and-review-notes.md`: App Review notes, App Privacy Nutrition Label draft, permission rationale, and export compliance notes.
 - `screenshot-plan.md`: 6.7-inch iPhone screenshot narrative with exact overlay captions.
 - `release-checklist.md`: Xcode and App Store Connect checklist for selecting a TestFlight build and preparing the listing.
+- `widget-shortcuts-roadmap.md`: Planning notes for future Voicely widgets, App Shortcuts, AppIntents, and privacy-safe system entry points.
 
 ## Simulator Screenshot Guidance
 

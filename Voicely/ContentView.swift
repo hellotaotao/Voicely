@@ -502,8 +502,12 @@ struct VoiceNoteRow: View {
         note.isTranscribing && hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
+    private var isRecordingInProgress: Bool {
+        note.isTranscribing && note.duration <= 0 && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    }
+
     private var isFinalizingTranscription: Bool {
-        note.isTranscribing && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+        note.isTranscribing && note.duration > 0 && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
     private var isPending: Bool {
@@ -529,6 +533,7 @@ struct VoiceNoteRow: View {
         let trimmed = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         if isLocallyTranscribing { return "Transcribing…" }
+        if isRecordingInProgress { return "Recording… waiting for the first live transcript." }
         if isFinalizingTranscription { return "Finalizing transcription…" }
         if isAwaitingTranscription { return "Queued for transcription." }
         if isRemoteTranscribing { return "Transcribing on another device." }
@@ -541,6 +546,8 @@ struct VoiceNoteRow: View {
             return PillBadge(text: "Transcribing…", systemImage: "waveform", variant: .accent)
         } else if isLiveUpdatingTranscript {
             return PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
+        } else if isRecordingInProgress {
+            return PillBadge(text: "Recording", systemImage: "record.circle", variant: .danger)
         } else if isFinalizingTranscription {
             return PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
         } else if isAwaitingTranscription {
@@ -556,7 +563,7 @@ struct VoiceNoteRow: View {
     }
 
     private var durationText: String {
-        formatDuration(note.duration)
+        isRecordingInProgress ? "Recording" : formatDuration(note.duration)
     }
 
     var body: some View {
@@ -576,7 +583,7 @@ struct VoiceNoteRow: View {
                     Spacer(minLength: 4)
 
                     HStack(spacing: 3) {
-                        Image(systemName: "waveform")
+                        Image(systemName: isRecordingInProgress ? "record.circle" : "waveform")
                             .font(.caption2)
                         Text(durationText)
                             .font(.caption)
@@ -1058,12 +1065,16 @@ struct VoiceNoteDetailView: View {
         note.isTranscribing && hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
+    private var isRecordingInProgress: Bool {
+        note.isTranscribing && note.duration <= 0 && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    }
+
     private var isFinalizingTranscription: Bool {
-        note.isTranscribing && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+        note.isTranscribing && note.duration > 0 && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
     private var isTranscribingHere: Bool {
-        isLocallyTranscribing || isLiveUpdatingTranscript || isFinalizingTranscription || isAwaitingTranscription
+        isLocallyTranscribing || isLiveUpdatingTranscript || isRecordingInProgress || isFinalizingTranscription || isAwaitingTranscription
     }
 
     private var shouldShowTakeOverAction: Bool {
@@ -1109,10 +1120,15 @@ struct VoiceNoteDetailView: View {
     }
 
     private var durationLabel: String {
+        if isRecordingInProgress { return "Recording" }
         let total = Int(note.duration.rounded())
         let minutes = total / 60
         let seconds = total % 60
         return minutes > 0 ? "\(minutes)m \(seconds)s" : "\(seconds)s"
+    }
+
+    private var shouldShowAudioPlayerCard: Bool {
+        !note.audioFilePath.isEmpty && !isRecordingInProgress
     }
 
     var body: some View {
@@ -1121,7 +1137,7 @@ struct VoiceNoteDetailView: View {
                 headerBlock
                 metadataRow
 
-                if !note.audioFilePath.isEmpty {
+                if shouldShowAudioPlayerCard {
                     audioPlayerCard
                 }
 
@@ -1228,6 +1244,8 @@ struct VoiceNoteDetailView: View {
                 PillBadge(text: "Processing", systemImage: "waveform", variant: .accent)
             } else if isLiveUpdatingTranscript {
                 PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
+            } else if isRecordingInProgress {
+                PillBadge(text: "Recording", systemImage: "record.circle", variant: .danger)
             } else if isFinalizingTranscription {
                 PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
             } else if isAwaitingTranscription {
@@ -1471,6 +1489,17 @@ struct VoiceNoteDetailView: View {
                 }
                 .buttonStyle(.bordered)
             }
+        } else if isRecordingInProgress && !hasVisibleTranscript {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Recording…")
+                        .font(.subheadline.weight(.medium))
+                }
+                Text("Waiting for the first live transcript segment. Keep speaking; text will appear here as soon as a segment finishes.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         } else if isFinalizingTranscription {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -1556,7 +1585,7 @@ struct VoiceNoteDetailView: View {
     }
 
     private func loadAudioFile() {
-        if !note.audioFilePath.isEmpty {
+        if shouldShowAudioPlayerCard {
             audioPlayer.loadAudio(from: note.audioFilePath, expectedDuration: note.duration)
         }
     }

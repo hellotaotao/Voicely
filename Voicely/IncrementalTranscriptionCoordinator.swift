@@ -50,8 +50,6 @@ struct IncrementalTranscriptionTiming {
 
 struct IncrementalVoiceActivityCutConfiguration: Sendable {
     var searchWindowSeconds: Double = 8
-    var analysisWindowSeconds: Double = 0.20
-    var hopSeconds: Double = 0.05
     var minimumSilenceSeconds: Double = 0.35
     var minimumSegmentSeconds: Double = 2
     var earliestCutRatio: Double = 0.8
@@ -59,17 +57,9 @@ struct IncrementalVoiceActivityCutConfiguration: Sendable {
     var earlyCutConfidence: Double = 0.88
     var targetCutConfidence: Double = 0.62
     var lateCutConfidence: Double = 0.25
-    var minimumSilenceRMS: Float = 0.003
-    var maximumSilenceRMS: Float = 0.012
-    var noiseFloorMultiplier: Float = 1.8
+    var speechProbabilityThreshold: Double = 0.30
 
     static let `default` = IncrementalVoiceActivityCutConfiguration()
-}
-
-private struct IncrementalRMSWindow {
-    let startFrame: Int
-    let endFrame: Int
-    let rms: Float
 }
 
 private struct VoiceActivityCutCandidate {
@@ -392,15 +382,17 @@ final class IncrementalTranscriptionCoordinator {
     }
 
 
-    /// Chooses a cut point using adaptive voice-activity boundary scoring.
-    /// Today this uses energy-derived silence confidence; a neural VAD can feed the
-    /// same confidence-based decision without changing the coordinator flow.
+    /// Chooses a cut point using Silero neural VAD probabilities plus adaptive boundary scoring.
+    ///
+    /// Returns `startFrame` when it is too early or no acceptable boundary exists yet,
+    /// which tells the coordinator to keep recording before cutting the chunk.
     nonisolated static func voiceActivityAwareCutFrame(
         fileURL: URL,
         startFrame: AVAudioFramePosition,
         targetFrame: AVAudioFramePosition,
         targetSegmentSeconds: Double = Double(IncrementalTranscriptionTiming.defaultIntervalSeconds),
-        configuration: IncrementalVoiceActivityCutConfiguration = .default
+        configuration: IncrementalVoiceActivityCutConfiguration = .default,
+        neuralVoiceActivityDetector: NeuralVoiceActivityDetecting? = nil
     ) -> AVAudioFramePosition {
         do {
             let sourceFile = try AVAudioFile(forReading: fileURL)
@@ -433,33 +425,15 @@ final class IncrementalTranscriptionCoordinator {
             }
 
             try sourceFile.read(into: buffer, frameCount: framesToRead)
-            guard let floatChannelData = buffer.floatChannelData else { return startFrame }
+            let samples = monoFloatSamples(from: buffer)
+            guard !samples.isEmpty else { return startFrame }
 
-            let frameLength = Int(buffer.frameLength)
-            guard frameLength > 0 else { return startFrame }
-
-            let windowFrames = max(1, Int(configuration.analysisWindowSeconds * sampleRate))
-            let hopFrames = max(1, Int(configuration.hopSeconds * sampleRate))
-            let minimumSilenceFrames = max(1, Int(configuration.minimumSilenceSeconds * sampleRate))
-            let channelCount = max(1, Int(format.channelCount))
-
-            let windows = rmsWindows(
-                floatChannelData: floatChannelData,
-                channelCount: channelCount,
-                frameLength: frameLength,
-                windowFrames: windowFrames,
-                hopFrames: hopFrames
-            )
-            guard !windows.isEmpty else { return startFrame }
-
-            let threshold = silenceThreshold(
-                for: windows.map(\.rms),
-                configuration: configuration
-            )
-            let candidate = bestSilenceCutCandidate(
-                in: windows,
-                threshold: threshold,
-                minimumSilenceFrames: minimumSilenceFrames
+            let detector = try neuralVoiceActivityDetector ?? SileroNeuralVoiceActivityDetector()
+            let vadFrames = try detector.speechProbabilities(in: samples)
+            let candidate = bestNeuralSilenceCutCandidate(
+                in: vadFrames,
+                speechProbabilityThreshold: configuration.speechProbabilityThreshold,
+                minimumSilenceFrames: max(1, Int(configuration.minimumSilenceSeconds * sampleRate))
             )
 
             let requiredConfidence = adaptiveCutConfidenceThreshold(
@@ -487,57 +461,29 @@ final class IncrementalTranscriptionCoordinator {
 
             return startFrame
         } catch {
-            debugLog("⚠️ [IncrementalCoordinator] Voice activity cut failed: \(error)")
+            debugLog("⚠️ [IncrementalCoordinator] Neural VAD cut failed: \(error)")
             return targetFrame
         }
     }
 
-    nonisolated private static func rmsWindows(
-        floatChannelData: UnsafePointer<UnsafeMutablePointer<Float>>,
-        channelCount: Int,
-        frameLength: Int,
-        windowFrames: Int,
-        hopFrames: Int
-    ) -> [IncrementalRMSWindow] {
-        var windows: [IncrementalRMSWindow] = []
-        var windowStart = 0
+    nonisolated private static func monoFloatSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
+        guard let floatChannelData = buffer.floatChannelData else { return [] }
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return [] }
+        let channelCount = max(1, Int(buffer.format.channelCount))
 
-        while windowStart < frameLength {
-            let windowEnd = min(frameLength, windowStart + windowFrames)
-            guard windowEnd > windowStart else { break }
-
-            var sumSquares: Double = 0
-            var sampleCount = 0
-
-            for channel in 0..<channelCount {
-                let samples = floatChannelData[channel]
-                for frame in windowStart..<windowEnd {
-                    let sample = Double(samples[frame])
-                    sumSquares += sample * sample
-                    sampleCount += 1
-                }
-            }
-
-            let rms = sampleCount > 0 ? Float((sumSquares / Double(sampleCount)).squareRoot()) : 0
-            windows.append(IncrementalRMSWindow(startFrame: windowStart, endFrame: windowEnd, rms: rms))
-            windowStart += hopFrames
+        if channelCount == 1 {
+            return Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
         }
 
-        return windows
-    }
-
-    nonisolated private static func silenceThreshold(
-        for rmsValues: [Float],
-        configuration: IncrementalVoiceActivityCutConfiguration
-    ) -> Float {
-        let sortedValues = rmsValues.sorted()
-        let percentileIndex = min(sortedValues.count - 1, max(0, sortedValues.count / 5))
-        let noiseFloor = sortedValues[percentileIndex]
-        let adaptiveThreshold = noiseFloor * configuration.noiseFloorMultiplier
-        return max(
-            configuration.minimumSilenceRMS,
-            min(configuration.maximumSilenceRMS, adaptiveThreshold)
-        )
+        var samples = Array(repeating: Float(0), count: frameLength)
+        for channel in 0..<channelCount {
+            let channelSamples = floatChannelData[channel]
+            for frame in 0..<frameLength {
+                samples[frame] += channelSamples[frame] / Float(channelCount)
+            }
+        }
+        return samples
     }
 
     nonisolated static func adaptiveCutConfidenceThreshold(
@@ -571,42 +517,45 @@ final class IncrementalTranscriptionCoordinator {
         return start + (end - start) * clamped
     }
 
-    nonisolated private static func bestSilenceCutCandidate(
-        in windows: [IncrementalRMSWindow],
-        threshold: Float,
+    nonisolated private static func bestNeuralSilenceCutCandidate(
+        in vadFrames: [NeuralVoiceActivityFrame],
+        speechProbabilityThreshold: Double,
         minimumSilenceFrames: Int
     ) -> VoiceActivityCutCandidate? {
         var silenceStartFrame: Int?
-        var silenceRMSValues: [Float] = []
+        var silenceProbabilities: [Double] = []
         var bestCandidate: VoiceActivityCutCandidate?
 
         func considerCandidate(endFrame: Int) {
             guard let silenceStartFrame else { return }
             let durationFrames = endFrame - silenceStartFrame
             guard durationFrames >= minimumSilenceFrames else { return }
-            let averageRMS = silenceRMSValues.isEmpty
-                ? threshold
-                : silenceRMSValues.reduce(0, +) / Float(silenceRMSValues.count)
-            let quietness = max(0, min(1, Double((threshold - averageRMS) / max(threshold, 0.000_001))))
+            let averageSpeechProbability = silenceProbabilities.isEmpty
+                ? speechProbabilityThreshold
+                : silenceProbabilities.reduce(0, +) / Double(silenceProbabilities.count)
+            let silenceConfidence = max(
+                0,
+                min(1, (speechProbabilityThreshold - averageSpeechProbability) / max(speechProbabilityThreshold, 0.000_001))
+            )
             let durationConfidence = min(1, Double(durationFrames) / Double(max(minimumSilenceFrames * 2, 1)))
-            let confidence = min(1, 0.65 * quietness + 0.35 * durationConfidence)
+            let confidence = min(1, 0.75 * silenceConfidence + 0.25 * durationConfidence)
             let candidate = VoiceActivityCutCandidate(localFrame: endFrame, confidence: confidence)
             if bestCandidate == nil || candidate.confidence >= bestCandidate!.confidence {
                 bestCandidate = candidate
             }
         }
 
-        for window in windows {
-            if window.rms <= threshold {
+        for frame in vadFrames {
+            if frame.speechProbability <= speechProbabilityThreshold {
                 if silenceStartFrame == nil {
-                    silenceStartFrame = window.startFrame
-                    silenceRMSValues.removeAll()
+                    silenceStartFrame = frame.startFrame
+                    silenceProbabilities.removeAll()
                 }
-                silenceRMSValues.append(window.rms)
-                considerCandidate(endFrame: window.endFrame)
+                silenceProbabilities.append(frame.speechProbability)
+                considerCandidate(endFrame: frame.endFrame)
             } else {
                 silenceStartFrame = nil
-                silenceRMSValues.removeAll()
+                silenceProbabilities.removeAll()
             }
         }
 

@@ -78,6 +78,20 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
     }
 
+    struct FakeNeuralVAD: NeuralVoiceActivityDetecting {
+        let frameProbabilities: [(startFrame: Int, endFrame: Int, speechProbability: Double)]
+
+        func speechProbabilities(in _: [Float]) throws -> [NeuralVoiceActivityFrame] {
+            frameProbabilities.map {
+                NeuralVoiceActivityFrame(
+                    startFrame: $0.startFrame,
+                    endFrame: $0.endFrame,
+                    speechProbability: $0.speechProbability
+                )
+            }
+        }
+    }
+
     // MARK: Helpers
 
     @Test func defaultIntervalHelperUsesFifteenSeconds() {
@@ -147,17 +161,20 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
-    @Test func voiceActivityCutUsesRecentSilenceBeforeTarget() throws {
+    @Test func voiceActivityCutUsesRecentNeuralVADSilenceBeforeTarget() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
-            (seconds: 26.0, amplitude: 0.08),
-            (seconds: 0.8, amplitude: 0.0),
-            (seconds: 3.2, amplitude: 0.08)
+            (seconds: 30.0, amplitude: 0.08)
         ])
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 8,
+            silentRanges: [4.0..<4.8]
+        ))
 
         let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
             fileURL: pcmURL,
             startFrame: 0,
-            targetFrame: 480_000
+            targetFrame: 480_000,
+            neuralVoiceActivityDetector: fakeVAD
         )
 
         #expect(cutFrame >= 420_000)
@@ -167,15 +184,20 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
-    @Test func voiceActivityCutFallsBackToTargetWhenNoSilenceExists() throws {
+    @Test func voiceActivityCutFallsBackToTargetWhenNeuralVADFindsNoSilence() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 30.0, amplitude: 0.08)
         ])
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 8,
+            silentRanges: []
+        ))
 
         let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
             fileURL: pcmURL,
             startFrame: 0,
-            targetFrame: 480_000
+            targetFrame: 480_000,
+            neuralVoiceActivityDetector: fakeVAD
         )
 
         #expect(cutFrame == 480_000)
@@ -183,6 +205,28 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
+
+
+    static func makeNeuralVADFrames(
+        seconds: Double,
+        silentRanges: [Range<Double>],
+        frameSeconds: Double = Double(SileroNeuralVoiceActivityDetector.chunkSize) / Double(SileroNeuralVoiceActivityDetector.sampleRate)
+    ) -> [(startFrame: Int, endFrame: Int, speechProbability: Double)] {
+        var frames: [(startFrame: Int, endFrame: Int, speechProbability: Double)] = []
+        var time = 0.0
+        while time < seconds {
+            let endTime = min(seconds, time + frameSeconds)
+            let midpoint = (time + endTime) / 2
+            let isSilent = silentRanges.contains { $0.contains(midpoint) }
+            frames.append((
+                startFrame: Int((time * 16_000).rounded()),
+                endFrame: Int((endTime * 16_000).rounded()),
+                speechProbability: isSilent ? 0.02 : 0.82
+            ))
+            time = endTime
+        }
+        return frames
+    }
 
     /// Creates a Float32 16 kHz mono CAF file with explicit energy segments.
     func makeEnergyPatternCAF(segments: [(seconds: Double, amplitude: Float)]) throws -> URL {

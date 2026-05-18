@@ -9,6 +9,37 @@ import Foundation
 import AVFoundation
 import Combine
 
+struct PendingSeekState {
+    private(set) var pendingTime: TimeInterval?
+
+    mutating func storePendingSeek(_ requestedTime: TimeInterval, fallbackDuration: TimeInterval) -> TimeInterval {
+        let normalizedTime = Self.normalize(requestedTime, duration: fallbackDuration)
+        pendingTime = normalizedTime
+        return normalizedTime
+    }
+
+    mutating func consumePendingSeek(preparedDuration: TimeInterval) -> TimeInterval? {
+        guard let pendingTime else {
+            return nil
+        }
+
+        self.pendingTime = nil
+        return Self.normalize(pendingTime, duration: preparedDuration)
+    }
+
+    mutating func clear() {
+        pendingTime = nil
+    }
+
+    static func normalize(_ requestedTime: TimeInterval, duration: TimeInterval) -> TimeInterval {
+        let lowerBoundedTime = max(0, requestedTime)
+        guard duration > 0 else {
+            return lowerBoundedTime
+        }
+        return min(lowerBoundedTime, duration)
+    }
+}
+
 @MainActor
 class AudioPlayerService: NSObject, ObservableObject {
     @Published var isPlaying = false
@@ -23,6 +54,7 @@ class AudioPlayerService: NSObject, ObservableObject {
     private var pendingFilePath: String?
     private var preloadTask: Task<Void, Never>?
     private var prepareTask: Task<Void, Never>?
+    private var pendingSeekState = PendingSeekState()
     #if !os(macOS) || targetEnvironment(macCatalyst)
     private let audioSession = AVAudioSession.sharedInstance()
     private var isAudioSessionActive = false
@@ -85,6 +117,7 @@ class AudioPlayerService: NSObject, ObservableObject {
         duration = expectedDuration ?? 0
         playbackStatusMessage = nil
         isPreparingAudio = false
+        pendingSeekState.clear()
 
         guard let pendingFilePath else {
             return
@@ -151,8 +184,16 @@ class AudioPlayerService: NSObject, ObservableObject {
     }
     
     func seek(to time: TimeInterval) {
-        audioPlayer?.currentTime = time
-        currentTime = time
+        if let player = audioPlayer {
+            pendingSeekState.clear()
+            let resolvedTime = PendingSeekState.normalize(time, duration: player.duration)
+            player.currentTime = resolvedTime
+            currentTime = resolvedTime
+            return
+        }
+
+        let stagedTime = pendingSeekState.storePendingSeek(time, fallbackDuration: duration)
+        currentTime = stagedTime
     }
     
     func setPlaybackRate(_ rate: Float) {
@@ -183,6 +224,7 @@ class AudioPlayerService: NSObject, ObservableObject {
         audioPlayer?.stop()
         isPlaying = false
         currentTime = 0
+        pendingSeekState.clear()
         stopTimer()
         deactivateAudioSessionIfNeeded()
     }
@@ -281,7 +323,12 @@ private extension AudioPlayerService {
 
             audioPlayer = player
             duration = player.duration
-            currentTime = 0
+            if let pendingTime = pendingSeekState.consumePendingSeek(preparedDuration: player.duration) {
+                player.currentTime = pendingTime
+                currentTime = pendingTime
+            } else {
+                currentTime = 0
+            }
             playbackStatusMessage = nil
 
             debugLog("✅ [DEBUG] AVAudioPlayer created successfully")
@@ -314,6 +361,7 @@ private extension AudioPlayerService {
         audioPlayer = nil
         isPlaying = false
         currentTime = 0
+        pendingSeekState.clear()
         stopTimer()
         deactivateAudioSessionIfNeeded()
     }

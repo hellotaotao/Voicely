@@ -6,13 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build for iOS Simulator
-xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 15' build
+xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' build
 
-# Run all tests (unit + UI)
-xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 15' test
+# Build for Mac (Catalyst)
+xcodebuild -scheme Voicely -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' build
+
+# Run all tests on iOS Simulator (unit + UI)
+xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' test
+
+# Run unit tests on Mac (UI tests are not supported on Mac Catalyst)
+xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -only-testing:VoicelyTests test
 
 # Run specific test file
-xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 15' test -only-testing:VoicelyTests/TranscriptionServiceTests
+xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:VoicelyTests/TranscriptionServiceTests test
+
+# Archive for iOS (auto-appears in Xcode Organizer)
+xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' archive
+
+# Archive for Mac Catalyst (auto-appears in Xcode Organizer)
+xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=macOS,variant=Mac Catalyst' archive
 
 # Open in Xcode
 open Voicely.xcodeproj
@@ -22,7 +34,7 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 
 ## Architecture
 
-**Voicely** is a SwiftUI iOS app for voice recording with on-device transcription using WhisperKit.
+**Voicely** is a SwiftUI iOS/Mac Catalyst app for voice recording with on-device transcription using WhisperKit.
 
 ### Core Services (all `@MainActor`)
 
@@ -47,8 +59,10 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 
 - **ContentView** – Main recording/playback UI with note list
 - **SettingsView** – Model selection, language, custom prompts
+- **WhisperKitModelsView** – Model download and management UI
 - **CloudKitSettingsView** – iCloud sync configuration
 - **SyncStatusView** – Visual sync status indicator
+- **BenchmarkView** – Performance benchmarking UI
 
 ## Testing
 

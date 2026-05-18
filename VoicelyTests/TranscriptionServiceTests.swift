@@ -247,6 +247,7 @@ struct TranscriptionServiceTests {
         #expect(didStart == true)
         #expect(note.transcription.isEmpty)
         #expect(note.transcriptionState == .queued)
+        #expect(note.pendingTranscription == true)
         #expect(note.lastTranscriptionDuration == 0)
         #expect(note.transcriptionModelIdentifier == nil)
         #expect(note.transcriptionLastErrorMessage == "The last attempt did not produce a usable transcript. The note was queued again so you can retry or choose a different model.")
@@ -322,6 +323,7 @@ struct TranscriptionServiceTests {
         await task.value
 
         #expect(note.transcriptionState == .queued)
+        #expect(note.pendingTranscription == true)
         #expect(note.transcriptionOwnerDeviceID == nil)
         #expect(note.transcriptionAttemptID == nil)
         #expect(note.transcriptionLeaseExpiresAt == nil)

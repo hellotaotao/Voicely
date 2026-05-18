@@ -143,7 +143,7 @@ struct SettingsView: View {
     @State private var computeUnitsChanged = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
-    @AppStorage("incrementalTranscriptionInterval") private var incrementalInterval: Int = 10
+    @AppStorage(IncrementalTranscriptionTiming.intervalSecondsStorageKey) private var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -201,6 +201,9 @@ struct SettingsView: View {
             }
         }
         .tint(VoicelyTheme.accent)
+        .onAppear {
+            incrementalIntervalSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded()
+        }
         .task {
             await modelManager.fetchModels()
         }
@@ -358,11 +361,14 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     .labelsHidden()
                     .onChange(of: modelManager.selectedModel) { _, newValue in
-                        if modelManager.modelState != .unloaded {
-                            modelManager.modelState = .unloaded
+                        let nextState = ModelManager.selectionStateAfterPickingModel(
+                            newValue,
+                            loadedModelIdentifier: modelManager.loadedModelIdentifierInMemory
+                        )
+                        if modelManager.modelState != nextState {
+                            modelManager.modelState = nextState
                         }
                         modelManager.errorMessage = nil
-                        _ = newValue
                     }
                 }
             }
@@ -439,6 +445,13 @@ struct SettingsView: View {
 
     // MARK: - Transcription
 
+    private var incrementalIntervalSecondsBinding: Binding<Int> {
+        Binding(
+            get: { IncrementalTranscriptionTiming.sanitizedIntervalSeconds(incrementalIntervalSeconds) },
+            set: { incrementalIntervalSeconds = IncrementalTranscriptionTiming.sanitizedIntervalSeconds($0) }
+        )
+    }
+
     private var promptBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Custom Prompt")
@@ -459,21 +472,24 @@ struct SettingsView: View {
         }
     }
 
+    private func intervalOptionTitle(_ seconds: Int) -> String {
+        "\(seconds)s"
+    }
+
     private var intervalRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Incremental Interval")
                     .font(.subheadline.weight(.medium))
-                Text("Partial transcription during long recordings")
+                Text("Partial transcription during long recordings; 30s is recommended")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Picker("", selection: $incrementalInterval) {
-                Text("5 min").tag(5)
-                Text("10 min").tag(10)
-                Text("15 min").tag(15)
-                Text("30 min").tag(30)
+            Picker("", selection: incrementalIntervalSecondsBinding) {
+                ForEach(IncrementalTranscriptionTiming.intervalOptionsSeconds, id: \.self) { seconds in
+                    Text(intervalOptionTitle(seconds)).tag(seconds)
+                }
             }
             .pickerStyle(.menu)
             .labelsHidden()
@@ -565,7 +581,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Fully on-device")
                     .font(.subheadline.weight(.semibold))
-                Text("All transcription happens on your device. Your audio and text never leave this iPhone unless you export them.")
+                Text("All transcription happens on your device. Your audio and text never leave this device unless you export them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

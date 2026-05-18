@@ -7,6 +7,27 @@
 
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
+
+struct ImportedAudioFile {
+    let filePath: String
+    let title: String
+    let fileURL: URL
+}
+
+enum AudioImportError: LocalizedError {
+    case unsupportedFileType(URL)
+    case copyFailed(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedFileType(let url):
+            return "Unsupported audio file type: \(url.lastPathComponent)"
+        case .copyFailed(let error):
+            return "Failed to import audio file: \(error.localizedDescription)"
+        }
+    }
+}
 
 @MainActor
 class CloudStorageManager: ObservableObject {
@@ -174,6 +195,118 @@ class CloudStorageManager: ObservableObject {
         let directory = getAudioStorageDirectory()
         let filename = "recording_\(Date().timeIntervalSince1970).m4a"
         return directory.appendingPathComponent(filename)
+    }
+
+    static func isSupportedImportedAudioURL(_ url: URL) -> Bool {
+        let fileExtension = url.pathExtension.lowercased()
+        if supportedImportedAudioFileExtensions.contains(fileExtension) {
+            return true
+        }
+
+        if let type = UTType(filenameExtension: fileExtension), type.conforms(to: .audio) {
+            return true
+        }
+
+        if let contentType = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType,
+           contentType.conforms(to: .audio) {
+            return true
+        }
+
+        return false
+    }
+
+    func importAudioFile(from sourceURL: URL) throws -> ImportedAudioFile {
+        let accessedSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScope {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard Self.isSupportedImportedAudioURL(sourceURL) else {
+            throw AudioImportError.unsupportedFileType(sourceURL)
+        }
+
+        let destinationDirectory = getAudioStorageDirectory()
+        createDirectoryIfNeeded(at: destinationDirectory, excludeFromBackup: false)
+
+        let destinationURL = importedAudioDestinationURL(for: sourceURL, in: destinationDirectory)
+        var coordinationError: NSError?
+        var copyError: Error?
+
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(
+            readingItemAt: sourceURL,
+            options: [.withoutChanges],
+            error: &coordinationError
+        ) { readableURL in
+            do {
+                try fileManager.copyItem(at: readableURL, to: destinationURL)
+            } catch {
+                copyError = error
+            }
+        }
+
+        if let coordinationError {
+            throw AudioImportError.copyFailed(coordinationError)
+        }
+
+        if let copyError {
+            throw AudioImportError.copyFailed(copyError)
+        }
+
+        guard fileManager.fileExists(atPath: destinationURL.path) else {
+            throw AudioImportError.copyFailed(CocoaError(.fileNoSuchFile))
+        }
+
+        return ImportedAudioFile(
+            filePath: destinationURL.lastPathComponent,
+            title: importedAudioTitle(for: sourceURL),
+            fileURL: destinationURL
+        )
+    }
+
+    private static let supportedImportedAudioFileExtensions: Set<String> = [
+        "aac",
+        "aif",
+        "aiff",
+        "caf",
+        "m4a",
+        "m4b",
+        "mp3",
+        "wav",
+        "wave"
+    ]
+
+    private func importedAudioDestinationURL(for sourceURL: URL, in directory: URL) -> URL {
+        let title = importedAudioTitle(for: sourceURL)
+        let baseName = sanitizedImportedAudioBaseName(title)
+        let fileExtension = normalizedAudioFileExtension(for: sourceURL)
+        let filename = "\(baseName)_\(UUID().uuidString).\(fileExtension)"
+        return directory.appendingPathComponent(filename)
+    }
+
+    private func importedAudioTitle(for sourceURL: URL) -> String {
+        let title = sourceURL.deletingPathExtension().lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "Imported Audio" : title
+    }
+
+    private func normalizedAudioFileExtension(for sourceURL: URL) -> String {
+        let fileExtension = sourceURL.pathExtension.lowercased()
+        return fileExtension.isEmpty ? "m4a" : fileExtension
+    }
+
+    private func sanitizedImportedAudioBaseName(_ title: String) -> String {
+        let invalidCharacters = CharacterSet(charactersIn: "/\\?%*|\"<>:")
+            .union(.newlines)
+            .union(.controlCharacters)
+        let parts = title
+            .components(separatedBy: invalidCharacters)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let sanitizedTitle = parts.joined(separator: " ")
+        return sanitizedTitle.isEmpty ? "Imported Audio" : sanitizedTitle
     }
     
     // Move existing local files to iCloud

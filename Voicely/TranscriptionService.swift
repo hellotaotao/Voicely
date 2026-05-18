@@ -545,6 +545,7 @@ private extension TranscriptionService {
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             note.completeTranscription()
+            note.clearTransientTranscriptionFlags()
         } else {
             if !hadExistingTranscript {
                 note.lastTranscriptionDuration = 0
@@ -559,8 +560,6 @@ private extension TranscriptionService {
             }
             requeueNote(note, queuedAt: nowProvider())
         }
-
-        note.clearTransientTranscriptionFlags()
     }
 
     func beginLocalTranscription(for note: VoiceNote, attemptID: String) {
@@ -587,7 +586,6 @@ private extension TranscriptionService {
 
     func requeueNote(_ note: VoiceNote, queuedAt: Date) {
         note.queueTranscription(at: queuedAt)
-        note.clearTransientTranscriptionFlags()
     }
 
     func startLeaseHeartbeat(for note: VoiceNote, attemptID: String) {

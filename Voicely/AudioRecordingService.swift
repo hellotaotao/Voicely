@@ -10,6 +10,31 @@ import Combine
 import Foundation
 import os
 
+struct RecordingStopResult {
+    let filePath: String?
+    let duration: TimeInterval
+
+    private let awaitConversion: (@Sendable () async -> Void)?
+
+    init(
+        filePath: String?,
+        duration: TimeInterval,
+        awaitConversion: (@Sendable () async -> Void)? = nil
+    ) {
+        self.filePath = filePath
+        self.duration = duration
+        self.awaitConversion = awaitConversion
+    }
+
+    func awaitConversionIfNeeded(forIncrementalTranscript transcript: String) async {
+        guard transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        await awaitConversion?()
+    }
+}
+
 @MainActor
 class AudioRecordingService: ObservableObject {
 
@@ -203,8 +228,10 @@ class AudioRecordingService: ObservableObject {
     /// Stops recording synchronously (engine stop + UI state update).
     /// Kicks off PCM→M4A conversion in the background.
     /// Returns the M4A filename and recorded duration immediately.
-    func stopRecording() -> (String?, TimeInterval) {
-        guard isRecording, let eng = engine else { return (nil, 0) }
+    func stopRecording() -> RecordingStopResult {
+        guard isRecording, let eng = engine else {
+            return RecordingStopResult(filePath: nil, duration: 0)
+        }
 
         eng.inputNode.removeTap(onBus: 0)
         eng.stop()
@@ -227,11 +254,12 @@ class AudioRecordingService: ObservableObject {
         try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
         #endif
 
-        // Kick off conversion in the background
+        let conversionTask: Task<Void, Never>?
         if let pcmURL = currentPCMFileURL, let m4aURL = pendingM4AURL {
-            Task { [weak self] in
+            conversionTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
                 do {
-                    try await self?.convertCAFToM4A(from: pcmURL, to: m4aURL)
+                    try await self.convertCAFToM4A(from: pcmURL, to: m4aURL)
                     try? FileManager.default.removeItem(at: pcmURL)
                     debugLog("✅ [AudioRecordingService] M4A conversion complete → \(m4aURL.lastPathComponent)")
                 } catch {
@@ -239,13 +267,21 @@ class AudioRecordingService: ObservableObject {
                     // Keep the CAF file as backup — user's audio is not lost
                 }
             }
+        } else {
+            conversionTask = nil
         }
 
         currentPCMFileURL = nil
         pendingM4AURL = nil
 
         debugLog("✅ [AudioRecordingService] Recording stopped. Duration: \(duration)s")
-        return (m4aFilename, duration)
+        return RecordingStopResult(
+            filePath: m4aFilename,
+            duration: duration,
+            awaitConversion: {
+                await conversionTask?.value
+            }
+        )
     }
 
     // MARK: Pause / Resume
@@ -386,4 +422,3 @@ class AudioRecordingService: ObservableObject {
         }
     }
 }
-

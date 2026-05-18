@@ -9,8 +9,12 @@
 
 ## Build, Test, and Development Commands
 - `open Voicely.xcodeproj` opens the project in Xcode for running on device/simulator.
-- `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 15' build` builds from the command line.
-- `xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 15' test` runs unit and UI tests.
+- `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' build` builds for iOS Simulator.
+- `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' build` builds for Mac.
+- `xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' test` runs all tests (unit + UI) on iOS Simulator.
+- `xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -only-testing:VoicelyTests test` runs unit tests on Mac (UI tests are not supported on Mac Catalyst).
+- `xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' archive` archives for iOS (auto-appears in Xcode Organizer).
+- `xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=macOS,variant=Mac Catalyst' archive` archives for Mac Catalyst (auto-appears in Xcode Organizer).
 
 If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared before using `xcodebuild`.
 
@@ -34,7 +38,6 @@ If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared 
 - Keep `Info.plist` changes minimal and documented in PRs when permissions or entitlements change.
 
 ## To Do
-- Support incoming audio via Share Sheet / Open-in-place: register file type UTIs, handle inbound file URLs, import into app storage, create a new `VoiceNote`, and auto-start transcription. (`Voicely/Info.plist`, `Voicely/VoicelyApp.swift`, `Voicely/ContentView.swift`, `Voicely/CloudStorageManager.swift`)
 - Replace simulated transcription progress with real progress reporting (e.g., integrate WhisperKit callbacks / segment progress) and reflect in UI. (`Voicely/TranscriptionService.swift`, `Voicely/ContentView.swift`)
 - Fix `processPendingTranscriptions` so notes aren't skipped when another transcription is active; wait/retry or queue work. (`Voicely/TranscriptionService.swift`)
 - Ensure the simulated progress task is always cancelled on early exit/error/cancellation. (`Voicely/TranscriptionService.swift`)

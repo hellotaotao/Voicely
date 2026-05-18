@@ -14,6 +14,15 @@ enum TranscriptionOwnershipState: String {
     case completed
 }
 
+enum WaveformSeedGenerator {
+    static func stableSeed(for uuid: UUID) -> Int {
+        let hash = uuid.uuidString.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { partial, byte in
+            (partial ^ UInt64(byte)) &* 1_099_511_628_211
+        }
+        return Int(hash % 10_000)
+    }
+}
+
 @Model
 final class VoiceNote {
     var id: UUID = UUID()

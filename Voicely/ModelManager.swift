@@ -181,6 +181,20 @@ class ModelManager: ObservableObject {
     }
     
     private var currentLoadedModel: String?
+
+    var loadedModelIdentifierInMemory: String? {
+        currentLoadedModel
+    }
+
+    nonisolated static func selectionStateAfterPickingModel(
+        _ selectedModel: String,
+        loadedModelIdentifier: String?
+    ) -> ModelState {
+        guard loadedModelIdentifier == selectedModel else {
+            return .unloaded
+        }
+        return .loaded
+    }
     
     func loadModel(_ model: String, redownload: Bool = false) async {
         print("=== loadModel called ===")

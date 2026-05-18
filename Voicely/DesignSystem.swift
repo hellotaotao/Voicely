@@ -59,12 +59,16 @@ struct WaveformBars: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
+            .simultaneousGesture(
+                SpatialTapGesture()
+                    .onEnded { value in
+                        applySeek(at: value.location.x, width: geo.size.width)
+                    }
+            )
             .gesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: 12)
                     .onChanged { value in
-                        guard let onSeek else { return }
-                        let ratio = max(0, min(1, value.location.x / max(geo.size.width, 1)))
-                        onSeek(Double(ratio))
+                        applySeek(at: value.location.x, width: geo.size.width)
                     }
             )
         }
@@ -75,6 +79,12 @@ struct WaveformBars: View {
         if near { return activeTint }
         if played { return activeTint.opacity(0.78) }
         return inactiveTint.opacity(0.35)
+    }
+
+    private func applySeek(at locationX: CGFloat, width: CGFloat) {
+        guard let onSeek else { return }
+        let ratio = max(0, min(1, locationX / max(width, 1)))
+        onSeek(Double(ratio))
     }
 
     static func generate(seed: Int, count: Int) -> [CGFloat] {

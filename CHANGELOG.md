@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.16.0] - 2026-04-28
+
+### UI 翻新
+
+- **统一视觉系统**：新增 `DesignSystem.swift`，引入 `VoicelyTheme` 设计令牌（surface / 圆角 / 描边）与可复用组件（`SurfaceCard`、`PillBadge`、`SectionHeaderLabel`、`CircleIconButton`、可点击跳转的 `WaveformBars`）。
+- **主色更换**：AccentColor 改为 violet `#a07ee8`，深浅模式跟随系统。
+- **主界面重写**：列表行采用左侧强调条 + 标题/时间/状态徽章布局；详情页改为波形播放卡 + 转录卡 + 复制 / 分享 / 重新转录工具栏；空态与同步横幅统一卡片化。
+- **设置页重写**：Hero 模型卡（状态徽章 + 进度条 + 加载/删除按钮 + Browse all），分区卡片化（Language / Transcription / Compute / About），新增 "Fully on-device" 隐私声明卡。
+- **跨端一致**：iPhone / iPad / Mac Catalyst 共享同一份视觉组件，仅在导航拓扑上按 idiom 区分。
+
 ## [0.15.2] - 2026-04-15
 
 ### Bug 修复

@@ -5,6 +5,7 @@
 //  Created by Codex on 1/22/2026.
 //
 
+import Foundation
 import SwiftData
 import Testing
 @testable import Voicely
@@ -29,5 +30,15 @@ struct VoiceNoteModelTests {
         #expect(fetched.count == 1)
         #expect(fetched.first?.title == "Test Note")
         #expect(fetched.first?.audioFilePath == "file.m4a")
+    }
+
+    @Test func waveformSeedIsStableForKnownUUID() throws {
+        let uuid = try #require(UUID(uuidString: "12345678-1234-5678-9ABC-DEF012345678"))
+
+        let first = WaveformSeedGenerator.stableSeed(for: uuid)
+        let second = WaveformSeedGenerator.stableSeed(for: uuid)
+
+        #expect(first == second)
+        #expect(first == 8759)
     }
 }

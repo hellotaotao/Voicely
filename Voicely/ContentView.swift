@@ -5,6 +5,7 @@
 //  Created by Tao Wang on 1/6/2025.
 //
 
+import AVFoundation
 import SwiftData
 import SwiftUI
 
@@ -19,6 +20,8 @@ struct ContentView: View {
     @State private var selectedNoteID: UUID?
     @State private var showingSettings = false
     @State private var didSetupServices = false
+    @State private var startRecordingQuickActionID = UUID()
+    @State private var inboundAudioImportError: String?
 
     private var isPhoneDevice: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
@@ -41,9 +44,35 @@ struct ContentView: View {
             .background(VoicelyTheme.groupedBackground)
         }
         .tint(VoicelyTheme.accent)
-        .onAppear(perform: syncInitialSelection)
+        .onAppear {
+            syncInitialSelection()
+            consumePendingStartRecordingQuickActionIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .startRecordingQuickAction)) { _ in
+            requestStartRecordingFromQuickAction()
+        }
+        .onOpenURL { url in
+            handleIncomingAudioURL(url)
+        }
         .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
+        }
+        .alert(
+            "Import Failed",
+            isPresented: Binding(
+                get: { inboundAudioImportError != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        inboundAudioImportError = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                inboundAudioImportError = nil
+            }
+        } message: {
+            Text(inboundAudioImportError ?? "")
         }
     }
 
@@ -161,6 +190,7 @@ struct ContentView: View {
             RecordingControls(
                 audioService: audioService,
                 transcriptionService: transcriptionService,
+                startRecordingQuickActionID: startRecordingQuickActionID,
                 onManageModels: {
                     showingSettings = true
                 },
@@ -324,6 +354,7 @@ struct ContentView: View {
 
         guard !AppRuntime.isRunningTests else {
             transcriptionService.setModelManager(modelManager)
+            consumePendingStartRecordingQuickActionIfNeeded()
             return
         }
 
@@ -336,11 +367,73 @@ struct ContentView: View {
             await cloudManager.refreshSync()
         }
 
+        consumePendingStartRecordingQuickActionIfNeeded()
+
         if !transcriptionService.isWhisperAvailable() {
             Task {
                 let _ = await transcriptionService.loadWhisperModel()
             }
         }
+    }
+
+    private func handleIncomingAudioURL(_ url: URL) {
+        Task { @MainActor in
+            await importIncomingAudio(from: url)
+        }
+    }
+
+    private func importIncomingAudio(from url: URL) async {
+        transcriptionService.setModelManager(modelManager)
+
+        do {
+            let importedAudio = try cloudManager.importAudioFile(from: url)
+            let note = VoiceNote(
+                title: importedAudio.title,
+                audioFilePath: importedAudio.filePath
+            )
+            note.duration = await audioDuration(for: importedAudio.fileURL)
+
+            let isModelLoaded = transcriptionService.isWhisperAvailable()
+            transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
+
+            modelContext.insert(note)
+            try modelContext.save()
+            selectedNoteID = note.id
+
+            if isModelLoaded {
+                await transcriptionService.processPendingTranscriptions(notes: [note])
+                return
+            }
+
+            let didLoadModel = await transcriptionService.loadWhisperModel()
+            if didLoadModel {
+                await transcriptionService.processPendingTranscriptions(notes: [note])
+            }
+        } catch {
+            inboundAudioImportError = error.localizedDescription
+        }
+    }
+
+    private func audioDuration(for url: URL) async -> TimeInterval {
+        let asset = AVURLAsset(url: url)
+
+        do {
+            let duration = try await asset.load(.duration)
+            let seconds = CMTimeGetSeconds(duration)
+            return seconds.isFinite && seconds > 0 ? seconds : 0
+        } catch {
+            debugLog("Failed to read imported audio duration: \(error.localizedDescription)")
+            return 0
+        }
+    }
+
+    private func consumePendingStartRecordingQuickActionIfNeeded() {
+        guard QuickAction.consumePendingStartRecording() else { return }
+        requestStartRecordingFromQuickAction()
+    }
+
+    private func requestStartRecordingFromQuickAction() {
+        startRecordingQuickActionID = UUID()
     }
 
     private func deleteNotes(offsets: IndexSet) {
@@ -401,6 +494,18 @@ struct VoiceNoteRow: View {
         transcriptionService.isTranscribingOnAnotherDevice(note)
     }
 
+    private var hasVisibleTranscript: Bool {
+        !note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var isLiveUpdatingTranscript: Bool {
+        note.isTranscribing && hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    }
+
+    private var isFinalizingTranscription: Bool {
+        note.isTranscribing && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    }
+
     private var isPending: Bool {
         transcriptionService.shouldShowPendingState(note)
     }
@@ -424,6 +529,7 @@ struct VoiceNoteRow: View {
         let trimmed = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         if isLocallyTranscribing { return "Transcribing…" }
+        if isFinalizingTranscription { return "Finalizing transcription…" }
         if isAwaitingTranscription { return "Queued for transcription." }
         if isRemoteTranscribing { return "Transcribing on another device." }
         if let lastTranscriptionFailureMessage { return lastTranscriptionFailureMessage }
@@ -433,6 +539,10 @@ struct VoiceNoteRow: View {
     private var statusBadge: PillBadge? {
         if isLocallyTranscribing {
             return PillBadge(text: "Transcribing…", systemImage: "waveform", variant: .accent)
+        } else if isLiveUpdatingTranscript {
+            return PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
+        } else if isFinalizingTranscription {
+            return PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
         } else if isAwaitingTranscription {
             return PillBadge(text: "Queued", systemImage: "clock.arrow.circlepath", variant: .warning)
         } else if isRemoteTranscribing {
@@ -538,11 +648,13 @@ struct VoiceNoteRow: View {
 struct RecordingControls: View {
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
+    let startRecordingQuickActionID: UUID
     let onManageModels: () -> Void
     let onRecordingComplete: (VoiceNote) -> Void
     @State private var showingModelPicker = false
     @State private var coordinator: IncrementalTranscriptionCoordinator? = nil
-    @AppStorage("incrementalTranscriptionInterval") private var incrementalInterval: Int = 10
+    @State private var currentRecordingNote: VoiceNote? = nil
+    @AppStorage(IncrementalTranscriptionTiming.intervalSecondsStorageKey) private var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
 
     private var isModelLoading: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -590,6 +702,10 @@ struct RecordingControls: View {
         return "Choose a downloaded model for new transcriptions."
     }
 
+    private var effectiveIncrementalIntervalSeconds: Int {
+        IncrementalTranscriptionTiming.sanitizedIntervalSeconds(incrementalIntervalSeconds)
+    }
+
     var body: some View {
         Group {
             if audioService.isRecording {
@@ -617,6 +733,12 @@ struct RecordingControls: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(modelPickerMessage)
+        }
+        .onChange(of: startRecordingQuickActionID) { _, _ in
+            startRecordingFromQuickAction()
+        }
+        .onAppear {
+            incrementalIntervalSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded()
         }
     }
 
@@ -734,7 +856,16 @@ struct RecordingControls: View {
     }
 
     private func startRecording() {
-        _ = audioService.startRecording()
+        guard currentRecordingNote == nil else { return }
+        guard let filePath = audioService.startRecording() else { return }
+
+        let note = makeRecordingNote(filePath: filePath)
+        transcriptionService.configureNewNote(note, shouldStartImmediately: true)
+        note.isTranscribing = true
+        note.transcriptionProgress = 0.0
+        currentRecordingNote = note
+        onRecordingComplete(note)
+
         guard let pcmURL = audioService.currentPCMFileURL else { return }
         let coord = IncrementalTranscriptionCoordinator(
             transcriptionService: transcriptionService,
@@ -743,14 +874,39 @@ struct RecordingControls: View {
         coord.frameCountProvider = { [weak audioService] in
             audioService?.currentFramePosition ?? 0
         }
+        coord.progressCallback = { [note] progress in
+            note.transcriptionProgress = max(0, min(progress, 1))
+        }
+        coord.transcriptCallback = { [note] transcript in
+            let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedTranscript.isEmpty else { return }
+
+            note.transcription = trimmedTranscript
+            note.isTranscribing = true
+            note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
+                ?? transcriptionService.modelManager?.selectedModel
+            note.transcriptionLastErrorMessage = nil
+        }
         coordinator = coord
-        coord.start(intervalMinutes: incrementalInterval)
+        coord.start(intervalSeconds: effectiveIncrementalIntervalSeconds)
+    }
+
+    private func startRecordingFromQuickAction() {
+        guard !audioService.isRecording else { return }
+
+        if !isModelLoaded && !isModelLoading {
+            Task {
+                let _ = await transcriptionService.loadWhisperModel()
+            }
+        }
+
+        startRecording()
     }
 
     private func togglePauseResume() {
         if audioService.isPaused {
             audioService.resumeRecording()
-            coordinator?.resume(intervalMinutes: incrementalInterval)
+            coordinator?.resume(intervalSeconds: effectiveIncrementalIntervalSeconds)
         } else {
             audioService.pauseRecording()
             coordinator?.pause()
@@ -759,21 +915,28 @@ struct RecordingControls: View {
 
     private func stopRecording() {
         let capturedCoordinator = coordinator
+        let recordingNote = currentRecordingNote
         coordinator = nil
+        currentRecordingNote = nil
 
         let finalFrame = audioService.currentFramePosition
-        let (filePath, duration) = audioService.stopRecording()
+        let stopResult = audioService.stopRecording()
 
-        guard let filePath else { return }
+        guard let filePath = stopResult.filePath else { return }
 
-        let note = VoiceNote(
-            title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
-            audioFilePath: filePath
-        )
-        note.duration = duration
-        note.pendingTranscription = true
+        let note: VoiceNote
+        if let recordingNote {
+            note = recordingNote
+        } else {
+            note = makeRecordingNote(filePath: filePath)
+            onRecordingComplete(note)
+        }
+
+        note.audioFilePath = filePath
+        note.duration = stopResult.duration
+        note.isTranscribing = true
+        note.pendingTranscription = false
         note.transcriptionProgress = 0.0
-        onRecordingComplete(note)
 
         Task { @MainActor in
             capturedCoordinator?.progressCallback = { progress in
@@ -790,21 +953,27 @@ struct RecordingControls: View {
             let trimmedTranscript = accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if !trimmedTranscript.isEmpty {
-                if note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    note.transcription = trimmedTranscript
-                    note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
-                        ?? transcriptionService.modelManager?.selectedModel
-                    note.completeTranscription()
-                    note.clearTransientTranscriptionFlags()
-                }
+                note.transcription = trimmedTranscript
+                note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
+                    ?? transcriptionService.modelManager?.selectedModel
+                note.completeTranscription()
+                note.clearTransientTranscriptionFlags()
                 return
             }
 
+            await stopResult.awaitConversionIfNeeded(forIncrementalTranscript: trimmedTranscript)
             transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
             if isModelLoaded {
                 await transcriptionService.processPendingTranscriptions(notes: [note])
             }
         }
+    }
+
+    private func makeRecordingNote(filePath: String) -> VoiceNote {
+        VoiceNote(
+            title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
+            audioFilePath: filePath
+        )
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
@@ -877,12 +1046,24 @@ struct VoiceNoteDetailView: View {
         note.isAwaitingTranscription
     }
 
-    private var isTranscribingHere: Bool {
-        isLocallyTranscribing || isAwaitingTranscription
-    }
-
     private var isRemoteTranscribing: Bool {
         transcriptionService.isTranscribingOnAnotherDevice(note)
+    }
+
+    private var hasVisibleTranscript: Bool {
+        !note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var isLiveUpdatingTranscript: Bool {
+        note.isTranscribing && hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    }
+
+    private var isFinalizingTranscription: Bool {
+        note.isTranscribing && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    }
+
+    private var isTranscribingHere: Bool {
+        isLocallyTranscribing || isLiveUpdatingTranscript || isFinalizingTranscription || isAwaitingTranscription
     }
 
     private var shouldShowTakeOverAction: Bool {
@@ -1045,6 +1226,10 @@ struct VoiceNoteDetailView: View {
 
             if isLocallyTranscribing {
                 PillBadge(text: "Processing", systemImage: "waveform", variant: .accent)
+            } else if isLiveUpdatingTranscript {
+                PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
+            } else if isFinalizingTranscription {
+                PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
             } else if isAwaitingTranscription {
                 PillBadge(text: "Queued", systemImage: "clock.arrow.circlepath", variant: .warning)
             } else if isRemoteTranscribing {
@@ -1131,7 +1316,7 @@ struct VoiceNoteDetailView: View {
     }
 
     private var waveformSeed: Int {
-        abs(note.id.uuidString.hashValue) % 10_000
+        WaveformSeedGenerator.stableSeed(for: note.id)
     }
 
     private var waveformProgress: Double {
@@ -1286,6 +1471,17 @@ struct VoiceNoteDetailView: View {
                 }
                 .buttonStyle(.bordered)
             }
+        } else if isFinalizingTranscription {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Finalizing transcription…")
+                        .font(.subheadline.weight(.medium))
+                }
+                Text("Finishing the recording and final transcription segment before saving the transcript.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         } else if isAwaitingTranscription {
             VStack(alignment: .leading, spacing: 10) {
                 PillBadge(text: "Queued for transcription", systemImage: "clock.arrow.circlepath", variant: .warning)
@@ -1300,7 +1496,17 @@ struct VoiceNoteDetailView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-        } else if !note.transcription.isEmpty {
+        } else if hasVisibleTranscript {
+            if isLiveUpdatingTranscript {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Recording — transcript updates live")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, 8)
+            }
+
             if isEditing {
                 TextEditor(text: $editedTranscription)
                     .font(.body)

@@ -9,6 +9,32 @@ import SwiftData
 import SwiftUI
 import UserNotifications
 
+extension Notification.Name {
+    static let startRecordingQuickAction = Notification.Name("VoicelyStartRecordingQuickAction")
+}
+
+enum QuickAction {
+    static let startRecordingType = "au.taotao.voicely.start-recording"
+    private static let pendingStartRecordingKey = "VoicelyPendingStartRecordingQuickAction"
+
+    static func markPendingStartRecording() {
+        UserDefaults.standard.set(true, forKey: pendingStartRecordingKey)
+    }
+
+    static func consumePendingStartRecording() -> Bool {
+        let defaults = UserDefaults.standard
+        let isPending = defaults.bool(forKey: pendingStartRecordingKey)
+        if isPending {
+            defaults.set(false, forKey: pendingStartRecordingKey)
+        }
+        return isPending
+    }
+
+    static func postStartRecordingRequest() {
+        NotificationCenter.default.post(name: .startRecordingQuickAction, object: nil)
+    }
+}
+
 @main
 struct VoicelyApp: App {
     @Environment(\.scenePhase) private var scenePhase
@@ -96,6 +122,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private static let deviceTokenDefaultsKey = "VoicelyDeviceToken"
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem,
+           shortcutItem.type == QuickAction.startRecordingType {
+            QuickAction.markPendingStartRecording()
+        }
+
         guard !AppRuntime.isRunningTests else {
             return true
         }
@@ -122,6 +153,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         #endif
         
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        guard shortcutItem.type == QuickAction.startRecordingType else {
+            completionHandler(false)
+            return
+        }
+
+        QuickAction.postStartRecordingRequest()
+        completionHandler(true)
     }
     
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

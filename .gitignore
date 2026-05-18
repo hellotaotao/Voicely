@@ -1,2 +1,4 @@
 build/
 .claude/
+.vscode/
+docs/agent-reviews/

@@ -80,10 +80,10 @@ struct IncrementalTranscriptionCoordinatorTests {
 
     // MARK: Helpers
 
-    @Test func defaultIntervalHelperUsesThirtySeconds() {
-        #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 30)
+    @Test func defaultIntervalHelperUsesFifteenSeconds() {
+        #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 15)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 30)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 30)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 15)
     }
 
     @Test func legacyMinuteMigrationDoesNotCreateTenSecondChunks() throws {
@@ -94,12 +94,57 @@ struct IncrementalTranscriptionCoordinatorTests {
 
         let migratedSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded(in: defaults)
 
-        #expect(migratedSeconds == 30)
+        #expect(migratedSeconds == 15)
         #expect(migratedSeconds != 10)
-        #expect(defaults.integer(forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey) == 30)
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 30)
+        #expect(defaults.integer(forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey) == 15)
+        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 15)
 
         defaults.removePersistentDomain(forName: suiteName)
+    }
+
+
+    @Test func adaptiveThresholdGetsLessStrictAfterTargetTime() {
+        let config = IncrementalVoiceActivityCutConfiguration.default
+        let early = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
+            elapsedSeconds: 12,
+            targetSeconds: 15,
+            forcedCutSeconds: 25,
+            configuration: config
+        )
+        let target = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
+            elapsedSeconds: 15,
+            targetSeconds: 15,
+            forcedCutSeconds: 25,
+            configuration: config
+        )
+        let late = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
+            elapsedSeconds: 22,
+            targetSeconds: 15,
+            forcedCutSeconds: 25,
+            configuration: config
+        )
+
+        #expect(early > target)
+        #expect(target > late)
+    }
+
+    @Test func voiceActivityCutWaitsBeforeEarliestBoundary() throws {
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 8.0, amplitude: 0.08),
+            (seconds: 1.0, amplitude: 0.0),
+            (seconds: 1.0, amplitude: 0.08)
+        ])
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: 160_000,
+            targetSegmentSeconds: 15
+        )
+
+        #expect(cutFrame == 0)
+
+        try? FileManager.default.removeItem(at: pcmURL)
     }
 
     @Test func voiceActivityCutUsesRecentSilenceBeforeTarget() throws {

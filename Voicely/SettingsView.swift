@@ -481,7 +481,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Incremental Interval")
                     .font(.subheadline.weight(.medium))
-                Text("Partial transcription during long recordings; 30s is recommended")
+                Text("Partial transcription during long recordings; 15s adaptive is recommended")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

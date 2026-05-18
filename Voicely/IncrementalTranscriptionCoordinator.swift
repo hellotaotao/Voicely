@@ -9,7 +9,7 @@ import Foundation
 struct IncrementalTranscriptionTiming {
     static let intervalSecondsStorageKey = "incrementalTranscriptionIntervalSeconds"
     static let legacyIntervalMinutesStorageKey = "incrementalTranscriptionInterval"
-    static let defaultIntervalSeconds = 30
+    static let defaultIntervalSeconds = 15
     static let intervalOptionsSeconds = [15, 30, 45, 60]
 
     static func sanitizedIntervalSeconds(_ value: Int) -> Int {
@@ -43,17 +43,22 @@ struct IncrementalTranscriptionTiming {
 
     static func migratedIntervalSeconds(fromLegacyMinutes _: Int) -> Int {
         // Legacy values represented minutes. Do not reinterpret them as seconds.
-        // Reset to the new recommended 30-second chunk cadence.
+        // Reset to the current recommended adaptive 15-second chunk cadence.
         defaultIntervalSeconds
     }
 }
 
 struct IncrementalVoiceActivityCutConfiguration: Sendable {
-    var searchWindowSeconds: Double = 6
+    var searchWindowSeconds: Double = 8
     var analysisWindowSeconds: Double = 0.20
     var hopSeconds: Double = 0.05
     var minimumSilenceSeconds: Double = 0.35
     var minimumSegmentSeconds: Double = 2
+    var earliestCutRatio: Double = 0.8
+    var forcedCutRatio: Double = 1.67
+    var earlyCutConfidence: Double = 0.88
+    var targetCutConfidence: Double = 0.62
+    var lateCutConfidence: Double = 0.25
     var minimumSilenceRMS: Float = 0.003
     var maximumSilenceRMS: Float = 0.012
     var noiseFloorMultiplier: Float = 1.8
@@ -65,6 +70,11 @@ private struct IncrementalRMSWindow {
     let startFrame: Int
     let endFrame: Int
     let rms: Float
+}
+
+private struct VoiceActivityCutCandidate {
+    let localFrame: Int
+    let confidence: Double
 }
 
 /// Manages incremental (segment-by-segment) transcription during a long recording.
@@ -95,6 +105,7 @@ final class IncrementalTranscriptionCoordinator {
     private let recordingFileURL: URL
 
     private var segmentTimer: Timer?
+    private var targetIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
     private var lastSegmentEndFrame: AVAudioFramePosition = 0
     private var segmentIndex: Int = 0
     private var isProcessingSegment = false
@@ -120,7 +131,8 @@ final class IncrementalTranscriptionCoordinator {
 
     /// Start periodic transcription every `intervalSeconds` seconds.
     func start(intervalSeconds: Int) {
-        let interval = TimeInterval(max(1, intervalSeconds))
+        targetIntervalSeconds = max(1, intervalSeconds)
+        let interval = TimeInterval(1)
         segmentTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -217,12 +229,14 @@ final class IncrementalTranscriptionCoordinator {
         let index = segmentIndex
         let startFrame = lastSegmentEndFrame
         let fileURL = recordingFileURL
-        let endFrame = await resolvedSegmentEndFrame(
+        guard let endFrame = await resolvedSegmentEndFrame(
             requestedEndFrame,
             startFrame: startFrame,
             fileURL: fileURL,
             useVoiceActivityCut: useVoiceActivityCut
-        )
+        ) else {
+            return
+        }
 
         let extracted = await Task.detached {
             Self.extractSegment(
@@ -263,19 +277,21 @@ final class IncrementalTranscriptionCoordinator {
         startFrame: AVAudioFramePosition,
         fileURL: URL,
         useVoiceActivityCut: Bool
-    ) async -> AVAudioFramePosition {
+    ) async -> AVAudioFramePosition? {
         guard useVoiceActivityCut else { return requestedEndFrame }
 
+        let targetIntervalSeconds = self.targetIntervalSeconds
         let cutFrame = await Task.detached {
             Self.voiceActivityAwareCutFrame(
                 fileURL: fileURL,
                 startFrame: startFrame,
-                targetFrame: requestedEndFrame
+                targetFrame: requestedEndFrame,
+                targetSegmentSeconds: Double(targetIntervalSeconds)
             )
         }.value
 
         guard cutFrame > startFrame + minimumSegmentFrames else {
-            return requestedEndFrame
+            return nil
         }
 
         return cutFrame
@@ -376,12 +392,14 @@ final class IncrementalTranscriptionCoordinator {
     }
 
 
-    /// Chooses a cut point using lightweight energy-based silence detection.
-    /// A neural VAD can replace this later without changing the coordinator API.
+    /// Chooses a cut point using adaptive voice-activity boundary scoring.
+    /// Today this uses energy-derived silence confidence; a neural VAD can feed the
+    /// same confidence-based decision without changing the coordinator flow.
     nonisolated static func voiceActivityAwareCutFrame(
         fileURL: URL,
         startFrame: AVAudioFramePosition,
         targetFrame: AVAudioFramePosition,
+        targetSegmentSeconds: Double = Double(IncrementalTranscriptionTiming.defaultIntervalSeconds),
         configuration: IncrementalVoiceActivityCutConfiguration = .default
     ) -> AVAudioFramePosition {
         do {
@@ -395,21 +413,30 @@ final class IncrementalTranscriptionCoordinator {
                 return availableEndFrame
             }
 
+            let elapsedSeconds = Double(availableEndFrame - startFrame) / sampleRate
+            let targetSeconds = max(configuration.minimumSegmentSeconds, targetSegmentSeconds)
+            let earliestCutSeconds = max(configuration.minimumSegmentSeconds, targetSeconds * configuration.earliestCutRatio)
+            let forcedCutSeconds = max(earliestCutSeconds, targetSeconds * configuration.forcedCutRatio)
+
+            guard elapsedSeconds >= earliestCutSeconds else {
+                return startFrame
+            }
+
             let searchWindowFrames = AVAudioFramePosition(configuration.searchWindowSeconds * sampleRate)
             let analysisStartFrame = max(startFrame + minimumSegmentFrames, availableEndFrame - searchWindowFrames)
             let framesToRead = AVAudioFrameCount(availableEndFrame - analysisStartFrame)
-            guard framesToRead > 0 else { return targetFrame }
+            guard framesToRead > 0 else { return startFrame }
 
             sourceFile.framePosition = analysisStartFrame
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: framesToRead) else {
-                return targetFrame
+                return startFrame
             }
 
             try sourceFile.read(into: buffer, frameCount: framesToRead)
-            guard let floatChannelData = buffer.floatChannelData else { return targetFrame }
+            guard let floatChannelData = buffer.floatChannelData else { return startFrame }
 
             let frameLength = Int(buffer.frameLength)
-            guard frameLength > 0 else { return targetFrame }
+            guard frameLength > 0 else { return startFrame }
 
             let windowFrames = max(1, Int(configuration.analysisWindowSeconds * sampleRate))
             let hopFrames = max(1, Int(configuration.hopSeconds * sampleRate))
@@ -423,23 +450,42 @@ final class IncrementalTranscriptionCoordinator {
                 windowFrames: windowFrames,
                 hopFrames: hopFrames
             )
-            guard !windows.isEmpty else { return targetFrame }
+            guard !windows.isEmpty else { return startFrame }
 
             let threshold = silenceThreshold(
                 for: windows.map(\.rms),
                 configuration: configuration
             )
-            let localCutFrame = latestSilenceCutFrame(
+            let candidate = bestSilenceCutCandidate(
                 in: windows,
                 threshold: threshold,
                 minimumSilenceFrames: minimumSilenceFrames
             )
 
-            guard let localCutFrame else { return availableEndFrame }
+            let requiredConfidence = adaptiveCutConfidenceThreshold(
+                elapsedSeconds: elapsedSeconds,
+                targetSeconds: targetSeconds,
+                forcedCutSeconds: forcedCutSeconds,
+                configuration: configuration
+            )
 
-            let cutFrame = analysisStartFrame + AVAudioFramePosition(localCutFrame)
-            guard cutFrame > startFrame + minimumSegmentFrames else { return availableEndFrame }
-            return min(cutFrame, availableEndFrame)
+            if let candidate, candidate.confidence >= requiredConfidence {
+                let cutFrame = analysisStartFrame + AVAudioFramePosition(candidate.localFrame)
+                guard cutFrame > startFrame + minimumSegmentFrames else { return startFrame }
+                return min(cutFrame, availableEndFrame)
+            }
+
+            if elapsedSeconds >= forcedCutSeconds {
+                if let candidate {
+                    let cutFrame = analysisStartFrame + AVAudioFramePosition(candidate.localFrame)
+                    if cutFrame > startFrame + minimumSegmentFrames {
+                        return min(cutFrame, availableEndFrame)
+                    }
+                }
+                return availableEndFrame
+            }
+
+            return startFrame
         } catch {
             debugLog("⚠️ [IncrementalCoordinator] Voice activity cut failed: \(error)")
             return targetFrame
@@ -494,29 +540,77 @@ final class IncrementalTranscriptionCoordinator {
         )
     }
 
-    nonisolated private static func latestSilenceCutFrame(
+    nonisolated static func adaptiveCutConfidenceThreshold(
+        elapsedSeconds: Double,
+        targetSeconds: Double,
+        forcedCutSeconds: Double,
+        configuration: IncrementalVoiceActivityCutConfiguration = .default
+    ) -> Double {
+        let earliestSeconds = max(configuration.minimumSegmentSeconds, targetSeconds * configuration.earliestCutRatio)
+        if elapsedSeconds <= earliestSeconds {
+            return configuration.earlyCutConfidence
+        }
+        if elapsedSeconds <= targetSeconds {
+            let progress = (elapsedSeconds - earliestSeconds) / max(targetSeconds - earliestSeconds, 0.001)
+            return interpolate(
+                from: configuration.earlyCutConfidence,
+                to: configuration.targetCutConfidence,
+                progress: progress
+            )
+        }
+        let progress = (elapsedSeconds - targetSeconds) / max(forcedCutSeconds - targetSeconds, 0.001)
+        return interpolate(
+            from: configuration.targetCutConfidence,
+            to: configuration.lateCutConfidence,
+            progress: min(max(progress, 0), 1)
+        )
+    }
+
+    nonisolated private static func interpolate(from start: Double, to end: Double, progress: Double) -> Double {
+        let clamped = min(max(progress, 0), 1)
+        return start + (end - start) * clamped
+    }
+
+    nonisolated private static func bestSilenceCutCandidate(
         in windows: [IncrementalRMSWindow],
         threshold: Float,
         minimumSilenceFrames: Int
-    ) -> Int? {
+    ) -> VoiceActivityCutCandidate? {
         var silenceStartFrame: Int?
-        var latestCutFrame: Int?
+        var silenceRMSValues: [Float] = []
+        var bestCandidate: VoiceActivityCutCandidate?
+
+        func considerCandidate(endFrame: Int) {
+            guard let silenceStartFrame else { return }
+            let durationFrames = endFrame - silenceStartFrame
+            guard durationFrames >= minimumSilenceFrames else { return }
+            let averageRMS = silenceRMSValues.isEmpty
+                ? threshold
+                : silenceRMSValues.reduce(0, +) / Float(silenceRMSValues.count)
+            let quietness = max(0, min(1, Double((threshold - averageRMS) / max(threshold, 0.000_001))))
+            let durationConfidence = min(1, Double(durationFrames) / Double(max(minimumSilenceFrames * 2, 1)))
+            let confidence = min(1, 0.65 * quietness + 0.35 * durationConfidence)
+            let candidate = VoiceActivityCutCandidate(localFrame: endFrame, confidence: confidence)
+            if bestCandidate == nil || candidate.confidence >= bestCandidate!.confidence {
+                bestCandidate = candidate
+            }
+        }
 
         for window in windows {
             if window.rms <= threshold {
                 if silenceStartFrame == nil {
                     silenceStartFrame = window.startFrame
+                    silenceRMSValues.removeAll()
                 }
-
-                if let silenceStartFrame, window.endFrame - silenceStartFrame >= minimumSilenceFrames {
-                    latestCutFrame = window.endFrame
-                }
+                silenceRMSValues.append(window.rms)
+                considerCandidate(endFrame: window.endFrame)
             } else {
                 silenceStartFrame = nil
+                silenceRMSValues.removeAll()
             }
         }
 
-        return latestCutFrame
+        return bestCandidate
     }
 
     nonisolated static func sanitizedSegmentText(_ text: String?) -> String? {

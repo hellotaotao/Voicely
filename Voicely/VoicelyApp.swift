@@ -112,6 +112,9 @@ struct VoicelyApp: App {
         }
         if let transcription = environment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION"], !transcription.isEmpty {
             seededNote.transcription = transcription
+            if let modelIdentifier = environment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION_MODEL_IDENTIFIER"], !modelIdentifier.isEmpty {
+                seededNote.transcriptionModelIdentifier = modelIdentifier
+            }
             seededNote.completeTranscription()
         }
         context.insert(seededNote)

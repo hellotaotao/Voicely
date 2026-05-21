@@ -798,8 +798,10 @@ struct RecordingControls: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(VoicelyTheme.subtleBorder, lineWidth: 1)
                 )
+                .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Selected Model \(selectedModelDisplayName)")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
 
             recordButton
@@ -862,9 +864,12 @@ struct RecordingControls: View {
                     Circle().fill(audioService.hasPermission ? VoicelyTheme.accent : Color.gray)
                 )
                 .shadow(color: audioService.hasPermission ? VoicelyTheme.accent.opacity(0.35) : .clear, radius: 12, y: 4)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
         }
         .buttonStyle(.plain)
         .disabled(!audioService.hasPermission)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(audioService.hasPermission ? "Record" : "Record unavailable")
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
     }
 
@@ -1175,6 +1180,7 @@ struct VoiceNoteDetailView: View {
                             .font(.body.weight(.medium))
                     }
                     .tint(VoicelyTheme.accent)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Detail.editButton)
                 }
             }
         }
@@ -1253,6 +1259,7 @@ struct VoiceNoteDetailView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.editButton)
             }
         }
     }
@@ -1418,10 +1425,13 @@ struct VoiceNoteDetailView: View {
 
                 Divider().opacity(0.5)
 
-                transcriptionBody
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 16)
-                    .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
+                VStack(alignment: .leading, spacing: 0) {
+                    transcriptionBody
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionCard)
@@ -1442,6 +1452,8 @@ struct VoiceNoteDetailView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Copy Transcript")
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.copyTranscriptionButton)
 
                 Button(action: shareTranscription) {
                     Image(systemName: "square.and.arrow.up")
@@ -1454,6 +1466,8 @@ struct VoiceNoteDetailView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Share Transcript")
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.shareTranscriptionButton)
             }
 
             if shouldShowTakeOverAction {
@@ -1588,6 +1602,7 @@ struct VoiceNoteDetailView: View {
                     .padding(12)
                     .background(VoicelyTheme.surfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptEditor)
             } else {
                 Text(note.transcription)
                     .font(.body)
@@ -1595,6 +1610,7 @@ struct VoiceNoteDetailView: View {
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
             }
         } else if shouldShowPendingState {
             VStack(alignment: .leading, spacing: 10) {

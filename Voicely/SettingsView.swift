@@ -152,17 +152,26 @@ struct SettingsView: View {
                 VStack(spacing: 20) {
                     modelHeroCard
 
-                    settingsSection(title: "Language") {
+                    settingsSection(
+                        title: "Language",
+                        identifier: AccessibilityIdentifiers.Settings.languageSection
+                    ) {
                         languageRow
                     }
 
-                    settingsSection(title: "Transcription") {
+                    settingsSection(
+                        title: "Transcription",
+                        identifier: AccessibilityIdentifiers.Settings.transcriptionSection
+                    ) {
                         promptBlock
                         Divider().background(VoicelyTheme.hairline)
                         intervalRow
                     }
 
-                    settingsSection(title: "Compute") {
+                    settingsSection(
+                        title: "Compute",
+                        identifier: AccessibilityIdentifiers.Settings.computeSection
+                    ) {
                         encoderRow
                         Divider().background(VoicelyTheme.hairline)
                         decoderRow
@@ -177,11 +186,15 @@ struct SettingsView: View {
                             navRow(icon: "timer", title: "Run Benchmark")
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.Settings.runBenchmarkLink)
                     }
 
                     privacyNoticeCard
 
-                    settingsSection(title: "About") {
+                    settingsSection(
+                        title: "About",
+                        identifier: AccessibilityIdentifiers.Settings.aboutSection
+                    ) {
                         appInfoContent
                     }
 
@@ -191,12 +204,14 @@ struct SettingsView: View {
                 .padding(.top, 8)
             }
             .background(VoicelyTheme.groupedBackground.ignoresSafeArea())
+            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.screen)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.Settings.doneButton)
                 }
             }
         }
@@ -211,7 +226,11 @@ struct SettingsView: View {
 
     // MARK: - Section shell
 
-    private func settingsSection<Content: View>(title: String, @ViewBuilder content: @escaping () -> Content) -> some View {
+    private func settingsSection<Content: View>(
+        title: String,
+        identifier: String,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionHeaderLabel(text: title)
                 .padding(.leading, 4)
@@ -221,6 +240,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .accessibilityIdentifier(identifier)
     }
 
     // MARK: - Model hero
@@ -305,8 +325,10 @@ struct SettingsView: View {
                     .background(VoicelyTheme.accentTint(0.10), in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Settings.browseModelsLink)
             }
         }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Settings.activeModelCard)
     }
 
     private var modelStateBadge: some View {
@@ -360,6 +382,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.menu)
                     .labelsHidden()
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Settings.modelPicker)
                     .onChange(of: modelManager.selectedModel) { _, newValue in
                         let nextState = ModelManager.selectionStateAfterPickingModel(
                             newValue,
@@ -440,6 +463,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .labelsHidden()
+            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.speechLanguagePicker)
         }
     }
 
@@ -469,6 +493,7 @@ struct SettingsView: View {
                         .stroke(VoicelyTheme.subtleBorder, lineWidth: 1)
                 )
                 .padding(.top, 2)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Settings.customPromptField)
         }
     }
 
@@ -493,6 +518,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .labelsHidden()
+            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.incrementalIntervalPicker)
         }
     }
 

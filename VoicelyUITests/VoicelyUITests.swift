@@ -8,6 +8,20 @@
 import XCTest
 
 final class VoicelyUITests: XCTestCase {
+    fileprivate enum ID {
+        static let libraryScreen = "LibraryScreen"
+        static let noteLibraryList = "NoteLibraryList"
+        static let settingsButton = "SettingsButton"
+        static let settingsScreen = "SettingsScreen"
+        static let settingsDoneButton = "SettingsDoneButton"
+        static let activeModelCard = "ActiveModelCard"
+        static let transcriptionSettingsSection = "TranscriptionSettingsSection"
+        static let noteRow = "VoiceNoteRow"
+        static let noteDetailScreen = "NoteDetailScreen"
+        static let noteDetailTitle = "NoteDetailTitle"
+        static let transcriptionCard = "TranscriptionCard"
+        static let transcribeButton = "TranscribeButton"
+    }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -24,11 +38,17 @@ final class VoicelyUITests: XCTestCase {
         }
     }
 
-    private func launchApp(seedNoteTitle: String? = nil) -> XCUIApplication {
+    private func launchApp(
+        seedNoteTitle: String? = nil,
+        seedNoteAudioPath: String? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         if let seedNoteTitle {
             app.launchEnvironment["VOICELY_UI_TEST_SEED_NOTE"] = "1"
             app.launchEnvironment["VOICELY_UI_TEST_NOTE_TITLE"] = seedNoteTitle
+        }
+        if let seedNoteAudioPath {
+            app.launchEnvironment["VOICELY_UI_TEST_NOTE_AUDIO_PATH"] = seedNoteAudioPath
         }
         app.launch()
         app.tap()
@@ -36,17 +56,23 @@ final class VoicelyUITests: XCTestCase {
     }
 
     @MainActor
-    func testLaunchShowsVoiceNotesTitle() throws {
+    func testLaunchShowsLibraryShell() throws {
         let app = launchApp()
-        XCTAssertTrue(app.navigationBars["Voice Notes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Voicely"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.element(id: ID.libraryScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.element(id: ID.noteLibraryList).exists)
     }
 
     @MainActor
     func testOpenSettingsShowsSettingsScreen() throws {
         let app = launchApp()
-        app.buttons["SettingsButton"].firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Model Management"].exists)
+        app.buttons[ID.settingsButton].firstMatch.tap()
+        XCTAssertTrue(app.element(id: ID.settingsScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.element(id: ID.activeModelCard).exists)
+        XCTAssertTrue(app.element(id: ID.transcriptionSettingsSection).exists)
+
+        app.buttons[ID.settingsDoneButton].firstMatch.tap()
+        XCTAssertTrue(app.element(id: ID.libraryScreen).waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -59,7 +85,40 @@ final class VoicelyUITests: XCTestCase {
 
         noteTitleText.tap()
 
-        XCTAssertTrue(app.buttons["Transcribe"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.element(id: ID.noteDetailScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.element(id: ID.noteDetailTitle).exists)
+        XCTAssertTrue(app.element(id: ID.transcriptionCard).exists)
+        let transcribeButton = app.transcribeControl
+        app.scrollToElement(transcribeButton)
+        XCTAssertTrue(transcribeButton.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testSeededRecordingTranscribePromptRoutesToSettings() throws {
+        let noteTitle = "Seeded Recording"
+        let app = launchApp(
+            seedNoteTitle: noteTitle,
+            seedNoteAudioPath: "ui-test-seeded-recording.m4a"
+        )
+
+        XCTAssertTrue(app.element(id: ID.noteLibraryList).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[ID.noteRow].firstMatch.waitForExistence(timeout: 5))
+        app.buttons[ID.noteRow].firstMatch.tap()
+
+        XCTAssertTrue(app.element(id: ID.noteDetailScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[noteTitle].exists)
+        let transcribeButton = app.transcribeControl
+        app.scrollToElement(transcribeButton)
+        XCTAssertTrue(transcribeButton.waitForExistence(timeout: 5))
+        transcribeButton.tap()
+
+        let modelAlert = app.alerts["Model Not Loaded"]
+        XCTAssertTrue(modelAlert.waitForExistence(timeout: 5))
+        modelAlert.buttons["Open Settings"].tap()
+
+        XCTAssertTrue(app.element(id: ID.settingsScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.element(id: ID.activeModelCard).exists)
+        XCTAssertTrue(app.element(id: ID.transcriptionSettingsSection).exists)
     }
 
     @MainActor
@@ -67,6 +126,31 @@ final class VoicelyUITests: XCTestCase {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
+        }
+    }
+}
+
+private extension XCUIApplication {
+    func element(id: String) -> XCUIElement {
+        descendants(matching: .any)[id].firstMatch
+    }
+
+    var transcribeControl: XCUIElement {
+        let identifiedControl = element(id: VoicelyUITests.ID.transcribeButton)
+        if identifiedControl.exists {
+            return identifiedControl
+        }
+        return buttons["Transcribe"].firstMatch
+    }
+
+    func scrollToElement(_ element: XCUIElement, maxSwipes: Int = 4) {
+        guard !element.exists || !element.isHittable else { return }
+
+        let scrollView = scrollViews.firstMatch
+        guard scrollView.exists else { return }
+
+        for _ in 0..<maxSwipes where !element.isHittable {
+            scrollView.swipeUp()
         }
     }
 }

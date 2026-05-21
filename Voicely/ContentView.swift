@@ -101,6 +101,7 @@ struct ContentView: View {
 
             detailPane
         }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
     private var defaultNavigationView: some View {
@@ -118,7 +119,7 @@ struct ContentView: View {
                         }
                         .tint(VoicelyTheme.accent)
                         .accessibilityLabel("Settings")
-                        .accessibilityIdentifier("SettingsButton")
+                        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.settingsButton)
                     }
 
                     ToolbarItem(placement: .principal) {
@@ -144,6 +145,7 @@ struct ContentView: View {
         } detail: {
             detailPane
         }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
     private func sidebarWidth(for geometry: GeometryProxy) -> CGFloat {
@@ -161,6 +163,8 @@ struct ContentView: View {
                     .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Settings")
+            .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.settingsButton)
 
             Spacer()
 
@@ -204,6 +208,8 @@ struct ContentView: View {
             .zIndex(1)
         }
         .background(VoicelyTheme.groupedBackground)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
     @ViewBuilder
@@ -212,10 +218,14 @@ struct ContentView: View {
             List(selection: $selectedNoteID) {
                 noteListContent(usesSplitNavigationSelection: true)
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Library.noteList)
         } else {
             List {
                 noteListContent(usesSplitNavigationSelection: false)
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Library.noteList)
         }
     }
 
@@ -238,6 +248,7 @@ struct ContentView: View {
                         }
                     }
                 )
+                .accessibilityIdentifier(AccessibilityIdentifiers.Library.syncStatusBanner)
                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 6, trailing: 12))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -247,6 +258,7 @@ struct ContentView: View {
         Section {
             if voiceNotes.isEmpty {
                 EmptyLibraryCard()
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Library.emptyState)
                     .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 10, trailing: 12))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -297,6 +309,7 @@ struct ContentView: View {
                 NavigationLink(value: note.id) {
                     row.foregroundStyle(.primary)
                 }
+                .accessibilityIdentifier(AccessibilityIdentifiers.Library.noteRow)
             } else {
                 Button {
                     selectedNoteID = note.id
@@ -304,6 +317,7 @@ struct ContentView: View {
                     row.foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Library.noteRow)
             }
         }
     }
@@ -747,6 +761,7 @@ struct RecordingControls: View {
         .onAppear {
             incrementalIntervalSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded()
         }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingControls)
     }
 
     private var idleLayout: some View {
@@ -785,6 +800,7 @@ struct RecordingControls: View {
                 )
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
 
             recordButton
         }
@@ -830,6 +846,7 @@ struct RecordingControls: View {
                     .background(Color.primary.opacity(0.06), in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Library.pauseRecordingButton)
 
             stopButton
         }
@@ -848,6 +865,7 @@ struct RecordingControls: View {
         }
         .buttonStyle(.plain)
         .disabled(!audioService.hasPermission)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
     }
 
     private var stopButton: some View {
@@ -860,6 +878,7 @@ struct RecordingControls: View {
                 .shadow(color: Color.red.opacity(0.35), radius: 12, y: 4)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Library.stopRecordingButton)
     }
 
     private func startRecording() {
@@ -1146,6 +1165,7 @@ struct VoiceNoteDetailView: View {
             .padding(usesCompactDetailLayout ? 16 : 20)
         }
         .background(VoicelyTheme.groupedBackground)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.screen)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if usesCompactDetailLayout {
@@ -1197,12 +1217,14 @@ struct VoiceNoteDetailView: View {
                     TextField("Note title", text: $editedTitle)
                         .font(.title.weight(.bold))
                         .textFieldStyle(.plain)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.title)
                 } else {
                     Text(note.title)
                         .font(.title.weight(.bold))
                         .tracking(-0.5)
                         .lineLimit(2)
                         .foregroundStyle(.primary)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.title)
                 }
                 Text(note.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
                     .font(.footnote)
@@ -1263,6 +1285,7 @@ struct VoiceNoteDetailView: View {
                 )
             }
         }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.metadata)
     }
 
     private var audioPlayerCard: some View {
@@ -1331,6 +1354,7 @@ struct VoiceNoteDetailView: View {
                 }
             }
         }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.audioPlayerCard)
     }
 
     private var waveformSeed: Int {
@@ -1352,6 +1376,7 @@ struct VoiceNoteDetailView: View {
                 .shadow(color: VoicelyTheme.accent.opacity(0.35), radius: 10, y: 4)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.playButton)
     }
 
     private func transportButton(systemImage: String, action: @escaping () -> Void) -> some View {
@@ -1396,8 +1421,10 @@ struct VoiceNoteDetailView: View {
                 transcriptionBody
                     .padding(.horizontal, 16)
                     .padding(.vertical, 16)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
             }
         }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionCard)
     }
 
     @ViewBuilder
@@ -1443,6 +1470,7 @@ struct VoiceNoteDetailView: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
     }
 
     private func retranscribeActionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -1452,7 +1480,10 @@ struct VoiceNoteDetailView: View {
                     .font(.caption.weight(.semibold))
                 Text(title)
                     .font(.footnote.weight(.medium))
+                    .accessibilityIdentifier(transcriptionActionIdentifier(for: title))
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(transcriptionActionIdentifier(for: title))
             .foregroundStyle(.primary)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -1465,8 +1496,21 @@ struct VoiceNoteDetailView: View {
                     .stroke(VoicelyTheme.hairline, lineWidth: 1)
             )
         }
+        .accessibilityIdentifier(transcriptionActionIdentifier(for: title))
+        .accessibilityLabel(title)
         .buttonStyle(.plain)
         .disabled(note.audioFilePath.isEmpty || isTranscribingHere || isRemoteTranscribing)
+    }
+
+    private func transcriptionActionIdentifier(for title: String) -> String {
+        switch title {
+        case "Take over":
+            return AccessibilityIdentifiers.Detail.takeOverTranscriptionButton
+        case "Re-transcribe":
+            return AccessibilityIdentifiers.Detail.retranscribeButton
+        default:
+            return AccessibilityIdentifiers.Detail.transcribeButton
+        }
     }
 
     @ViewBuilder
@@ -1488,6 +1532,7 @@ struct VoiceNoteDetailView: View {
                     Label("Cancel Transcription", systemImage: "xmark.circle")
                 }
                 .buttonStyle(.bordered)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
             }
         } else if isRecordingInProgress && !hasVisibleTranscript {
             VStack(alignment: .leading, spacing: 10) {
@@ -1573,6 +1618,7 @@ struct VoiceNoteDetailView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(VoicelyTheme.accent)
                 .foregroundStyle(Color.black)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
@@ -1819,6 +1865,7 @@ struct DetailPlaceholderView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Library.detailPlaceholder)
     }
 }
 

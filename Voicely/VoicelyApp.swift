@@ -105,7 +105,15 @@ struct VoicelyApp: App {
         }
 
         let noteTitle = environment["VOICELY_UI_TEST_NOTE_TITLE"] ?? "UI Test Note"
-        let seededNote = VoiceNote(title: noteTitle)
+        let audioFilePath = environment["VOICELY_UI_TEST_NOTE_AUDIO_PATH"] ?? ""
+        let seededNote = VoiceNote(title: noteTitle, audioFilePath: audioFilePath)
+        if let durationValue = environment["VOICELY_UI_TEST_NOTE_DURATION"].flatMap(Double.init) {
+            seededNote.duration = durationValue
+        }
+        if let transcription = environment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION"], !transcription.isEmpty {
+            seededNote.transcription = transcription
+            seededNote.completeTranscription()
+        }
         context.insert(seededNote)
 
         do {

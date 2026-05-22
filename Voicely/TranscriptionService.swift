@@ -116,6 +116,12 @@ class TranscriptionService: ObservableObject {
         let now = nowProvider()
         var migratedAny = false
 
+        for note in notes {
+            if recoverInterruptedLiveRecordingIfNeeded(note, now: now) {
+                migratedAny = true
+            }
+        }
+
         for note in notes where !note.hasOwnershipState {
             migratedAny = true
             note.transcriptionOriginDeviceID = note.transcriptionOriginDeviceID ?? currentDeviceID
@@ -472,6 +478,37 @@ private extension TranscriptionService {
             return true
         }
         return leaseExpiresAt <= (now ?? nowProvider())
+    }
+
+    func recoverInterruptedLiveRecordingIfNeeded(_ note: VoiceNote, now: Date) -> Bool {
+        guard note.hasOwnershipState else {
+            return false
+        }
+
+        guard note.isTranscribing else {
+            return false
+        }
+
+        guard activeNoteID != note.id else {
+            return false
+        }
+
+        if let ownerDeviceID = note.transcriptionOwnerDeviceID,
+           ownerDeviceID != currentDeviceID,
+           !leaseHasExpired(note, now: now) {
+            return false
+        }
+
+        let hasTranscript = !note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        if hasTranscript || note.duration <= 0 || note.audioFilePath.isEmpty {
+            note.completeTranscription()
+            note.clearTransientTranscriptionFlags()
+        } else {
+            note.queueTranscription(at: note.transcriptionQueuedAt ?? note.timestamp)
+        }
+
+        return true
     }
 
     func enqueueEligibleNotes(_ notes: [VoiceNote]) {

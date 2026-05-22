@@ -392,6 +392,34 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionState == .completed)
     }
 
+    @Test @MainActor func migrationCompletesInterruptedLiveRecordingWithTranscript() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+
+        let note = VoiceNote(title: "Interrupted", audioFilePath: "recording.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.transcription = "Partial live transcript"
+        note.claimTranscription(
+            ownerDeviceID: "phone",
+            attemptID: "live-attempt",
+            queuedAt: now.addingTimeInterval(-60),
+            leaseExpiresAt: now.addingTimeInterval(240)
+        )
+        note.isTranscribing = true
+        note.transcriptionProgress = 0.64
+
+        service.migrateLegacyOwnershipIfNeeded(notes: [note])
+
+        #expect(note.transcription == "Partial live transcript")
+        #expect(note.transcriptionState == .completed)
+        #expect(note.isTranscribing == false)
+        #expect(note.pendingTranscription == false)
+        #expect(note.transcriptionProgress == 0.0)
+        #expect(note.transcriptionOwnerDeviceID == nil)
+        #expect(note.transcriptionAttemptID == nil)
+        #expect(note.transcriptionLeaseExpiresAt == nil)
+    }
+
     @Test @MainActor func migrationNormalizesLegacyFlags() {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)

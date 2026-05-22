@@ -52,7 +52,8 @@ final class VoicelyUITests: XCTestCase {
         seedNoteAudioPath: String? = nil,
         seedNoteDuration: TimeInterval? = nil,
         seedNoteTranscription: String? = nil,
-        seedNoteTranscriptionModelIdentifier: String? = nil
+        seedNoteTranscriptionModelIdentifier: String? = nil,
+        seedNoteQueuedForTranscription: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         let shouldSeedNote = seedNoteTitle != nil
@@ -60,6 +61,7 @@ final class VoicelyUITests: XCTestCase {
             || seedNoteDuration != nil
             || seedNoteTranscription != nil
             || seedNoteTranscriptionModelIdentifier != nil
+            || seedNoteQueuedForTranscription
 
         if shouldSeedNote {
             app.launchEnvironment["VOICELY_UI_TEST_SEED_NOTE"] = "1"
@@ -78,6 +80,9 @@ final class VoicelyUITests: XCTestCase {
         }
         if let seedNoteTranscriptionModelIdentifier {
             app.launchEnvironment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION_MODEL_IDENTIFIER"] = seedNoteTranscriptionModelIdentifier
+        }
+        if seedNoteQueuedForTranscription {
+            app.launchEnvironment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION_STATE"] = "queued"
         }
         app.launch()
         app.tap()
@@ -206,6 +211,34 @@ final class VoicelyUITests: XCTestCase {
         XCTAssertTrue(app.element(id: ID.settingsScreen).waitForExistence(timeout: 5))
         XCTAssertTrue(app.element(id: ID.activeModelCard).exists)
         XCTAssertTrue(app.element(id: ID.transcriptionSettingsSection).exists)
+    }
+
+    @MainActor
+    func testQueuedRecordingAllowsManualTranscribePrompt() throws {
+        let noteTitle = "Queued Recording"
+        let app = launchApp(
+            seedNoteTitle: noteTitle,
+            seedNoteAudioPath: "ui-test-queued-recording.m4a",
+            seedNoteDuration: 12,
+            seedNoteQueuedForTranscription: true
+        )
+
+        XCTAssertTrue(app.element(id: ID.noteLibraryList).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[ID.noteRow].firstMatch.waitForExistence(timeout: 5))
+        app.buttons[ID.noteRow].firstMatch.tap()
+
+        XCTAssertTrue(app.element(id: ID.noteDetailScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[noteTitle].exists)
+        XCTAssertTrue(app.staticTexts["Queued for transcription"].exists)
+
+        let transcribeButton = app.transcribeControl
+        app.scrollToElement(transcribeButton)
+        XCTAssertTrue(transcribeButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(transcribeButton.isEnabled)
+        transcribeButton.tap()
+
+        let modelAlert = app.alerts["Model Not Loaded"]
+        XCTAssertTrue(modelAlert.waitForExistence(timeout: 5))
     }
 
     @MainActor

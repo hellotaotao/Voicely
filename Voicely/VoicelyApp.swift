@@ -116,6 +116,9 @@ struct VoicelyApp: App {
                 seededNote.transcriptionModelIdentifier = modelIdentifier
             }
             seededNote.completeTranscription()
+        } else if environment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION_STATE"] == "queued" {
+            seededNote.transcriptionOriginDeviceID = DeviceIdentity.currentDeviceID
+            seededNote.queueTranscription(at: Date())
         }
         context.insert(seededNote)
 

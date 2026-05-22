@@ -54,6 +54,11 @@ struct ContentView: View {
         .onOpenURL { url in
             handleIncomingAudioURL(url)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
+            Task { @MainActor in
+                await processQueuedTranscriptionsIfReady()
+            }
+        }
         .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
         }
@@ -385,9 +390,32 @@ struct ContentView: View {
 
         if !transcriptionService.isWhisperAvailable() {
             Task {
-                let _ = await transcriptionService.loadWhisperModel()
+                let didLoadModel = await transcriptionService.loadWhisperModel()
+                if didLoadModel {
+                    await processQueuedTranscriptionsIfReady()
+                }
             }
+        } else {
+            await processQueuedTranscriptionsIfReady()
         }
+    }
+
+    private func processQueuedTranscriptionsIfReady() async {
+        transcriptionService.setModelManager(modelManager)
+
+        guard transcriptionService.isWhisperAvailable() else {
+            return
+        }
+
+        let eligibleNotes = voiceNotes.filter { note in
+            !note.isTranscribing
+        }
+
+        guard !eligibleNotes.isEmpty else {
+            return
+        }
+
+        await transcriptionService.processPendingTranscriptions(notes: eligibleNotes)
     }
 
     private func handleIncomingAudioURL(_ url: URL) {
@@ -1098,7 +1126,7 @@ struct VoiceNoteDetailView: View {
     }
 
     private var isTranscribingHere: Bool {
-        isLocallyTranscribing || isLiveUpdatingTranscript || isRecordingInProgress || isFinalizingTranscription || isAwaitingTranscription
+        isLocallyTranscribing || isLiveUpdatingTranscript || isRecordingInProgress || isFinalizingTranscription
     }
 
     private var shouldShowTakeOverAction: Bool {
@@ -1576,6 +1604,13 @@ struct VoiceNoteDetailView: View {
                 Text("This note is waiting in the transcription queue and will switch to live progress once the local task starts.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Button(action: { requestTranscription() }) {
+                    Label("Transcribe Now", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(VoicelyTheme.accent)
+                .foregroundStyle(Color.black)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
             }
         } else if isRemoteTranscribing {
             VStack(alignment: .leading, spacing: 10) {

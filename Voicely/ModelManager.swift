@@ -9,6 +9,16 @@ import Foundation
 import WhisperKit
 import CoreML
 
+enum LocalModelSourceKind: Equatable {
+    case bundled
+    case downloaded
+}
+
+struct LocalModelSource: Equatable {
+    let kind: LocalModelSourceKind
+    let url: URL
+}
+
 enum ModelState: CustomStringConvertible {
     case unloaded
     case loading
@@ -88,6 +98,7 @@ class ModelManager: ObservableObject {
         }
     }
     @Published var localModels: [String] = []
+    @Published private(set) var downloadedModels: [String] = []
     @Published var availableModels: [String] = []
     @Published var selectedModel: String = ModelManager.platformDefaultModel {
         didSet {
@@ -102,6 +113,7 @@ class ModelManager: ObservableObject {
     
     private let modelStorage = "huggingface/models/argmaxinc/whisperkit-coreml"
     private let repoName = "argmaxinc/whisperkit-coreml"
+    private let bundledModelsDirectory = "BundledModels"
     private var localModelPath = ""
     private var disabledModels: [String] = []
     private let specializationProgressRatio: Float = 0.7
@@ -168,19 +180,39 @@ class ModelManager: ObservableObject {
         
         let modelPath = documents.appendingPathComponent(modelStorage).path
         localModelPath = modelPath
+        var models: [String] = []
         
         if FileManager.default.fileExists(atPath: modelPath) {
             do {
                 let downloadedModels = try FileManager.default.contentsOfDirectory(atPath: modelPath)
-                localModels = ModelUtilities.formatModelFiles(downloadedModels)
-                print("Found local models: \(localModels)")
+                self.downloadedModels = ModelUtilities.formatModelFiles(downloadedModels)
+                models.append(contentsOf: self.downloadedModels)
+                print("Found downloaded models: \(self.downloadedModels)")
             } catch {
                 print("Error enumerating files at \(modelPath): \(error.localizedDescription)")
             }
+        } else {
+            downloadedModels = []
+        }
+
+        let bundledModels = Self.bundledModelIdentifiers(
+            in: bundledModelsRoot,
+            directoryName: bundledModelsDirectory
+        )
+        if !bundledModels.isEmpty {
+            models.append(contentsOf: bundledModels)
+            print("Found bundled models: \(bundledModels)")
+        }
+
+        localModels = Array(Set(models)).sorted { lhs, rhs in
+            ModelManager.displayName(for: lhs).localizedCaseInsensitiveCompare(ModelManager.displayName(for: rhs)) == .orderedAscending
         }
     }
     
     private var currentLoadedModel: String?
+    private var bundledModelsRoot: URL? {
+        Bundle.main.resourceURL
+    }
 
     var loadedModelIdentifierInMemory: String? {
         currentLoadedModel
@@ -257,11 +289,17 @@ class ModelManager: ObservableObject {
             }
             
             var folder: URL?
-            
+            let localSource = Self.preferredLocalModelSource(
+                for: model,
+                downloadedModels: downloadedModels,
+                downloadedModelsRootPath: localModelPath,
+                bundledModelsRoot: bundledModelsRoot
+            )
+
             // Check if model is available locally
-            if localModels.contains(model) && !redownload {
-                folder = URL(fileURLWithPath: localModelPath).appendingPathComponent(model)
-                print("Using local model at: \(folder?.path ?? "nil")")
+            if let localSource, !redownload {
+                folder = localSource.url
+                print("Using \(localSource.kind) model at: \(folder?.path ?? "nil")")
             } else {
                 // Download the model
                 modelState = .downloading
@@ -318,6 +356,10 @@ class ModelManager: ObservableObject {
                 
                 try await whisperKit.loadModels()
                 
+                if !downloadedModels.contains(model), localSource?.kind != .bundled {
+                    downloadedModels.append(model)
+                }
+
                 if !localModels.contains(model) {
                     localModels.append(model)
                 }
@@ -337,27 +379,43 @@ class ModelManager: ObservableObject {
     }
     
     func deleteModel(_ model: String) {
-        guard localModels.contains(model) else { return }
+        guard downloadedModels.contains(model) else { return }
         
         let modelFolder = URL(fileURLWithPath: localModelPath).appendingPathComponent(model)
         
         do {
             try FileManager.default.removeItem(at: modelFolder)
-            if let index = localModels.firstIndex(of: model) {
+            if let index = downloadedModels.firstIndex(of: model) {
+                downloadedModels.remove(at: index)
+            }
+
+            if !Self.isBundledModel(
+                model,
+                bundledModelsRoot: bundledModelsRoot,
+                directoryName: bundledModelsDirectory
+            ), let index = localModels.firstIndex(of: model) {
                 localModels.remove(at: index)
             }
             
+            let stillAvailableAsBuiltIn = Self.isBundledModel(
+                model,
+                bundledModelsRoot: bundledModelsRoot,
+                directoryName: bundledModelsDirectory
+            )
+
             if selectedModel == model || currentLoadedModel == model {
                 // If deleting the currently selected/loaded model, default to an available model
-                if selectedModel == model && !availableModels.isEmpty {
+                if selectedModel == model && !stillAvailableAsBuiltIn && !availableModels.isEmpty {
                     let newModel = availableModels.first(where: { $0 != model }) ?? Self.platformDefaultModel
                     selectedModel = newModel // This triggers didSet to persist to UserDefaults
                     print("Changed selected model to \(newModel) after deletion")
                 }
-                
-                modelState = .unloaded
-                whisperKit = nil
-                currentLoadedModel = nil
+
+                if !stillAvailableAsBuiltIn {
+                    modelState = .unloaded
+                    whisperKit = nil
+                    currentLoadedModel = nil
+                }
             }
             
             print("Deleted model: \(model)")
@@ -412,11 +470,157 @@ class ModelManager: ObservableObject {
     }
     
     func isSelectedModelDownloaded() -> Bool {
-        return localModels.contains(selectedModel)
+        return downloadedModels.contains(selectedModel)
+    }
+
+    func isSelectedModelBuiltIn() -> Bool {
+        Self.isBundledModel(
+            selectedModel,
+            bundledModelsRoot: bundledModelsRoot,
+            directoryName: bundledModelsDirectory
+        )
+    }
+
+    func isModelAvailableOffline(_ model: String) -> Bool {
+        localModels.contains(model) || Self.isBundledModel(
+            model,
+            bundledModelsRoot: bundledModelsRoot,
+            directoryName: bundledModelsDirectory
+        )
     }
     
     private func shouldIncludeModel(_ model: String) -> Bool {
         !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    nonisolated static func preferredLocalModelSource(
+        for model: String,
+        downloadedModels: [String],
+        downloadedModelsRootPath: String,
+        bundledModelsRoot: URL?,
+        fileManager: FileManager = .default
+    ) -> LocalModelSource? {
+        if let bundledURL = bundledModelURL(
+            for: model,
+            bundledModelsRoot: bundledModelsRoot,
+            directoryName: "BundledModels",
+            fileManager: fileManager
+        ) {
+            return LocalModelSource(kind: .bundled, url: bundledURL)
+        }
+
+        if downloadedModels.contains(model) {
+            let downloadedURL = URL(fileURLWithPath: downloadedModelsRootPath).appendingPathComponent(model)
+            if isWhisperKitModelFolder(downloadedURL, fileManager: fileManager) {
+                return LocalModelSource(kind: .downloaded, url: downloadedURL)
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated static func bundledModelIdentifiers(
+        in bundledModelsRoot: URL?,
+        directoryName: String = "BundledModels",
+        fileManager: FileManager = .default
+    ) -> [String] {
+        guard let bundledModelsRoot else {
+            return []
+        }
+
+        let bundledModelsURL = bundledModelsRoot.appendingPathComponent(directoryName)
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: bundledModelsURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return contents.compactMap { url in
+            guard isWhisperKitModelFolder(url, fileManager: fileManager) else {
+                return nil
+            }
+            if url.pathExtension == "bundle" {
+                return url.deletingPathExtension().lastPathComponent
+            }
+            return url.lastPathComponent
+        }
+    }
+
+    nonisolated private static func isBundledModel(
+        _ model: String,
+        bundledModelsRoot: URL?,
+        directoryName: String,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        bundledModelURL(
+            for: model,
+            bundledModelsRoot: bundledModelsRoot,
+            directoryName: directoryName,
+            fileManager: fileManager
+        ) != nil
+    }
+
+    nonisolated private static func bundledModelURL(
+        for model: String,
+        bundledModelsRoot: URL?,
+        directoryName: String,
+        fileManager: FileManager
+    ) -> URL? {
+        guard let bundledModelsRoot else {
+            return nil
+        }
+
+        let candidates = [
+            bundledModelsRoot.appendingPathComponent(directoryName).appendingPathComponent(model),
+            bundledModelsRoot.appendingPathComponent(directoryName).appendingPathComponent("\(model).bundle"),
+            bundledModelsRoot.appendingPathComponent(model),
+            bundledModelsRoot.appendingPathComponent("\(model).bundle"),
+            bundledModelsRoot
+        ]
+
+        return candidates.first { isWhisperKitModelFolder($0, fileManager: fileManager) }
+    }
+
+    nonisolated private static func isWhisperKitModelFolder(_ url: URL, fileManager: FileManager) -> Bool {
+        guard isDirectory(url, fileManager: fileManager) else {
+            return false
+        }
+
+        return ["MelSpectrogram", "AudioEncoder", "TextDecoder"].allSatisfy { component in
+            modelComponentExists(named: component, in: url, fileManager: fileManager)
+        }
+    }
+
+    nonisolated private static func modelComponentExists(
+        named component: String,
+        in folder: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let compiledURL = folder.appendingPathComponent("\(component).mlmodelc")
+        if isDirectory(compiledURL, fileManager: fileManager) {
+            return true
+        }
+
+        let packageURL = folder.appendingPathComponent("\(component).mlpackage")
+        if isDirectory(packageURL, fileManager: fileManager) {
+            return true
+        }
+
+        let packageModelURL = packageURL
+            .appendingPathComponent("Data")
+            .appendingPathComponent("com.apple.CoreML")
+            .appendingPathComponent("model.mlmodel")
+        return fileManager.fileExists(atPath: packageModelURL.path)
+    }
+
+    nonisolated private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return false
+        }
+        return isDirectory.boolValue
     }
 
     nonisolated static func displayName(for modelIdentifier: String) -> String {

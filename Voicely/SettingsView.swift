@@ -334,8 +334,14 @@ struct SettingsView: View {
     private var modelStateBadge: some View {
         switch modelManager.modelState {
         case .loaded:
+            if modelManager.isSelectedModelBuiltIn() {
+                return PillBadge(text: "Built in", systemImage: "shippingbox.fill", variant: .success)
+            }
             return PillBadge(text: "Loaded", systemImage: "checkmark.circle.fill", variant: .success)
         case .unloaded:
+            if modelManager.isSelectedModelBuiltIn() {
+                return PillBadge(text: "Built in", systemImage: "shippingbox", variant: .info)
+            }
             return PillBadge(text: "Unloaded", systemImage: "circle", variant: .neutral)
         case .downloading:
             return PillBadge(text: "Downloading", systemImage: "arrow.down.circle", variant: .info)
@@ -372,7 +378,7 @@ struct SettingsView: View {
                     Picker("", selection: $modelManager.selectedModel) {
                         ForEach(modelManager.availableModels, id: \.self) { model in
                             HStack {
-                                if modelManager.localModels.contains(model) {
+                                if modelManager.isModelAvailableOffline(model) {
                                     Image(systemName: "checkmark.circle.fill")
                                 }
                                 Text(ModelManager.displayName(for: model))
@@ -417,7 +423,7 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
 
-            if modelManager.localModels.contains(modelManager.selectedModel) {
+            if modelManager.isSelectedModelDownloaded() {
                 Button(role: .destructive) {
                     showingModelDeletion = true
                 } label: {
@@ -506,7 +512,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Incremental Interval")
                     .font(.subheadline.weight(.medium))
-                Text("Partial transcription during long recordings; 15s adaptive is recommended")
+                Text("Partial transcription during long recordings; 20–30s adaptive is recommended")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

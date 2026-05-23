@@ -9,8 +9,9 @@ import Foundation
 struct IncrementalTranscriptionTiming {
     static let intervalSecondsStorageKey = "incrementalTranscriptionIntervalSeconds"
     static let legacyIntervalMinutesStorageKey = "incrementalTranscriptionInterval"
-    static let defaultIntervalSeconds = 15
-    static let intervalOptionsSeconds = [15, 30, 45, 60]
+    static let defaultIntervalSeconds = 29
+    static let minimumEffectiveSpeechChunkSeconds = 15
+    static let intervalOptionsSeconds = [20, 25, 29, 30]
 
     static func sanitizedIntervalSeconds(_ value: Int) -> Int {
         intervalOptionsSeconds.contains(value) ? value : defaultIntervalSeconds
@@ -43,7 +44,7 @@ struct IncrementalTranscriptionTiming {
 
     static func migratedIntervalSeconds(fromLegacyMinutes _: Int) -> Int {
         // Legacy values represented minutes. Do not reinterpret them as seconds.
-        // Reset to the current recommended adaptive 15-second chunk cadence.
+        // Reset to the current recommended Whisper-safe chunk cadence.
         defaultIntervalSeconds
     }
 }
@@ -51,9 +52,9 @@ struct IncrementalTranscriptionTiming {
 struct IncrementalVoiceActivityCutConfiguration: Sendable {
     var searchWindowSeconds: Double = 8
     var minimumSilenceSeconds: Double = 0.35
-    var minimumSegmentSeconds: Double = 2
+    var minimumSegmentSeconds: Double = Double(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds)
     var earliestCutRatio: Double = 0.8
-    var forcedCutRatio: Double = 1.67
+    var forcedCutRatio: Double = 1.0
     var earlyCutConfidence: Double = 0.88
     var targetCutConfidence: Double = 0.62
     var lateCutConfidence: Double = 0.25
@@ -239,6 +240,20 @@ final class IncrementalTranscriptionCoordinator {
 
         guard let segmentURL = extracted else { return }
         lastSegmentEndFrame = endFrame
+        defer {
+            try? FileManager.default.removeItem(at: segmentURL)
+        }
+
+        if transcribeOverride == nil {
+            let containsProbableSpeech = await Task.detached(priority: .utility) {
+                AudioSpeechAnalyzer.safelyContainsProbableSpeech(at: segmentURL)
+            }.value
+
+            guard containsProbableSpeech else {
+                progressCallback?(1.0)
+                return
+            }
+        }
 
         let textResult: String?
         if let override = transcribeOverride {
@@ -250,7 +265,6 @@ final class IncrementalTranscriptionCoordinator {
                 }
             }?.text
         }
-        try? FileManager.default.removeItem(at: segmentURL)
 
         if let text = Self.sanitizedSegmentText(textResult) {
             if accumulatedTranscript.isEmpty {
@@ -337,10 +351,10 @@ final class IncrementalTranscriptionCoordinator {
     private nonisolated static func minimumSegmentFrames(for fileURL: URL) -> AVAudioFramePosition {
         do {
             let sourceFile = try AVAudioFile(forReading: fileURL)
-            return AVAudioFramePosition(sourceFile.processingFormat.sampleRate)
+            return AVAudioFramePosition(Double(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds) * sourceFile.processingFormat.sampleRate)
         } catch {
             debugLog("⚠️ [IncrementalCoordinator] Failed to read recording sample rate: \(error)")
-            return 16_000
+            return AVAudioFramePosition(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds * 16_000)
         }
     }
 
@@ -402,7 +416,7 @@ final class IncrementalTranscriptionCoordinator {
             let minimumSegmentFrames = AVAudioFramePosition(configuration.minimumSegmentSeconds * sampleRate)
 
             guard availableEndFrame > startFrame + minimumSegmentFrames else {
-                return availableEndFrame
+                return startFrame
             }
 
             let elapsedSeconds = Double(availableEndFrame - startFrame) / sampleRate
@@ -563,16 +577,6 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     nonisolated static func sanitizedSegmentText(_ text: String?) -> String? {
-        guard let text else { return nil }
-
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        let normalized = trimmed.lowercased()
-        if normalized == "[no audio]" || normalized == "no audio" {
-            return nil
-        }
-
-        return trimmed
+        TranscriptSanitizer.cleanedTranscript(text)
     }
 }

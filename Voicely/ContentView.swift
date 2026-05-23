@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import CoreML
 import SwiftData
 import SwiftUI
 
@@ -345,7 +346,7 @@ struct ContentView: View {
     }
 
     private var sidebarRecordingOverlayInset: CGFloat {
-        96
+        112
     }
 
     private func syncInitialSelection() {
@@ -665,10 +666,15 @@ struct VoiceNoteRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isSelected ? VoicelyTheme.accent.opacity(0.32) : Color.clear, lineWidth: 1)
+                .stroke(rowBorderColor, lineWidth: 1)
         )
+        .shadow(color: Color.black.opacity(isSelected ? 0.07 : 0.035), radius: isSelected ? 8 : 4, x: 0, y: 2)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .animation(.easeOut(duration: 0.12), value: isSelected)
+    }
+
+    private var rowBorderColor: Color {
+        isSelected ? VoicelyTheme.accent.opacity(0.32) : Color.primary.opacity(0.075)
     }
 
     private var rowBackground: some View {
@@ -676,7 +682,7 @@ struct VoiceNoteRow: View {
             if isSelected {
                 VoicelyTheme.accent.opacity(0.12)
             } else {
-                Color.clear
+                VoicelyTheme.surface.opacity(0.72)
             }
         }
     }
@@ -733,7 +739,7 @@ struct RecordingControls: View {
         switch modelManager.modelState {
         case .loaded: return .green
         case .loading, .downloading, .prewarming: return .orange
-        case .unloaded: return modelManager.isSelectedModelDownloaded() ? .secondary : .accentColor
+        case .unloaded: return modelManager.isModelAvailableOffline(modelManager.selectedModel) ? .secondary : .accentColor
         }
     }
 
@@ -748,7 +754,7 @@ struct RecordingControls: View {
         if quickSelectableModels.isEmpty {
             return "Download a model in Settings to make it available here."
         }
-        return "Choose a downloaded model for new transcriptions."
+        return "Choose an offline model for new transcriptions."
     }
 
     private var effectiveIncrementalIntervalSeconds: Int {
@@ -763,6 +769,10 @@ struct RecordingControls: View {
                 idleLayout
             }
         }
+        .padding(8)
+        .background(recordingControlBackground)
+        .overlay(recordingControlBorder)
+        .shadow(color: Color.black.opacity(0.28), radius: 22, x: 0, y: 12)
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: audioService.isRecording)
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: audioService.isPaused)
         .confirmationDialog(
@@ -790,6 +800,42 @@ struct RecordingControls: View {
             incrementalIntervalSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded()
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingControls)
+    }
+
+    private var recordingControlBackground: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(VoicelyTheme.surface.opacity(0.58))
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.22),
+                            Color.white.opacity(0.06),
+                            Color.clear
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        }
+    }
+
+    private var recordingControlBorder: some View {
+        RoundedRectangle(cornerRadius: 26, style: .continuous)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.34),
+                        Color.primary.opacity(0.10)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 1
+            )
     }
 
     private var idleLayout: some View {
@@ -820,11 +866,11 @@ struct RecordingControls: View {
                 .frame(maxWidth: .infinity)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(VoicelyTheme.surface)
+                        .fill(VoicelyTheme.surface.opacity(0.68))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(VoicelyTheme.subtleBorder, lineWidth: 1)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                 )
                 .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
             }
@@ -861,7 +907,7 @@ struct RecordingControls: View {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.red.opacity(0.08))
+                    .fill(Color.red.opacity(0.10))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -945,6 +991,7 @@ struct RecordingControls: View {
             note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                 ?? transcriptionService.modelManager?.selectedModel
             note.transcriptionLastErrorMessage = nil
+            note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
         }
         coordinator = coord
         coord.start(intervalSeconds: effectiveIncrementalIntervalSeconds)
@@ -1015,6 +1062,7 @@ struct RecordingControls: View {
                 note.transcription = trimmedTranscript
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
+                note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
                 note.completeTranscription()
                 note.clearTransientTranscriptionFlags()
                 return
@@ -1142,6 +1190,29 @@ struct VoiceNoteDetailView: View {
             return transcriptionService.localProgress(for: note)
         }
         return max(0, min(note.transcriptionProgress, 1))
+    }
+
+    private var shouldShowComputeTelemetry: Bool {
+        isTranscribingHere
+    }
+
+    private var currentTelemetrySnapshot: TranscriptionTelemetrySnapshot {
+        let serviceSnapshot = transcriptionService.transcriptionTelemetry
+        if serviceSnapshot.isActive {
+            return serviceSnapshot
+        }
+
+        let modelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
+            ?? transcriptionService.modelManager?.selectedModel
+        let modelName = modelIdentifier.map(ModelManager.displayName(for:)) ?? "No model"
+
+        return TranscriptionTelemetrySnapshot.inactive(
+            modelName: modelName,
+            computeRoute: TranscriptionComputeRoute(
+                encoderUnits: transcriptionService.modelManager?.encoderComputeUnits ?? .cpuAndNeuralEngine,
+                decoderUnits: transcriptionService.modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
+            )
+        )
     }
 
     private var lastTranscriptionFailureMessage: String? {
@@ -1318,6 +1389,15 @@ struct VoiceNoteDetailView: View {
                     systemImage: note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu",
                     variant: note.transcriptionModelDisplayName == nil ? .neutral : .info
                 )
+                if let computeLabel = note.transcriptionComputeBadgeLabel {
+                    PillBadge(text: computeLabel, systemImage: "cpu", variant: .info)
+                }
+                if let loadLabel = note.averageProcessingLoadLabel {
+                    PillBadge(text: loadLabel, systemImage: "gauge.medium", variant: .info)
+                }
+                if let speedLabel = note.averageTranscriptionSpeedLabel {
+                    PillBadge(text: speedLabel, systemImage: "speedometer", variant: .info)
+                }
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.metadata)
@@ -1453,7 +1533,10 @@ struct VoiceNoteDetailView: View {
 
                 Divider().opacity(0.5)
 
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: shouldShowComputeTelemetry ? 12 : 0) {
+                    if shouldShowComputeTelemetry {
+                        computeTelemetryCard
+                    }
                     transcriptionBody
                 }
                 .padding(.horizontal, 16)
@@ -1553,6 +1636,97 @@ struct VoiceNoteDetailView: View {
         default:
             return AccessibilityIdentifiers.Detail.transcribeButton
         }
+    }
+
+    private var computeTelemetryCard: some View {
+        let snapshot = currentTelemetrySnapshot
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "cpu")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(VoicelyTheme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(snapshot.computeRoute.summary)
+                        .font(.subheadline.weight(.semibold))
+                    Text(snapshot.computeRoute.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                PillBadge(
+                    text: snapshot.isActive ? "Live" : "Selected",
+                    systemImage: snapshot.isActive ? "bolt.fill" : "checkmark.circle",
+                    variant: snapshot.isActive ? .accent : .neutral
+                )
+            }
+
+            HStack(spacing: 8) {
+                telemetryMetric(
+                    title: "Model",
+                    value: snapshot.modelName,
+                    systemImage: "shippingbox"
+                )
+                telemetryMetric(
+                    title: "Load",
+                    value: snapshot.metrics.processingLoadLabel,
+                    systemImage: "gauge.medium"
+                )
+                telemetryMetric(
+                    title: "Speed",
+                    value: snapshot.metrics.speedLabel,
+                    systemImage: "speedometer"
+                )
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "thermometer.medium")
+                    .font(.caption)
+                Text("Thermal \(snapshot.thermalStateLabel)")
+                    .font(.caption)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("Load is processing time divided by audio duration.")
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous)
+                .fill(VoicelyTheme.accentTint(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous)
+                .stroke(VoicelyTheme.accentTint(0.20), lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.computeTelemetryCard)
+    }
+
+    private func telemetryMetric(title: String, value: String, systemImage: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.caption2)
+                Text(title)
+                    .font(.caption2.weight(.medium))
+            }
+            .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(VoicelyTheme.surfaceRaised)
+        )
     }
 
     @ViewBuilder

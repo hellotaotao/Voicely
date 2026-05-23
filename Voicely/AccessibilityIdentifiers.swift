@@ -1,6 +1,13 @@
 import Foundation
 
 enum AccessibilityIdentifiers {
+    enum Onboarding {
+        static let screen = "FirstLaunchOnboardingScreen"
+        static let pageTitle = "FirstLaunchOnboardingPageTitle"
+        static let nextButton = "FirstLaunchOnboardingNextButton"
+        static let finishButton = "FirstLaunchOnboardingFinishButton"
+    }
+
     enum Navigation {
         static let libraryScreen = "LibraryScreen"
         static let settingsButton = "SettingsButton"
@@ -27,6 +34,7 @@ enum AccessibilityIdentifiers {
         static let audioPlayerCard = "AudioPlayerCard"
         static let playButton = "PlayButton"
         static let transcriptionCard = "TranscriptionCard"
+        static let computeTelemetryCard = "ComputeTelemetryCard"
         static let transcriptionBody = "TranscriptionBody"
         static let transcriptEditor = "TranscriptEditor"
         static let copyTranscriptionButton = "CopyTranscriptionButton"

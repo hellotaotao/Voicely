@@ -94,10 +94,11 @@ struct IncrementalTranscriptionCoordinatorTests {
 
     // MARK: Helpers
 
-    @Test func defaultIntervalHelperUsesFifteenSeconds() {
-        #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 15)
+    @Test func defaultIntervalHelperUsesWhisperSafeCadence() {
+        #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 29)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 30)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 15)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 20)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 29)
     }
 
     @Test func legacyMinuteMigrationDoesNotCreateTenSecondChunks() throws {
@@ -108,10 +109,10 @@ struct IncrementalTranscriptionCoordinatorTests {
 
         let migratedSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded(in: defaults)
 
-        #expect(migratedSeconds == 15)
+        #expect(migratedSeconds == 29)
         #expect(migratedSeconds != 10)
-        #expect(defaults.integer(forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey) == 15)
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 15)
+        #expect(defaults.integer(forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey) == 29)
+        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 29)
 
         defaults.removePersistentDomain(forName: suiteName)
     }
@@ -120,21 +121,21 @@ struct IncrementalTranscriptionCoordinatorTests {
     @Test func adaptiveThresholdGetsLessStrictAfterTargetTime() {
         let config = IncrementalVoiceActivityCutConfiguration.default
         let early = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
-            elapsedSeconds: 12,
-            targetSeconds: 15,
-            forcedCutSeconds: 25,
+            elapsedSeconds: 23.2,
+            targetSeconds: 29,
+            forcedCutSeconds: 29,
             configuration: config
         )
         let target = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
-            elapsedSeconds: 15,
-            targetSeconds: 15,
-            forcedCutSeconds: 25,
+            elapsedSeconds: 29,
+            targetSeconds: 29,
+            forcedCutSeconds: 29,
             configuration: config
         )
         let late = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
-            elapsedSeconds: 22,
-            targetSeconds: 15,
-            forcedCutSeconds: 25,
+            elapsedSeconds: 30,
+            targetSeconds: 29,
+            forcedCutSeconds: 29,
             configuration: config
         )
 
@@ -153,7 +154,7 @@ struct IncrementalTranscriptionCoordinatorTests {
             fileURL: pcmURL,
             startFrame: 0,
             targetFrame: 160_000,
-            targetSegmentSeconds: 15
+            targetSegmentSeconds: 29
         )
 
         #expect(cutFrame == 0)
@@ -320,7 +321,7 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func stopAccumulatesTranscriptFromSegments() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 30)
+        let pcmURL = try makeSilentCAF(seconds: 70)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -328,14 +329,14 @@ struct IncrementalTranscriptionCoordinatorTests {
         )
         coordinator.transcribeOverride = { @Sendable _ in "hello" }
 
-        await coordinator.transcribeSegment(upToFrame: 160_000)
-        await coordinator.transcribeSegment(upToFrame: 320_000)
+        await coordinator.transcribeSegment(upToFrame: 480_000)
+        await coordinator.transcribeSegment(upToFrame: 960_000)
 
         #expect(coordinator.accumulatedTranscript == "hello\nhello")
     }
 
     @Test @MainActor func stopWaitsForInFlightSegmentAndPendingFinalSegment() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 30)
+        let pcmURL = try makeSilentCAF(seconds: 70)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -347,13 +348,13 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
 
         let segmentTask = Task { @MainActor in
-            await coordinator.transcribeSegment(upToFrame: 160_000)
+            await coordinator.transcribeSegment(upToFrame: 480_000)
         }
         await harness.waitForCallCount(1)
 
         let stopRecorder = StopResultRecorder()
         let stopTask = Task { @MainActor in
-            let transcript = await coordinator.stop(currentFrame: 320_000)
+            let transcript = await coordinator.stop(currentFrame: 960_000)
             await stopRecorder.setTranscript(transcript)
             return transcript
         }
@@ -371,7 +372,7 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func transcriptCallbackPublishesAccumulatedTranscript() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 30)
+        let pcmURL = try makeSilentCAF(seconds: 70)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -386,15 +387,15 @@ struct IncrementalTranscriptionCoordinatorTests {
             updates.append(transcript)
         }
 
-        await coordinator.transcribeSegment(upToFrame: 160_000)
-        await coordinator.transcribeSegment(upToFrame: 320_000)
+        await coordinator.transcribeSegment(upToFrame: 480_000)
+        await coordinator.transcribeSegment(upToFrame: 960_000)
 
         #expect(updates == ["first", "first\nsecond"])
         #expect(coordinator.accumulatedTranscript == "first\nsecond")
     }
 
     @Test @MainActor func noAudioPlaceholderDoesNotPolluteAccumulatedTranscript() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 15)
+        let pcmURL = try makeSilentCAF(seconds: 30)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -402,8 +403,30 @@ struct IncrementalTranscriptionCoordinatorTests {
         )
         coordinator.transcribeOverride = { @Sendable _ in " [no audio] " }
 
-        await coordinator.transcribeSegment(upToFrame: 160_000)
+        await coordinator.transcribeSegment(upToFrame: 480_000)
 
         #expect(coordinator.accumulatedTranscript.isEmpty)
+    }
+
+    @Test func noSpeechPlaceholdersAreRemovedFromSegmentText() {
+        #expect(IncrementalTranscriptionCoordinator.sanitizedSegmentText(" [Silence]\n[BLANK_AUDIO]\n(humming) ") == nil)
+        #expect(IncrementalTranscriptionCoordinator.sanitizedSegmentText("hello\n[BLANK_AUDIO]\n(music)") == "hello")
+    }
+
+    @Test func audioSpeechAnalyzerRejectsSilentCAF() throws {
+        let pcmURL = try makeSilentCAF(seconds: 1.0)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+
+        #expect(try AudioSpeechAnalyzer.containsProbableSpeech(at: pcmURL) == false)
+    }
+
+    @Test func audioSpeechAnalyzerAcceptsVoicedCAF() throws {
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 0.2, amplitude: 0.0),
+            (seconds: 0.4, amplitude: 0.02)
+        ])
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+
+        #expect(try AudioSpeechAnalyzer.containsProbableSpeech(at: pcmURL) == true)
     }
 }

@@ -30,11 +30,15 @@ class TranscriptionService: ObservableObject {
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var progressByNoteID: [UUID: Float] = [:]
+    @Published private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot = .inactive()
 
     var modelManager: ModelManager?
     var transcribeImpl: TranscribeImpl = { _, _ in nil }
     var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
     var nowProvider: () -> Date = { Date() }
+    var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
+        await TranscriptionService.estimatedAudioDuration(for: filePath)
+    }
     var leaseDuration: TimeInterval = 5 * 60
     var heartbeatInterval: TimeInterval = 60
     var nonOriginQueueGracePeriod: TimeInterval = 5 * 60
@@ -53,6 +57,9 @@ class TranscriptionService: ObservableObject {
     private var pendingTranscriptionOrder: [UUID] = []
     private var pendingTranscriptionOrderSet: Set<UUID> = []
     private var pendingTranscriptionOrderCursor = 0
+    private var telemetryStartedAt: Date?
+    private var telemetryAudioDuration: TimeInterval?
+    private var telemetryTimerTask: Task<Void, Never>?
 
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
@@ -98,6 +105,7 @@ class TranscriptionService: ObservableObject {
         note.lastTranscriptionDuration = 0
         note.transcriptionModelIdentifier = nil
         note.clearTransientTranscriptionFlags()
+        note.clearTranscriptionTelemetrySummary()
 
         if shouldStartImmediately {
             let attemptID = UUID().uuidString
@@ -338,6 +346,7 @@ class TranscriptionService: ObservableObject {
         defer {
             isTranscribing = false
             currentTranscriptionTask = nil
+            finishTranscriptionTelemetry()
             resetProgressSmoothing()
             transcriptionProgress = 0.0
         }
@@ -345,6 +354,8 @@ class TranscriptionService: ObservableObject {
         guard isWhisperLoaded else {
             return nil
         }
+
+        await beginTranscriptionTelemetry(filePath: filePath)
 
         let task = Task { [weak self] in
             await self?.transcribeImpl(filePath, progressCallback)
@@ -355,8 +366,7 @@ class TranscriptionService: ObservableObject {
             return nil
         }
 
-        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
+        guard let text = TranscriptSanitizer.cleanedTranscript(rawText) else {
             return nil
         }
 
@@ -380,6 +390,7 @@ class TranscriptionService: ObservableObject {
         cancelRequested = true
         currentTranscriptionTask?.cancel()
         currentTranscriptionTask = nil
+        finishTranscriptionTelemetry()
         stopLeaseHeartbeat()
         resetProgressSmoothing()
         isTranscribing = false
@@ -391,6 +402,32 @@ class TranscriptionService: ObservableObject {
 
     func wasTranscriptionCancelled() -> Bool {
         lastCancellationHandled
+    }
+
+    nonisolated static func estimatedAudioDuration(for filePath: String) async -> TimeInterval? {
+        let url = URL(fileURLWithPath: filePath)
+
+        if let audioFile = try? AVAudioFile(forReading: url) {
+            let sampleRate = audioFile.fileFormat.sampleRate
+            if sampleRate > 0 {
+                let seconds = Double(audioFile.length) / sampleRate
+                if seconds.isFinite, seconds > 0 {
+                    return seconds
+                }
+            }
+        }
+
+        let asset = AVURLAsset(url: url)
+        do {
+            let duration = try await asset.load(.duration)
+            let seconds = duration.seconds
+            guard seconds.isFinite, seconds > 0 else {
+                return nil
+            }
+            return seconds
+        } catch {
+            return nil
+        }
     }
 }
 
@@ -411,6 +448,73 @@ private extension TranscriptionService {
 
     var isWhisperLoaded: Bool {
         modelManager?.isModelLoaded() ?? false
+    }
+
+    func beginTranscriptionTelemetry(filePath: String) async {
+        finishTranscriptionTelemetry()
+        telemetryStartedAt = nowProvider()
+        telemetryAudioDuration = await audioDurationProvider(filePath)
+        refreshTranscriptionTelemetry(isActive: true)
+
+        telemetryTimerTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else {
+                    break
+                }
+                self?.refreshTranscriptionTelemetry(isActive: true)
+            }
+        }
+    }
+
+    func finishTranscriptionTelemetry() {
+        telemetryTimerTask?.cancel()
+        telemetryTimerTask = nil
+
+        guard telemetryStartedAt != nil else {
+            return
+        }
+
+        refreshTranscriptionTelemetry(isActive: false)
+        telemetryStartedAt = nil
+        telemetryAudioDuration = nil
+    }
+
+    func refreshTranscriptionTelemetry(isActive: Bool) {
+        guard let telemetryStartedAt else {
+            transcriptionTelemetry = TranscriptionTelemetrySnapshot.inactive(
+                modelName: currentTelemetryModelName(),
+                computeRoute: currentTelemetryComputeRoute()
+            )
+            return
+        }
+
+        let elapsed = max(0, nowProvider().timeIntervalSince(telemetryStartedAt))
+        transcriptionTelemetry = TranscriptionTelemetrySnapshot(
+            isActive: isActive,
+            modelName: currentTelemetryModelName(),
+            computeRoute: currentTelemetryComputeRoute(),
+            metrics: TranscriptionTelemetryMetrics(
+                elapsedSeconds: elapsed,
+                audioDurationSeconds: telemetryAudioDuration
+            ),
+            thermalState: ProcessInfo.processInfo.thermalState
+        )
+    }
+
+    func currentTelemetryModelName() -> String {
+        let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
+        guard let modelIdentifier, !modelIdentifier.isEmpty else {
+            return "No model"
+        }
+        return ModelManager.displayName(for: modelIdentifier)
+    }
+
+    func currentTelemetryComputeRoute() -> TranscriptionComputeRoute {
+        TranscriptionComputeRoute(
+            encoderUnits: modelManager?.encoderComputeUnits ?? .cpuAndNeuralEngine,
+            decoderUnits: modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
+        )
     }
 
     func updateEngineStatus() {
@@ -581,12 +685,14 @@ private extension TranscriptionService {
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
+            note.recordTranscriptionTelemetry(transcriptionTelemetry)
             note.completeTranscription()
             note.clearTransientTranscriptionFlags()
         } else {
             if !hadExistingTranscript {
                 note.lastTranscriptionDuration = 0
                 note.transcriptionModelIdentifier = nil
+                note.clearTranscriptionTelemetrySummary()
             }
 
             if !wasTranscriptionCancelled() {
@@ -697,6 +803,16 @@ private extension TranscriptionService {
                 guard let self else { return }
                 self.smoothProgress(to: value, progressCallback: progressCallback)
             }
+            updateProgressOnMain(0.01)
+
+            let containsProbableSpeech = await Task.detached(priority: .utility) {
+                AudioSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
+            }.value
+            guard containsProbableSpeech else {
+                print("Skipping transcription because no probable speech was detected in audio file: \(filePath)")
+                updateProgressOnMain(1.0)
+                return nil
+            }
 
             whisperKit.transcriptionStateCallback = { state in
                 Task { @MainActor in
@@ -738,7 +854,7 @@ private extension TranscriptionService {
                 task: .transcribe,
                 language: languageCode,
                 temperature: 0.0,
-                temperatureFallbackCount: 5,
+                temperatureFallbackCount: 0,
                 sampleLength: 224,
                 usePrefillPrompt: true,
                 usePrefillCache: false,
@@ -780,7 +896,7 @@ private extension TranscriptionService {
                 return nil
             }
 
-            return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return TranscriptSanitizer.cleanedTranscript(result.text)
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable

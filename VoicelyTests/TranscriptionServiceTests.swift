@@ -73,6 +73,28 @@ struct TranscriptionServiceTests {
         #expect(service.transcriptionProgress == 0.0)
     }
 
+    @Test @MainActor func transcribeAudioRemovesNoSpeechMarkerLines() async {
+        let service = makeService(deviceID: "device-a")
+        service.transcribeImpl = { _, _ in
+            "hello\n[BLANK_AUDIO]\n(humming)"
+        }
+
+        let result = await service.transcribeAudio(filePath: "file.m4a")
+
+        #expect(result?.text == "hello")
+    }
+
+    @Test @MainActor func transcribeAudioReturnsNilForOnlyNoSpeechMarkers() async {
+        let service = makeService(deviceID: "device-a")
+        service.transcribeImpl = { _, _ in
+            "[Silence]\n[BLANK_AUDIO]\n(humming)"
+        }
+
+        let result = await service.transcribeAudio(filePath: "file.m4a")
+
+        #expect(result == nil)
+    }
+
     @Test @MainActor func transcribeAudioReturnsNilWhenModelNotLoaded() async {
         let service = TranscriptionService()
         service.setModelManager(UnloadedModelManager())
@@ -229,6 +251,30 @@ struct TranscriptionServiceTests {
         #expect(didStart == true)
         #expect(note.transcription == "Queued result")
         #expect(note.transcriptionState == .completed)
+    }
+
+    @Test @MainActor func successfulTranscriptionPersistsTelemetrySummaryOnNote() async {
+        var now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.nowProvider = { now }
+        service.audioDurationProvider = { _ in 20 }
+        service.transcribeImpl = { _, _ in
+            now = now.addingTimeInterval(5)
+            return "Telemetry result"
+        }
+
+        let note = VoiceNote(title: "Telemetry", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        #expect(note.transcription == "Telemetry result")
+        #expect(note.transcriptionTelemetrySampleCount == 1)
+        #expect(note.averageProcessingLoadLabel == "25% avg")
+        #expect(note.averageTranscriptionSpeedLabel == "4.0× avg")
+        #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
     @Test @MainActor func emptyTranscriptionResultRequeuesNoteAndClearsMetadata() async {

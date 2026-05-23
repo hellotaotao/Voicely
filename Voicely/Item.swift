@@ -43,6 +43,12 @@ final class VoiceNote {
     var transcriptionAttemptID: String?
     var transcriptionQueuedAt: Date?
     var transcriptionLeaseExpiresAt: Date?
+    var transcriptionTelemetrySampleCount: Int = 0
+    var transcriptionAverageProcessingLoadPercent: Double = 0
+    var transcriptionAverageSpeedMultiplier: Double = 0
+    var transcriptionComputeSummary: String?
+    var transcriptionComputeDetail: String?
+    var transcriptionThermalStateLabel: String?
     
     init(title: String = "", audioFilePath: String = "", transcription: String = "") {
         self.id = UUID()
@@ -56,6 +62,12 @@ final class VoiceNote {
         self.isTranscribing = false
         self.transcriptionProgress = 0.0
         self.pendingTranscription = false
+        self.transcriptionTelemetrySampleCount = 0
+        self.transcriptionAverageProcessingLoadPercent = 0
+        self.transcriptionAverageSpeedMultiplier = 0
+        self.transcriptionComputeSummary = nil
+        self.transcriptionComputeDetail = nil
+        self.transcriptionThermalStateLabel = nil
     }
 }
 
@@ -74,6 +86,38 @@ extension VoiceNote {
             return nil
         }
         return ModelManager.displayName(for: transcriptionModelIdentifier)
+    }
+
+    var averageProcessingLoadLabel: String? {
+        guard transcriptionTelemetrySampleCount > 0 else {
+            return nil
+        }
+
+        return "\(Int(transcriptionAverageProcessingLoadPercent.rounded()))% avg"
+    }
+
+    var averageTranscriptionSpeedLabel: String? {
+        guard transcriptionTelemetrySampleCount > 0 else {
+            return nil
+        }
+
+        return String(format: "%.1f× avg", transcriptionAverageSpeedMultiplier)
+    }
+
+    var transcriptionComputeBadgeLabel: String? {
+        guard let transcriptionComputeSummary,
+              !transcriptionComputeSummary.isEmpty else {
+            return nil
+        }
+
+        switch transcriptionComputeSummary {
+        case "Neural Engine (NPU)":
+            return "NPU"
+        case "Mixed Compute":
+            return "Mixed"
+        default:
+            return transcriptionComputeSummary
+        }
     }
 
     var hasOwnershipState: Bool {
@@ -132,6 +176,53 @@ extension VoiceNote {
         isTranscribing = false
         transcriptionProgress = 0.0
         pendingTranscription = false
+    }
+
+    func recordTranscriptionTelemetry(_ snapshot: TranscriptionTelemetrySnapshot) {
+        guard let processingLoadPercent = snapshot.metrics.processingLoadPercent,
+              let speedMultiplier = snapshot.metrics.speedMultiplier else {
+            return
+        }
+
+        let currentCount = max(transcriptionTelemetrySampleCount, 0)
+        let nextCount = currentCount + 1
+
+        transcriptionAverageProcessingLoadPercent = Self.updatedAverage(
+            currentAverage: transcriptionAverageProcessingLoadPercent,
+            currentCount: currentCount,
+            newValue: Double(processingLoadPercent)
+        )
+        transcriptionAverageSpeedMultiplier = Self.updatedAverage(
+            currentAverage: transcriptionAverageSpeedMultiplier,
+            currentCount: currentCount,
+            newValue: speedMultiplier
+        )
+        transcriptionTelemetrySampleCount = nextCount
+        transcriptionComputeSummary = snapshot.computeRoute.summary
+        transcriptionComputeDetail = snapshot.computeRoute.detail
+        transcriptionThermalStateLabel = snapshot.thermalStateLabel
+    }
+
+    func clearTranscriptionTelemetrySummary() {
+        transcriptionTelemetrySampleCount = 0
+        transcriptionAverageProcessingLoadPercent = 0
+        transcriptionAverageSpeedMultiplier = 0
+        transcriptionComputeSummary = nil
+        transcriptionComputeDetail = nil
+        transcriptionThermalStateLabel = nil
+    }
+
+    private static func updatedAverage(
+        currentAverage: Double,
+        currentCount: Int,
+        newValue: Double
+    ) -> Double {
+        guard currentCount > 0 else {
+            return newValue
+        }
+
+        let total = currentAverage * Double(currentCount) + newValue
+        return total / Double(currentCount + 1)
     }
 
 }

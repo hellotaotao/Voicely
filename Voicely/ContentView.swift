@@ -709,7 +709,25 @@ struct RecordingControls: View {
     @State private var showingModelPicker = false
     @State private var coordinator: IncrementalTranscriptionCoordinator? = nil
     @State private var currentRecordingNote: VoiceNote? = nil
+    @State private var isStartingRecording = false
+    @State private var recordingStartedAt: Date?
     @AppStorage(IncrementalTranscriptionTiming.intervalSecondsStorageKey) private var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
+
+    private var controlPhase: RecordingControlPhase {
+        RecordingControlState.phase(
+            isRecording: audioService.isRecording,
+            isStarting: isStartingRecording
+        )
+    }
+
+    private var canStopRecording: Bool {
+        RecordingControlState.shouldAcceptStopRequest(
+            isStarting: isStartingRecording,
+            recordingStartedAt: recordingStartedAt,
+            now: Date(),
+            recordingDuration: audioService.recordingDuration
+        )
+    }
 
     private var isModelLoading: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -763,9 +781,12 @@ struct RecordingControls: View {
 
     var body: some View {
         Group {
-            if audioService.isRecording {
+            switch controlPhase {
+            case .recording:
                 recordingLayout
-            } else {
+            case .starting:
+                startingLayout
+            case .idle:
                 idleLayout
             }
         }
@@ -773,7 +794,7 @@ struct RecordingControls: View {
         .background(recordingControlBackground)
         .overlay(recordingControlBorder)
         .shadow(color: Color.black.opacity(0.28), radius: 22, x: 0, y: 12)
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: audioService.isRecording)
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: controlPhase)
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: audioService.isPaused)
         .confirmationDialog(
             "Transcription Model",
@@ -882,6 +903,41 @@ struct RecordingControls: View {
         }
     }
 
+    private var startingLayout: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Starting recording")
+                        .font(.footnote.weight(.semibold))
+                    Text("Preparing microphone…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(VoicelyTheme.accent.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(VoicelyTheme.accent.opacity(0.22), lineWidth: 1)
+            )
+
+            Image(systemName: "mic.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.black.opacity(0.55))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(VoicelyTheme.accent.opacity(0.45)))
+        }
+        .accessibilityLabel("Starting recording")
+    }
+
     private var recordingLayout: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -929,7 +985,7 @@ struct RecordingControls: View {
     }
 
     private var recordButton: some View {
-        Button(action: audioService.isRecording ? stopRecording : startRecording) {
+        Button(action: startRecording) {
             Image(systemName: audioService.hasPermission ? "mic.fill" : "mic.slash.fill")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Color.black)
@@ -941,7 +997,7 @@ struct RecordingControls: View {
                 .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
         }
         .buttonStyle(.plain)
-        .disabled(!audioService.hasPermission)
+        .disabled(!audioService.hasPermission || isStartingRecording)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(audioService.hasPermission ? "Record" : "Record unavailable")
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
@@ -957,21 +1013,51 @@ struct RecordingControls: View {
                 .shadow(color: Color.red.opacity(0.35), radius: 12, y: 4)
         }
         .buttonStyle(.plain)
+        .disabled(!canStopRecording)
+        .opacity(canStopRecording ? 1 : 0.55)
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.stopRecordingButton)
     }
 
     private func startRecording() {
-        guard currentRecordingNote == nil else { return }
+        guard !isStartingRecording,
+              !audioService.isRecording,
+              currentRecordingNote == nil else { return }
+
+        isStartingRecording = true
+
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            guard isStartingRecording else { return }
+            beginRecordingAfterFeedback()
+        }
+    }
+
+    private func beginRecordingAfterFeedback() {
+        var didStart = false
+        defer {
+            if !didStart {
+                isStartingRecording = false
+                recordingStartedAt = nil
+            }
+        }
+
         guard let filePath = audioService.startRecording() else { return }
+        guard let pcmURL = audioService.currentPCMFileURL else {
+            _ = audioService.stopRecording()
+            return
+        }
 
         let note = makeRecordingNote(filePath: filePath)
         transcriptionService.configureNewNote(note, shouldStartImmediately: true)
         note.isTranscribing = true
         note.transcriptionProgress = 0.0
         currentRecordingNote = note
+        recordingStartedAt = Date()
+        isStartingRecording = false
+        didStart = true
         onRecordingComplete(note)
 
-        guard let pcmURL = audioService.currentPCMFileURL else { return }
         let coord = IncrementalTranscriptionCoordinator(
             transcriptionService: transcriptionService,
             recordingFileURL: pcmURL
@@ -983,10 +1069,9 @@ struct RecordingControls: View {
             note.transcriptionProgress = max(0, min(progress, 1))
         }
         coord.transcriptCallback = { [note] transcript in
-            let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedTranscript.isEmpty else { return }
+            guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
 
-            note.transcription = trimmedTranscript
+            note.transcription = finalizedTranscript.text
             note.isTranscribing = true
             note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                 ?? transcriptionService.modelManager?.selectedModel
@@ -998,7 +1083,7 @@ struct RecordingControls: View {
     }
 
     private func startRecordingFromQuickAction() {
-        guard !audioService.isRecording else { return }
+        guard !audioService.isRecording, !isStartingRecording else { return }
 
         if !isModelLoaded && !isModelLoading {
             Task {
@@ -1020,10 +1105,21 @@ struct RecordingControls: View {
     }
 
     private func stopRecording() {
+        guard RecordingControlState.shouldAcceptStopRequest(
+            isStarting: isStartingRecording,
+            recordingStartedAt: recordingStartedAt,
+            now: Date(),
+            recordingDuration: audioService.recordingDuration
+        ) else {
+            return
+        }
+
         let capturedCoordinator = coordinator
         let recordingNote = currentRecordingNote
         coordinator = nil
         currentRecordingNote = nil
+        isStartingRecording = false
+        recordingStartedAt = nil
 
         let finalFrame = audioService.currentFramePosition
         let stopResult = audioService.stopRecording()
@@ -1056,7 +1152,8 @@ struct RecordingControls: View {
                 accumulatedTranscript = ""
             }
 
-            let trimmedTranscript = accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(accumulatedTranscript)
+            let trimmedTranscript = finalizedTranscript?.text ?? ""
 
             if !trimmedTranscript.isEmpty {
                 note.transcription = trimmedTranscript
@@ -1392,8 +1489,8 @@ struct VoiceNoteDetailView: View {
                 if let computeLabel = note.transcriptionComputeBadgeLabel {
                     PillBadge(text: computeLabel, systemImage: "cpu", variant: .info)
                 }
-                if let loadLabel = note.averageProcessingLoadLabel {
-                    PillBadge(text: loadLabel, systemImage: "gauge.medium", variant: .info)
+                if let timeRatioLabel = note.averageProcessingTimeRatioLabel {
+                    PillBadge(text: timeRatioLabel, systemImage: "timer", variant: .info)
                 }
                 if let speedLabel = note.averageTranscriptionSpeedLabel {
                     PillBadge(text: speedLabel, systemImage: "speedometer", variant: .info)
@@ -1667,8 +1764,8 @@ struct VoiceNoteDetailView: View {
                     systemImage: "shippingbox"
                 )
                 telemetryMetric(
-                    title: "Load",
-                    value: snapshot.metrics.processingLoadLabel,
+                    title: "Time ratio",
+                    value: snapshot.metrics.processingTimeRatioLabel,
                     systemImage: "gauge.medium"
                 )
                 telemetryMetric(
@@ -1685,7 +1782,7 @@ struct VoiceNoteDetailView: View {
                     .font(.caption)
                 Text("·")
                     .foregroundStyle(.tertiary)
-                Text("Load is processing time divided by audio duration.")
+                Text("Time ratio is processing time divided by audio duration.")
                     .font(.caption)
                     .lineLimit(2)
             }

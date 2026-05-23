@@ -118,20 +118,20 @@ struct ModelPackagingAndTelemetryTests {
         )
 
         #expect(note.transcriptionTelemetrySampleCount == 2)
-        #expect(note.averageProcessingLoadLabel == "38% avg")
+        #expect(note.averageProcessingTimeRatioLabel == "38% avg")
         #expect(note.averageTranscriptionSpeedLabel == "3.0× avg")
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
         #expect(note.transcriptionThermalStateLabel == "Fair")
     }
 
-    @Test func telemetryFormatsRealtimeProcessingPressure() {
+    @Test func telemetryFormatsRealtimeProcessingRatio() {
         let metrics = TranscriptionTelemetryMetrics(
             elapsedSeconds: 10,
             audioDurationSeconds: 40
         )
 
-        #expect(metrics.processingLoadPercent == 25)
-        #expect(metrics.processingLoadLabel == "25%")
+        #expect(metrics.processingTimeRatioPercent == 25)
+        #expect(metrics.processingTimeRatioLabel == "25%")
         #expect(metrics.speedLabel == "4.0× realtime")
     }
 

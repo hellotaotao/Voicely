@@ -92,10 +92,35 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
     }
 
+
+    static func makeVADFrames(
+        durationSeconds: Double,
+        silentRanges: [Range<Double>],
+        frameSamples: Int = SileroNeuralVoiceActivityDetector.chunkSize,
+        sampleRate: Double = Double(SileroNeuralVoiceActivityDetector.sampleRate)
+    ) -> [(startFrame: Int, endFrame: Int, speechProbability: Double)] {
+        let totalSamples = Int((durationSeconds * sampleRate).rounded())
+        var frames: [(startFrame: Int, endFrame: Int, speechProbability: Double)] = []
+        var start = 0
+        while start < totalSamples {
+            let end = min(start + frameSamples, totalSamples)
+            let midpointSeconds = (Double(start + end) / 2.0) / sampleRate
+            let isSilent = silentRanges.contains { $0.contains(midpointSeconds) }
+            frames.append((
+                startFrame: start,
+                endFrame: end,
+                speechProbability: isSilent ? 0.10 : 0.80
+            ))
+            start = end
+        }
+        return frames
+    }
+
     // MARK: Helpers
 
     @Test func defaultIntervalHelperUsesWhisperSafeCadence() {
         #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 29)
+        #expect(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds == 20)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 30)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 20)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 29)
@@ -413,20 +438,25 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(IncrementalTranscriptionCoordinator.sanitizedSegmentText("hello\n[BLANK_AUDIO]\n(music)") == "hello")
     }
 
-    @Test func audioSpeechAnalyzerRejectsSilentCAF() throws {
-        let pcmURL = try makeSilentCAF(seconds: 1.0)
-        defer { try? FileManager.default.removeItem(at: pcmURL) }
+    @Test func neuralSpeechAnalyzerRejectsConfidentSilence() throws {
+        let detector = FakeNeuralVAD(frameProbabilities: Self.makeVADFrames(
+            durationSeconds: 1.0,
+            silentRanges: [0.0..<1.0]
+        ))
 
-        #expect(try AudioSpeechAnalyzer.containsProbableSpeech(at: pcmURL) == false)
+        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 16_000), detector: detector) == false)
     }
 
-    @Test func audioSpeechAnalyzerAcceptsVoicedCAF() throws {
-        let pcmURL = try makeEnergyPatternCAF(segments: [
-            (seconds: 0.2, amplitude: 0.0),
-            (seconds: 0.4, amplitude: 0.02)
+    @Test func neuralSpeechAnalyzerAcceptsUncertainOrSpeechFrames() throws {
+        let uncertainDetector = FakeNeuralVAD(frameProbabilities: [
+            (startFrame: 0, endFrame: 576, speechProbability: 0.45)
         ])
-        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 576), detector: uncertainDetector) == true)
 
-        #expect(try AudioSpeechAnalyzer.containsProbableSpeech(at: pcmURL) == true)
+        let speechDetector = FakeNeuralVAD(frameProbabilities: Self.makeVADFrames(
+            durationSeconds: 0.35,
+            silentRanges: []
+        ))
+        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 5_600), detector: speechDetector) == true)
     }
 }

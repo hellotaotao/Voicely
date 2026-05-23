@@ -12,7 +12,7 @@ struct TranscriptionTelemetryMetrics: Equatable {
     let elapsedSeconds: TimeInterval
     let audioDurationSeconds: TimeInterval?
 
-    var processingLoadPercent: Int? {
+    var processingTimeRatioPercent: Int? {
         guard let audioDurationSeconds, audioDurationSeconds > 0 else {
             return nil
         }
@@ -21,12 +21,12 @@ struct TranscriptionTelemetryMetrics: Equatable {
         return max(0, Int(percentage.rounded()))
     }
 
-    var processingLoadLabel: String {
-        guard let processingLoadPercent else {
+    var processingTimeRatioLabel: String {
+        guard let processingTimeRatioPercent else {
             return "Measuring"
         }
 
-        return "\(processingLoadPercent)%"
+        return "\(processingTimeRatioPercent)%"
     }
 
     var speedMultiplier: Double? {

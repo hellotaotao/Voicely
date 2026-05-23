@@ -10,7 +10,7 @@ struct IncrementalTranscriptionTiming {
     static let intervalSecondsStorageKey = "incrementalTranscriptionIntervalSeconds"
     static let legacyIntervalMinutesStorageKey = "incrementalTranscriptionInterval"
     static let defaultIntervalSeconds = 29
-    static let minimumEffectiveSpeechChunkSeconds = 15
+    static let minimumEffectiveSpeechChunkSeconds = 20
     static let intervalOptionsSeconds = [20, 25, 29, 30]
 
     static func sanitizedIntervalSeconds(_ value: Int) -> Int {
@@ -246,7 +246,7 @@ final class IncrementalTranscriptionCoordinator {
 
         if transcribeOverride == nil {
             let containsProbableSpeech = await Task.detached(priority: .utility) {
-                AudioSpeechAnalyzer.safelyContainsProbableSpeech(at: segmentURL)
+                NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: segmentURL)
             }.value
 
             guard containsProbableSpeech else {
@@ -577,6 +577,6 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     nonisolated static func sanitizedSegmentText(_ text: String?) -> String? {
-        TranscriptSanitizer.cleanedTranscript(text)
+        LocalTranscriptFinalizer.finalizedText(text)
     }
 }

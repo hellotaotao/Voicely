@@ -44,7 +44,7 @@ final class VoiceNote {
     var transcriptionQueuedAt: Date?
     var transcriptionLeaseExpiresAt: Date?
     var transcriptionTelemetrySampleCount: Int = 0
-    var transcriptionAverageProcessingLoadPercent: Double = 0
+    var transcriptionAverageProcessingTimeRatioPercent: Double = 0
     var transcriptionAverageSpeedMultiplier: Double = 0
     var transcriptionComputeSummary: String?
     var transcriptionComputeDetail: String?
@@ -63,7 +63,7 @@ final class VoiceNote {
         self.transcriptionProgress = 0.0
         self.pendingTranscription = false
         self.transcriptionTelemetrySampleCount = 0
-        self.transcriptionAverageProcessingLoadPercent = 0
+        self.transcriptionAverageProcessingTimeRatioPercent = 0
         self.transcriptionAverageSpeedMultiplier = 0
         self.transcriptionComputeSummary = nil
         self.transcriptionComputeDetail = nil
@@ -88,12 +88,12 @@ extension VoiceNote {
         return ModelManager.displayName(for: transcriptionModelIdentifier)
     }
 
-    var averageProcessingLoadLabel: String? {
+    var averageProcessingTimeRatioLabel: String? {
         guard transcriptionTelemetrySampleCount > 0 else {
             return nil
         }
 
-        return "\(Int(transcriptionAverageProcessingLoadPercent.rounded()))% avg"
+        return "\(Int(transcriptionAverageProcessingTimeRatioPercent.rounded()))% avg"
     }
 
     var averageTranscriptionSpeedLabel: String? {
@@ -179,7 +179,7 @@ extension VoiceNote {
     }
 
     func recordTranscriptionTelemetry(_ snapshot: TranscriptionTelemetrySnapshot) {
-        guard let processingLoadPercent = snapshot.metrics.processingLoadPercent,
+        guard let processingTimeRatioPercent = snapshot.metrics.processingTimeRatioPercent,
               let speedMultiplier = snapshot.metrics.speedMultiplier else {
             return
         }
@@ -187,10 +187,10 @@ extension VoiceNote {
         let currentCount = max(transcriptionTelemetrySampleCount, 0)
         let nextCount = currentCount + 1
 
-        transcriptionAverageProcessingLoadPercent = Self.updatedAverage(
-            currentAverage: transcriptionAverageProcessingLoadPercent,
+        transcriptionAverageProcessingTimeRatioPercent = Self.updatedAverage(
+            currentAverage: transcriptionAverageProcessingTimeRatioPercent,
             currentCount: currentCount,
-            newValue: Double(processingLoadPercent)
+            newValue: Double(processingTimeRatioPercent)
         )
         transcriptionAverageSpeedMultiplier = Self.updatedAverage(
             currentAverage: transcriptionAverageSpeedMultiplier,
@@ -205,7 +205,7 @@ extension VoiceNote {
 
     func clearTranscriptionTelemetrySummary() {
         transcriptionTelemetrySampleCount = 0
-        transcriptionAverageProcessingLoadPercent = 0
+        transcriptionAverageProcessingTimeRatioPercent = 0
         transcriptionAverageSpeedMultiplier = 0
         transcriptionComputeSummary = nil
         transcriptionComputeDetail = nil

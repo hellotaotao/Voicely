@@ -272,7 +272,7 @@ struct TranscriptionServiceTests {
         #expect(didStart == true)
         #expect(note.transcription == "Telemetry result")
         #expect(note.transcriptionTelemetrySampleCount == 1)
-        #expect(note.averageProcessingLoadLabel == "25% avg")
+        #expect(note.averageProcessingTimeRatioLabel == "25% avg")
         #expect(note.averageTranscriptionSpeedLabel == "4.0× avg")
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }

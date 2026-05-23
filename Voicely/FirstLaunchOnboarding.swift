@@ -37,7 +37,7 @@ enum FirstLaunchOnboarding {
         FirstLaunchOnboardingPage(
             id: "metrics",
             title: "Compare model performance",
-            subtitle: "Check CPU, GPU, or NPU usage, average load, and speed after each note.",
+            subtitle: "Compare the selected compute route, processing time ratio, and realtime speed after each note.",
             systemImage: "cpu.fill",
             accentColor: .purple
         ),

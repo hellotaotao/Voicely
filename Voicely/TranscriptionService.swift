@@ -366,9 +366,11 @@ class TranscriptionService: ObservableObject {
             return nil
         }
 
-        guard let text = TranscriptSanitizer.cleanedTranscript(rawText) else {
+        guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(rawText) else {
             return nil
         }
+
+        let text = finalizedTranscript.text
 
         if cancelRequested || Task.isCancelled {
             cancelRequested = false
@@ -806,7 +808,7 @@ private extension TranscriptionService {
             updateProgressOnMain(0.01)
 
             let containsProbableSpeech = await Task.detached(priority: .utility) {
-                AudioSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
+                NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
             }.value
             guard containsProbableSpeech else {
                 print("Skipping transcription because no probable speech was detected in audio file: \(filePath)")

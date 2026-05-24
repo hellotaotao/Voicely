@@ -666,7 +666,7 @@ private extension TranscriptionService {
         beginLocalTranscription(for: note, attemptID: attemptID)
         startLeaseHeartbeat(for: note, attemptID: attemptID)
         let noteID = note.id
-        let hadExistingTranscript = !note.transcription.isEmpty
+        let hadExistingTranscript = LocalTranscriptFinalizer.finalizeTranscript(note.transcription) != nil
 
         let transcription = await transcribeAudio(filePath: note.audioFilePath) { [weak self] progress in
             Task { @MainActor in
@@ -692,18 +692,23 @@ private extension TranscriptionService {
             note.clearTransientTranscriptionFlags()
         } else {
             if !hadExistingTranscript {
+                note.transcription = ""
                 note.lastTranscriptionDuration = 0
                 note.transcriptionModelIdentifier = nil
                 note.clearTranscriptionTelemetrySummary()
             }
 
-            if !wasTranscriptionCancelled() {
-                let failureReason: TranscriptionFailureReason = hadExistingTranscript
-                    ? .retryPreservedExistingTranscript
-                    : .noUsableTranscript
-                note.markTranscriptionFailure(transcriptionFailureMessage(for: failureReason))
+            if wasTranscriptionCancelled() {
+                requeueNote(note, queuedAt: nowProvider())
+                return
             }
-            requeueNote(note, queuedAt: nowProvider())
+
+            let failureReason: TranscriptionFailureReason = hadExistingTranscript
+                ? .retryPreservedExistingTranscript
+                : .noUsableTranscript
+            note.completeTranscription()
+            note.clearTransientTranscriptionFlags()
+            note.markTranscriptionFailure(transcriptionFailureMessage(for: failureReason))
         }
     }
 
@@ -765,9 +770,9 @@ private extension TranscriptionService {
     func transcriptionFailureMessage(for reason: TranscriptionFailureReason) -> String {
         switch reason {
         case .noUsableTranscript:
-            return "The last attempt did not produce a usable transcript. The note was queued again so you can retry or choose a different model."
+            return "The last attempt did not produce a usable transcript. You can retry or choose a different model."
         case .retryPreservedExistingTranscript:
-            return "The last re-transcription attempt failed. The existing transcript was kept, and the note was queued again for another try."
+            return "The last re-transcription attempt failed. The existing transcript was kept."
         }
     }
 

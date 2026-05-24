@@ -277,7 +277,7 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
-    @Test @MainActor func emptyTranscriptionResultRequeuesNoteAndClearsMetadata() async {
+    @Test @MainActor func emptyTranscriptionResultStopsQueueAndClearsMetadata() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         service.transcribeImpl = { _, _ in "   \n" }
@@ -292,11 +292,32 @@ struct TranscriptionServiceTests {
 
         #expect(didStart == true)
         #expect(note.transcription.isEmpty)
-        #expect(note.transcriptionState == .queued)
-        #expect(note.pendingTranscription == true)
+        #expect(note.transcriptionState == .completed)
+        #expect(note.pendingTranscription == false)
         #expect(note.lastTranscriptionDuration == 0)
         #expect(note.transcriptionModelIdentifier == nil)
-        #expect(note.transcriptionLastErrorMessage == "The last attempt did not produce a usable transcript. The note was queued again so you can retry or choose a different model.")
+        #expect(note.transcriptionLastErrorMessage == "The last attempt did not produce a usable transcript. You can retry or choose a different model.")
+    }
+
+
+    @Test @MainActor func nonSpeechOnlyExistingTranscriptDoesNotRemainQueuedAfterFailedRetry() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.transcribeImpl = { _, _ in "[BLANK_AUDIO]" }
+
+        let note = VoiceNote(title: "Blank", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.transcription = "[BLANK_AUDIO]"
+        note.queueTranscription(at: now)
+
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        #expect(note.transcription.isEmpty)
+        #expect(note.transcriptionState == .completed)
+        #expect(note.pendingTranscription == false)
+        #expect(note.isTranscribing == false)
+        #expect(note.transcriptionLastErrorMessage == "The last attempt did not produce a usable transcript. You can retry or choose a different model.")
     }
 
     @Test @MainActor func staleAttemptDoesNotOverwriteCurrentOwner() async {

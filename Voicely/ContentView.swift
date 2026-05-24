@@ -1971,6 +1971,20 @@ struct VoiceNoteDetailView: View {
                 .foregroundStyle(Color.black)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
             }
+        } else if let lastTranscriptionFailureMessage {
+            VStack(alignment: .leading, spacing: 10) {
+                PillBadge(text: "Transcription needs review", systemImage: "exclamationmark.triangle", variant: .danger)
+                Text(lastTranscriptionFailureMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button(action: { requestTranscription() }) {
+                    Label("Transcribe Now", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(VoicelyTheme.accent)
+                .foregroundStyle(Color.black)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
+            }
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 PillBadge(text: "No transcript yet", systemImage: "text.badge.xmark", variant: .neutral)

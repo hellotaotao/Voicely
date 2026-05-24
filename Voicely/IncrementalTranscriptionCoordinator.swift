@@ -80,10 +80,16 @@ final class IncrementalTranscriptionCoordinator {
     /// Optional transcript relay after a segment appends to the accumulated transcript.
     var transcriptCallback: ((String) -> Void)? = nil
 
+    var segmentLogWriter: (any IncrementalSegmentLogWriting)? = AppRuntime.isRunningTests
+        ? nil
+        : IncrementalSegmentLogStore()
+
     // MARK: Private
 
     private let transcriptionService: TranscriptionService
     private let recordingFileURL: URL
+    private let segmentLogSessionID = UUID()
+    private let recordingSampleRate: Double
 
     private var segmentTimer: Timer?
     private var targetIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
@@ -106,6 +112,7 @@ final class IncrementalTranscriptionCoordinator {
         self.transcriptionService = transcriptionService
         self.recordingFileURL = recordingFileURL
         self.minimumSegmentFrames = Self.minimumSegmentFrames(for: recordingFileURL)
+        self.recordingSampleRate = Self.sampleRate(for: recordingFileURL)
     }
 
     // MARK: Lifecycle
@@ -218,6 +225,13 @@ final class IncrementalTranscriptionCoordinator {
         ) else {
             return
         }
+        logSegmentCut(
+            index: index,
+            startFrame: startFrame,
+            requestedEndFrame: requestedEndFrame,
+            endFrame: endFrame,
+            useVoiceActivityCut: useVoiceActivityCut
+        )
 
         let extracted = await Task.detached {
             Self.extractSegment(
@@ -291,6 +305,55 @@ final class IncrementalTranscriptionCoordinator {
         return cutFrame
     }
 
+    private func logSegmentCut(
+        index: Int,
+        startFrame: AVAudioFramePosition,
+        requestedEndFrame: AVAudioFramePosition,
+        endFrame: AVAudioFramePosition,
+        useVoiceActivityCut: Bool
+    ) {
+        guard let segmentLogWriter else { return }
+
+        let record = IncrementalSegmentLogRecord(
+            createdAt: Date(),
+            sessionID: segmentLogSessionID,
+            recordingFileName: recordingFileURL.lastPathComponent,
+            segmentIndex: index,
+            cutKind: Self.cutKind(
+                useVoiceActivityCut: useVoiceActivityCut,
+                requestedEndFrame: requestedEndFrame,
+                endFrame: endFrame
+            ),
+            sampleRate: recordingSampleRate,
+            startFrame: Int64(startFrame),
+            requestedEndFrame: Int64(requestedEndFrame),
+            endFrame: Int64(endFrame),
+            targetIntervalSeconds: targetIntervalSeconds,
+            usedVoiceActivityCut: useVoiceActivityCut
+        )
+
+        do {
+            try segmentLogWriter.append(record)
+            debugLog(
+                "📈 [IncrementalCoordinator] Segment cut \(record.segmentIndex): duration=\(String(format: "%.2f", record.durationSeconds))s requested=\(String(format: "%.2f", record.requestedDurationSeconds))s kind=\(record.cutKind.rawValue) log=\(segmentLogWriter.logFileURL.path)"
+            )
+        } catch {
+            debugLog("⚠️ [IncrementalCoordinator] Failed to write segment cut log: \(error)")
+        }
+    }
+
+    private nonisolated static func cutKind(
+        useVoiceActivityCut: Bool,
+        requestedEndFrame: AVAudioFramePosition,
+        endFrame: AVAudioFramePosition
+    ) -> IncrementalSegmentCutKind {
+        guard useVoiceActivityCut else {
+            return .final
+        }
+
+        return endFrame < requestedEndFrame ? .voiceActivity : .targetFallback
+    }
+
     private func queuePendingSegment(
         upToFrame: AVAudioFramePosition,
         useVoiceActivityCut: Bool
@@ -345,6 +408,16 @@ final class IncrementalTranscriptionCoordinator {
         } catch {
             debugLog("⚠️ [IncrementalCoordinator] Failed to read recording sample rate: \(error)")
             return AVAudioFramePosition(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds * 16_000)
+        }
+    }
+
+    private nonisolated static func sampleRate(for fileURL: URL) -> Double {
+        do {
+            let sourceFile = try AVAudioFile(forReading: fileURL)
+            return sourceFile.processingFormat.sampleRate
+        } catch {
+            debugLog("⚠️ [IncrementalCoordinator] Failed to read recording sample rate for logging: \(error)")
+            return 16_000
         }
     }
 

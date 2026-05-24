@@ -355,6 +355,31 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(coordinator.accumulatedTranscript == "")
     }
 
+    @Test @MainActor func coordinatorWritesPersistentSegmentCutLog() async throws {
+        let service = TranscriptionService()
+        let pcmURL = try makeSilentCAF(seconds: 25)
+        let logURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("coordinator_segment_cuts_\(UUID().uuidString).jsonl")
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: service,
+            recordingFileURL: pcmURL
+        )
+        coordinator.segmentLogWriter = IncrementalSegmentLogStore(fileURL: logURL)
+        coordinator.transcribeOverride = { _ in "final segment" }
+
+        let transcript = await coordinator.stop(currentFrame: 400_000)
+        let records = try IncrementalSegmentLogStore(fileURL: logURL).readRecords()
+
+        #expect(transcript == "final segment")
+        #expect(records.count == 1)
+        #expect(records[0].cutKind == .final)
+        #expect(records[0].durationSeconds == 25)
+        #expect(records[0].recordingFileName == pcmURL.lastPathComponent)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+        try? FileManager.default.removeItem(at: logURL)
+    }
+
     @Test @MainActor func extractSegmentProducesCorrectFrameCount() throws {
         // 5-second CAF file at 16 kHz = 80 000 frames
         let pcmURL = try makeSilentCAF(seconds: 5)

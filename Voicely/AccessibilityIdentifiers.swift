@@ -57,7 +57,6 @@ enum AccessibilityIdentifiers {
         static let aboutSection = "AboutSettingsSection"
         static let speechLanguagePicker = "SpeechLanguagePicker"
         static let customPromptField = "CustomPromptField"
-        static let incrementalIntervalPicker = "IncrementalIntervalPicker"
         static let browseModelsLink = "BrowseModelsLink"
         static let runBenchmarkLink = "RunBenchmarkLink"
     }

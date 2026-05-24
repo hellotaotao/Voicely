@@ -143,7 +143,6 @@ struct SettingsView: View {
     @State private var computeUnitsChanged = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
-    @AppStorage(IncrementalTranscriptionTiming.intervalSecondsStorageKey) private var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -164,8 +163,6 @@ struct SettingsView: View {
                         identifier: AccessibilityIdentifiers.Settings.transcriptionSection
                     ) {
                         promptBlock
-                        Divider().background(VoicelyTheme.hairline)
-                        intervalRow
                     }
 
                     settingsSection(
@@ -216,9 +213,6 @@ struct SettingsView: View {
             }
         }
         .tint(VoicelyTheme.accent)
-        .onAppear {
-            incrementalIntervalSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded()
-        }
         .task {
             await modelManager.fetchModels()
         }
@@ -475,13 +469,6 @@ struct SettingsView: View {
 
     // MARK: - Transcription
 
-    private var incrementalIntervalSecondsBinding: Binding<Int> {
-        Binding(
-            get: { IncrementalTranscriptionTiming.sanitizedIntervalSeconds(incrementalIntervalSeconds) },
-            set: { incrementalIntervalSeconds = IncrementalTranscriptionTiming.sanitizedIntervalSeconds($0) }
-        )
-    }
-
     private var promptBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Custom Prompt")
@@ -500,31 +487,6 @@ struct SettingsView: View {
                 )
                 .padding(.top, 2)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Settings.customPromptField)
-        }
-    }
-
-    private func intervalOptionTitle(_ seconds: Int) -> String {
-        "\(seconds)s"
-    }
-
-    private var intervalRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Incremental Interval")
-                    .font(.subheadline.weight(.medium))
-                Text("Partial transcription during long recordings; 20–30s adaptive is recommended")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Picker("", selection: incrementalIntervalSecondsBinding) {
-                ForEach(IncrementalTranscriptionTiming.intervalOptionsSeconds, id: \.self) { seconds in
-                    Text(intervalOptionTitle(seconds)).tag(seconds)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.incrementalIntervalPicker)
         }
     }
 

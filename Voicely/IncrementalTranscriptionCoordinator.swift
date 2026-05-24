@@ -11,31 +11,21 @@ struct IncrementalTranscriptionTiming {
     static let legacyIntervalMinutesStorageKey = "incrementalTranscriptionInterval"
     static let defaultIntervalSeconds = 29
     static let minimumEffectiveSpeechChunkSeconds = 20
-    static let intervalOptionsSeconds = [20, 25, 29, 30]
 
-    static func sanitizedIntervalSeconds(_ value: Int) -> Int {
-        intervalOptionsSeconds.contains(value) ? value : defaultIntervalSeconds
+    static func sanitizedIntervalSeconds(_: Int) -> Int {
+        defaultIntervalSeconds
     }
 
-    static func resolvedIntervalSeconds(from defaults: UserDefaults = .standard) -> Int {
-        if let storedSeconds = defaults.object(forKey: intervalSecondsStorageKey) as? Int {
-            return sanitizedIntervalSeconds(storedSeconds)
-        }
-
-        if let legacyMinutes = defaults.object(forKey: legacyIntervalMinutesStorageKey) as? Int {
-            return migratedIntervalSeconds(fromLegacyMinutes: legacyMinutes)
-        }
-
+    static func resolvedIntervalSeconds(from _: UserDefaults = .standard) -> Int {
         return defaultIntervalSeconds
     }
 
     @discardableResult
     static func migrateLegacyMinuteValueIfNeeded(in defaults: UserDefaults = .standard) -> Int {
-        let resolvedSeconds = resolvedIntervalSeconds(from: defaults)
+        let resolvedSeconds = defaultIntervalSeconds
         let storedSeconds = defaults.object(forKey: intervalSecondsStorageKey) as? Int
 
-        let sanitizedStoredSeconds = storedSeconds.map { sanitizedIntervalSeconds($0) }
-        if storedSeconds == nil || sanitizedStoredSeconds != storedSeconds {
+        if storedSeconds != resolvedSeconds {
             defaults.set(resolvedSeconds, forKey: intervalSecondsStorageKey)
         }
 

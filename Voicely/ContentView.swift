@@ -738,7 +738,6 @@ struct RecordingControls: View {
     @State private var currentRecordingNote: VoiceNote? = nil
     @State private var isStartingRecording = false
     @State private var recordingStartedAt: Date?
-    @AppStorage(IncrementalTranscriptionTiming.intervalSecondsStorageKey) private var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
 
     private var controlPhase: RecordingControlPhase {
         RecordingControlState.phase(
@@ -803,7 +802,7 @@ struct RecordingControls: View {
     }
 
     private var effectiveIncrementalIntervalSeconds: Int {
-        IncrementalTranscriptionTiming.sanitizedIntervalSeconds(incrementalIntervalSeconds)
+        IncrementalTranscriptionTiming.defaultIntervalSeconds
     }
 
     var body: some View {
@@ -845,7 +844,6 @@ struct RecordingControls: View {
             startRecordingFromQuickAction()
         }
         .onAppear {
-            incrementalIntervalSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded()
             audioService.prewarmRecordingSessionIfPossible()
         }
         .onChange(of: audioService.hasPermission) { _, _ in

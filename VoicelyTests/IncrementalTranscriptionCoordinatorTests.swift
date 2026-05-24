@@ -121,9 +121,24 @@ struct IncrementalTranscriptionCoordinatorTests {
     @Test func defaultIntervalHelperUsesWhisperSafeCadence() {
         #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 29)
         #expect(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds == 20)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 30)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 20)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 29)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 29)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 29)
+    }
+
+    @Test func storedIntervalChoicesNoLongerChangeRuntimeCadence() throws {
+        let suiteName = "VoicelyFixedIncrementalTimingTests_\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(20, forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey)
+
+        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 29)
+
+        defaults.set(30, forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey)
+
+        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 29)
+
+        defaults.removePersistentDomain(forName: suiteName)
     }
 
     @Test func legacyMinuteMigrationDoesNotCreateTenSecondChunks() throws {

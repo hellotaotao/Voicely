@@ -846,6 +846,10 @@ struct RecordingControls: View {
         }
         .onAppear {
             incrementalIntervalSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded()
+            audioService.prewarmRecordingSessionIfPossible()
+        }
+        .onChange(of: audioService.hasPermission) { _, _ in
+            audioService.prewarmRecordingSessionIfPossible()
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingControls)
     }

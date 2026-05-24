@@ -45,6 +45,7 @@ class AudioRecordingService: ObservableObject {
     @Published var recordingDuration: TimeInterval = 0
     @Published var hasPermission = false
     @Published var audioLevel: Float = 0.0
+    @Published private(set) var isPreparingRecordingSession = false
 
     // MARK: New: exposes PCM file URL and live frame position
 
@@ -76,6 +77,8 @@ class AudioRecordingService: ObservableObject {
     private nonisolated(unsafe) var converter: AVAudioConverter?
     private var recordingTimer: Timer?
     private var pendingM4AURL: URL?
+    private var prewarmTask: Task<Void, Never>?
+    private var isRecordingSessionPrewarmed = false
 
     #if !os(macOS) || targetEnvironment(macCatalyst)
     private var audioSession = AVAudioSession.sharedInstance()
@@ -85,6 +88,10 @@ class AudioRecordingService: ObservableObject {
 
     init() {
         checkPermission()
+    }
+
+    deinit {
+        prewarmTask?.cancel()
     }
 
     // MARK: Permission
@@ -135,6 +142,44 @@ class AudioRecordingService: ObservableObject {
         #endif
     }
 
+    // MARK: Recording Session Prewarm
+
+    func prewarmRecordingSessionIfPossible() {
+        guard RecordingSessionPrewarmState.shouldStartPrewarm(
+            hasPermission: hasPermission,
+            isRecording: isRecording,
+            isPrewarming: isPreparingRecordingSession,
+            isPrewarmed: isRecordingSessionPrewarmed
+        ) else {
+            return
+        }
+
+        isPreparingRecordingSession = true
+        prewarmTask?.cancel()
+        prewarmTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard let self, !Task.isCancelled, self.isPreparingRecordingSession else {
+                return
+            }
+
+            defer {
+                self.isPreparingRecordingSession = false
+                self.prewarmTask = nil
+            }
+
+            do {
+                try self.prepareRecordingSessionForCapture()
+                self.warmInputRoute()
+                self.isRecordingSessionPrewarmed = true
+                debugLog("✅ [AudioRecordingService] Recording session prewarmed")
+            } catch {
+                self.isRecordingSessionPrewarmed = false
+                debugLog("⚠️ [AudioRecordingService] Recording session prewarm failed: \(error)")
+            }
+        }
+    }
+
     // MARK: Start Recording
 
     /// Starts recording. Returns the M4A filename (last path component) for cross-device compat.
@@ -144,24 +189,17 @@ class AudioRecordingService: ObservableObject {
             return nil
         }
 
-        #if !os(macOS) && !targetEnvironment(macCatalyst)
+        prewarmTask?.cancel()
+        prewarmTask = nil
+        isPreparingRecordingSession = false
+
         do {
-            try audioSession.setCategory(.record, mode: .default)
-            try audioSession.setActive(true)
+            try prepareRecordingSessionForCapture()
+            isRecordingSessionPrewarmed = false
         } catch {
             debugLog("❌ [AudioRecordingService] Audio session setup failed: \(error)")
             return nil
         }
-        #elseif targetEnvironment(macCatalyst)
-        do {
-            try audioSession.setCategory(.playAndRecord, mode: .default,
-                                         options: [.defaultToSpeaker, .allowBluetoothHFP])
-            try audioSession.setActive(true)
-        } catch {
-            debugLog("❌ [AudioRecordingService] Audio session (Catalyst) setup failed: \(error)")
-            return nil
-        }
-        #endif
 
         let m4aURL = CloudStorageManager.shared.generateAudioFilename()
         let pcmURL = FileManager.default.temporaryDirectory
@@ -200,6 +238,7 @@ class AudioRecordingService: ObservableObject {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.processTapBuffer(buffer, inputFormat: inputFormat, outputFormat: targetFormat)
         }
+        newEngine.prepare()
 
         do {
             try newEngine.start()
@@ -253,6 +292,7 @@ class AudioRecordingService: ObservableObject {
         #elseif targetEnvironment(macCatalyst)
         try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
         #endif
+        isRecordingSessionPrewarmed = false
 
         let conversionTask: Task<Void, Never>?
         if let pcmURL = currentPCMFileURL, let m4aURL = pendingM4AURL {
@@ -324,6 +364,23 @@ class AudioRecordingService: ObservableObject {
     }
 
     // MARK: Private helpers
+
+    private func prepareRecordingSessionForCapture() throws {
+        #if !os(macOS) && !targetEnvironment(macCatalyst)
+        try audioSession.setCategory(.record, mode: .default)
+        try audioSession.setActive(true)
+        #elseif targetEnvironment(macCatalyst)
+        try audioSession.setCategory(.playAndRecord, mode: .default,
+                                     options: [.defaultToSpeaker, .allowBluetoothHFP])
+        try audioSession.setActive(true)
+        #endif
+    }
+
+    private func warmInputRoute() {
+        let warmupEngine = AVAudioEngine()
+        _ = warmupEngine.inputNode.outputFormat(forBus: 0)
+        warmupEngine.prepare()
+    }
 
     /// Called from the real-time audio tap thread. NOT @MainActor.
     private nonisolated func processTapBuffer(

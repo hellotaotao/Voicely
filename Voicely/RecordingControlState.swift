@@ -47,3 +47,14 @@ enum RecordingControlState {
         return elapsed >= accidentalStopProtectionInterval
     }
 }
+
+enum RecordingSessionPrewarmState {
+    static func shouldStartPrewarm(
+        hasPermission: Bool,
+        isRecording: Bool,
+        isPrewarming: Bool,
+        isPrewarmed: Bool
+    ) -> Bool {
+        hasPermission && !isRecording && !isPrewarming && !isPrewarmed
+    }
+}

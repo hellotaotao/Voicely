@@ -40,4 +40,41 @@ struct RecordingControlStateTests {
             recordingDuration: 1.2
         ) == true)
     }
+
+    @Test func recordingSessionPrewarmStartsOnlyWhenIdleAndPermitted() {
+        #expect(RecordingSessionPrewarmState.shouldStartPrewarm(
+            hasPermission: true,
+            isRecording: false,
+            isPrewarming: false,
+            isPrewarmed: false
+        ) == true)
+
+        #expect(RecordingSessionPrewarmState.shouldStartPrewarm(
+            hasPermission: false,
+            isRecording: false,
+            isPrewarming: false,
+            isPrewarmed: false
+        ) == false)
+
+        #expect(RecordingSessionPrewarmState.shouldStartPrewarm(
+            hasPermission: true,
+            isRecording: true,
+            isPrewarming: false,
+            isPrewarmed: false
+        ) == false)
+
+        #expect(RecordingSessionPrewarmState.shouldStartPrewarm(
+            hasPermission: true,
+            isRecording: false,
+            isPrewarming: true,
+            isPrewarmed: false
+        ) == false)
+
+        #expect(RecordingSessionPrewarmState.shouldStartPrewarm(
+            hasPermission: true,
+            isRecording: false,
+            isPrewarming: false,
+            isPrewarmed: true
+        ) == false)
+    }
 }

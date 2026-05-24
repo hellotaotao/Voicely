@@ -22,8 +22,13 @@ struct LocalTranscriptFinalizerTests {
         #expect(result?.overlapMergeCount == 0)
     }
 
-    @Test func returnsNilForOnlyNonSpeechText() {
-        #expect(LocalTranscriptFinalizer.finalizeTranscript("[BLANK_AUDIO]\n(music)") == nil)
+    @Test func returnsBlankAudioForOnlyNonSpeechText() {
+        let result = LocalTranscriptFinalizer.finalizeTranscript("[BLANK_AUDIO]\n(music)")
+
+        #expect(result?.text == "[BLANK_AUDIO]")
+        #expect(result?.removedLineCount == 2)
+        #expect(result?.duplicateLineCount == 0)
+        #expect(result?.overlapMergeCount == 0)
     }
 
     @Test func mergesConservativeBoundaryOverlap() {

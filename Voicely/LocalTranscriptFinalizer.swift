@@ -17,6 +17,8 @@ struct FinalizedTranscript: Equatable {
 }
 
 enum LocalTranscriptFinalizer {
+    static let blankAudioTranscript = "[BLANK_AUDIO]"
+
     /// Local-only transcript finalization. This deliberately does not upload audio or text.
     /// It polishes live/local Whisper output by applying deterministic cleanup that is safe
     /// to run by default: non-speech filtering, adjacent duplicate removal, and whitespace normalization.
@@ -57,7 +59,16 @@ enum LocalTranscriptFinalizer {
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard !finalizedText.isEmpty else { return nil }
+        guard !finalizedText.isEmpty else {
+            guard removedLineCount > 0 else { return nil }
+            return FinalizedTranscript(
+                text: blankAudioTranscript,
+                removedLineCount: removedLineCount,
+                duplicateLineCount: duplicateLineCount,
+                overlapMergeCount: overlapMergeCount
+            )
+        }
+
         return FinalizedTranscript(
             text: finalizedText,
             removedLineCount: removedLineCount,

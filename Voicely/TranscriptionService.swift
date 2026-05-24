@@ -903,7 +903,7 @@ private extension TranscriptionService {
                 return nil
             }
 
-            return TranscriptSanitizer.cleanedTranscript(result.text)
+            return LocalTranscriptFinalizer.finalizedText(result.text)
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable

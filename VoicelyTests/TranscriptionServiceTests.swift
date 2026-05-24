@@ -84,7 +84,7 @@ struct TranscriptionServiceTests {
         #expect(result?.text == "hello")
     }
 
-    @Test @MainActor func transcribeAudioReturnsNilForOnlyNoSpeechMarkers() async {
+    @Test @MainActor func transcribeAudioReturnsBlankAudioForOnlyNoSpeechMarkers() async {
         let service = makeService(deviceID: "device-a")
         service.transcribeImpl = { _, _ in
             "[Silence]\n[BLANK_AUDIO]\n(humming)"
@@ -92,7 +92,7 @@ struct TranscriptionServiceTests {
 
         let result = await service.transcribeAudio(filePath: "file.m4a")
 
-        #expect(result == nil)
+        #expect(result?.text == "[BLANK_AUDIO]")
     }
 
     @Test @MainActor func transcribeAudioReturnsNilWhenModelNotLoaded() async {
@@ -300,7 +300,7 @@ struct TranscriptionServiceTests {
     }
 
 
-    @Test @MainActor func nonSpeechOnlyExistingTranscriptDoesNotRemainQueuedAfterFailedRetry() async {
+    @Test @MainActor func nonSpeechOnlyTranscriptionCompletesAsBlankAudio() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         service.transcribeImpl = { _, _ in "[BLANK_AUDIO]" }
@@ -313,11 +313,11 @@ struct TranscriptionServiceTests {
         let didStart = await service.requestTranscription(for: note)
 
         #expect(didStart == true)
-        #expect(note.transcription.isEmpty)
+        #expect(note.transcription == "[BLANK_AUDIO]")
         #expect(note.transcriptionState == .completed)
         #expect(note.pendingTranscription == false)
         #expect(note.isTranscribing == false)
-        #expect(note.transcriptionLastErrorMessage == "The last attempt did not produce a usable transcript. You can retry or choose a different model.")
+        #expect(note.transcriptionLastErrorMessage == nil)
     }
 
     @Test @MainActor func staleAttemptDoesNotOverwriteCurrentOwner() async {

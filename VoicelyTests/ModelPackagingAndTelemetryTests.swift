@@ -85,6 +85,49 @@ struct ModelPackagingAndTelemetryTests {
         #expect(source?.url.path == bundledFolder.path)
     }
 
+    @Test func modelPreparationRequiresPrewarmWhenSignatureIsMissing() {
+        let signature = ModelManager.modelPreparationSignature(
+            for: "openai_whisper-small",
+            encoderComputeUnits: .cpuAndNeuralEngine,
+            decoderComputeUnits: .cpuAndNeuralEngine,
+            sourceKind: .downloaded,
+            modelFolder: URL(fileURLWithPath: "/models/small")
+        )
+
+        #expect(ModelManager.shouldPrewarmBeforeLoad(currentSignature: signature, storedSignature: nil) == true)
+    }
+
+    @Test func modelPreparationSkipsPrewarmForMatchingSignature() {
+        let signature = ModelManager.modelPreparationSignature(
+            for: "openai_whisper-small",
+            encoderComputeUnits: .cpuAndNeuralEngine,
+            decoderComputeUnits: .cpuAndNeuralEngine,
+            sourceKind: .downloaded,
+            modelFolder: URL(fileURLWithPath: "/models/small")
+        )
+
+        #expect(ModelManager.shouldPrewarmBeforeLoad(currentSignature: signature, storedSignature: signature) == false)
+    }
+
+    @Test func modelPreparationRequiresPrewarmWhenComputeUnitsChange() {
+        let stored = ModelManager.modelPreparationSignature(
+            for: "openai_whisper-small",
+            encoderComputeUnits: .cpuAndNeuralEngine,
+            decoderComputeUnits: .cpuAndNeuralEngine,
+            sourceKind: .downloaded,
+            modelFolder: URL(fileURLWithPath: "/models/small")
+        )
+        let current = ModelManager.modelPreparationSignature(
+            for: "openai_whisper-small",
+            encoderComputeUnits: .cpuAndGPU,
+            decoderComputeUnits: .cpuAndNeuralEngine,
+            sourceKind: .downloaded,
+            modelFolder: URL(fileURLWithPath: "/models/small")
+        )
+
+        #expect(ModelManager.shouldPrewarmBeforeLoad(currentSignature: current, storedSignature: stored) == true)
+    }
+
     @Test func voiceNoteAveragesCompletedTelemetrySamples() {
         let note = VoiceNote(title: "Telemetry")
         let route = TranscriptionComputeRoute(

@@ -85,47 +85,14 @@ struct ModelPackagingAndTelemetryTests {
         #expect(source?.url.path == bundledFolder.path)
     }
 
-    @Test func modelPreparationRequiresPrewarmWhenSignatureIsMissing() {
-        let signature = ModelManager.modelPreparationSignature(
-            for: "openai_whisper-small",
-            encoderComputeUnits: .cpuAndNeuralEngine,
-            decoderComputeUnits: .cpuAndNeuralEngine,
-            sourceKind: .downloaded,
-            modelFolder: URL(fileURLWithPath: "/models/small")
-        )
-
-        #expect(ModelManager.shouldPrewarmBeforeLoad(currentSignature: signature, storedSignature: nil) == true)
+    @Test func modelLoadingStartsWithDirectLoadInsteadOfPrewarm() {
+        #expect(ModelManager.shouldPrewarmBeforeInitialLoad(redownload: false) == false)
+        #expect(ModelManager.shouldPrewarmBeforeInitialLoad(redownload: true) == false)
     }
 
-    @Test func modelPreparationSkipsPrewarmForMatchingSignature() {
-        let signature = ModelManager.modelPreparationSignature(
-            for: "openai_whisper-small",
-            encoderComputeUnits: .cpuAndNeuralEngine,
-            decoderComputeUnits: .cpuAndNeuralEngine,
-            sourceKind: .downloaded,
-            modelFolder: URL(fileURLWithPath: "/models/small")
-        )
-
-        #expect(ModelManager.shouldPrewarmBeforeLoad(currentSignature: signature, storedSignature: signature) == false)
-    }
-
-    @Test func modelPreparationRequiresPrewarmWhenComputeUnitsChange() {
-        let stored = ModelManager.modelPreparationSignature(
-            for: "openai_whisper-small",
-            encoderComputeUnits: .cpuAndNeuralEngine,
-            decoderComputeUnits: .cpuAndNeuralEngine,
-            sourceKind: .downloaded,
-            modelFolder: URL(fileURLWithPath: "/models/small")
-        )
-        let current = ModelManager.modelPreparationSignature(
-            for: "openai_whisper-small",
-            encoderComputeUnits: .cpuAndGPU,
-            decoderComputeUnits: .cpuAndNeuralEngine,
-            sourceKind: .downloaded,
-            modelFolder: URL(fileURLWithPath: "/models/small")
-        )
-
-        #expect(ModelManager.shouldPrewarmBeforeLoad(currentSignature: current, storedSignature: stored) == true)
+    @Test func modelLoadingFallsBackToPrewarmOnlyAfterDirectLoadFailure() {
+        #expect(ModelManager.shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: false) == true)
+        #expect(ModelManager.shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: true) == false)
     }
 
     @Test func voiceNoteAveragesCompletedTelemetrySamples() {

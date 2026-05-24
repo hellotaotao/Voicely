@@ -19,15 +19,6 @@ struct LocalModelSource: Equatable {
     let url: URL
 }
 
-struct ModelPreparationSignature: Codable, Equatable {
-    let version: Int
-    let modelIdentifier: String
-    let encoderComputeUnits: String
-    let decoderComputeUnits: String
-    let sourceKind: String
-    let modelFolderPath: String
-}
-
 enum ModelState: CustomStringConvertible {
     case unloaded
     case loading
@@ -123,8 +114,6 @@ class ModelManager: ObservableObject {
     private let modelStorage = "huggingface/models/argmaxinc/whisperkit-coreml"
     private let repoName = "argmaxinc/whisperkit-coreml"
     private let bundledModelsDirectory = "BundledModels"
-    nonisolated private static let modelPreparationSignatureDefaultsKey = "VoicelyModelPreparationSignatureV1"
-    nonisolated private static let modelPreparationPolicyVersion = 1
     private var localModelPath = ""
     private var disabledModels: [String] = []
     private let specializationProgressRatio: Float = 0.7
@@ -239,28 +228,12 @@ class ModelManager: ObservableObject {
         return .loaded
     }
 
-    nonisolated static func modelPreparationSignature(
-        for model: String,
-        encoderComputeUnits: MLComputeUnits,
-        decoderComputeUnits: MLComputeUnits,
-        sourceKind: LocalModelSourceKind,
-        modelFolder: URL
-    ) -> ModelPreparationSignature {
-        ModelPreparationSignature(
-            version: modelPreparationPolicyVersion,
-            modelIdentifier: model,
-            encoderComputeUnits: computeUnitsIdentifier(encoderComputeUnits),
-            decoderComputeUnits: computeUnitsIdentifier(decoderComputeUnits),
-            sourceKind: sourceKindIdentifier(sourceKind),
-            modelFolderPath: modelFolder.standardizedFileURL.path
-        )
+    nonisolated static func shouldPrewarmBeforeInitialLoad(redownload: Bool) -> Bool {
+        false
     }
 
-    nonisolated static func shouldPrewarmBeforeLoad(
-        currentSignature: ModelPreparationSignature,
-        storedSignature: ModelPreparationSignature?
-    ) -> Bool {
-        storedSignature != currentSignature
+    nonisolated static func shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: Bool) -> Bool {
+        !alreadyPrewarmed
     }
     
     func loadModel(_ model: String, redownload: Bool = false) async {
@@ -366,55 +339,31 @@ class ModelManager: ObservableObject {
                 } else {
                     resolvedSourceKind = .downloaded
                 }
-                let preparationSignature = Self.modelPreparationSignature(
-                    for: model,
-                    encoderComputeUnits: encoderComputeUnits,
-                    decoderComputeUnits: decoderComputeUnits,
-                    sourceKind: resolvedSourceKind,
-                    modelFolder: modelFolder
-                )
-                let shouldPrewarm = redownload || Self.shouldPrewarmBeforeLoad(
-                    currentSignature: preparationSignature,
-                    storedSignature: storedModelPreparationSignature()
-                )
 
-                if shouldPrewarm {
-                    do {
-                        try await prewarmModelsForCurrentDevice(whisperKit)
-                        storeModelPreparationSignature(preparationSignature)
-                        loadingProgressValue = specializationProgressRatio + 0.9 * (1 - specializationProgressRatio)
-                    } catch {
-                        print("Error prewarming models: \(error.localizedDescription)")
-                        if !redownload {
-                            print("Retrying with redownload...")
-                            await loadModel(model, redownload: true)
-                            return
-                        } else {
-                            print("Prewarm failed after retry")
-                            errorMessage = "Failed to optimize model: \(error.localizedDescription)"
-                            modelState = .unloaded
-                            return
-                        }
-                    }
-                } else {
-                    print("Skipping model prewarm because the preparation signature matches the selected model and compute route.")
-                }
-                
                 modelState = .loading
                 do {
                     try await whisperKit.loadModels()
                 } catch {
-                    guard !shouldPrewarm, !redownload else {
+                    print("Loading failed before prewarm fallback: \(error.localizedDescription)")
+
+                    guard Self.shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: false) else {
                         throw error
                     }
 
-                    print("Loading failed after skipping prewarm: \(error.localizedDescription)")
-                    print("Retrying once with prewarm before loading...")
-                    try await prewarmModelsForCurrentDevice(whisperKit)
-                    storeModelPreparationSignature(preparationSignature)
-                    loadingProgressValue = specializationProgressRatio + 0.9 * (1 - specializationProgressRatio)
-                    modelState = .loading
-                    try await whisperKit.loadModels()
+                    do {
+                        print("Retrying once with prewarm before loading...")
+                        try await prewarmModelsForCurrentDevice(whisperKit)
+                        loadingProgressValue = specializationProgressRatio + 0.9 * (1 - specializationProgressRatio)
+                        modelState = .loading
+                        try await whisperKit.loadModels()
+                    } catch {
+                        if !redownload {
+                            print("Loading failed after prewarm fallback. Retrying with redownload...")
+                            await loadModel(model, redownload: true)
+                            return
+                        }
+                        throw error
+                    }
                 }
                 
                 if !downloadedModels.contains(model), resolvedSourceKind != .bundled {
@@ -510,20 +459,6 @@ class ModelManager: ObservableObject {
         }
     }
 
-    private func storedModelPreparationSignature() -> ModelPreparationSignature? {
-        guard let data = UserDefaults.standard.data(forKey: Self.modelPreparationSignatureDefaultsKey) else {
-            return nil
-        }
-        return try? JSONDecoder().decode(ModelPreparationSignature.self, from: data)
-    }
-
-    private func storeModelPreparationSignature(_ signature: ModelPreparationSignature) {
-        guard let data = try? JSONEncoder().encode(signature) else {
-            return
-        }
-        UserDefaults.standard.set(data, forKey: Self.modelPreparationSignatureDefaultsKey)
-    }
-
     private func prewarmModelsForCurrentDevice(_ whisperKit: WhisperKit) async throws {
         modelState = .prewarming
         let progressTask = Task {
@@ -577,30 +512,6 @@ class ModelManager: ObservableObject {
     
     private func shouldIncludeModel(_ model: String) -> Bool {
         !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    nonisolated private static func computeUnitsIdentifier(_ computeUnits: MLComputeUnits) -> String {
-        switch computeUnits {
-        case .cpuOnly:
-            return "cpuOnly"
-        case .cpuAndGPU:
-            return "cpuAndGPU"
-        case .cpuAndNeuralEngine:
-            return "cpuAndNeuralEngine"
-        case .all:
-            return "all"
-        @unknown default:
-            return String(describing: computeUnits)
-        }
-    }
-
-    nonisolated private static func sourceKindIdentifier(_ sourceKind: LocalModelSourceKind) -> String {
-        switch sourceKind {
-        case .bundled:
-            return "bundled"
-        case .downloaded:
-            return "downloaded"
-        }
     }
 
     nonisolated static func preferredLocalModelSource(

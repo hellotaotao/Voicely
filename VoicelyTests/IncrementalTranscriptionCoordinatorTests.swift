@@ -202,6 +202,29 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
+    @Test func voiceActivityCutCanStartLookingForStrongSilenceAroundTwentyTwoSeconds() throws {
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 22.0, amplitude: 0.08)
+        ])
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 2,
+            silentRanges: [0.4..<1.0]
+        ))
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: 352_000,
+            targetSegmentSeconds: 29,
+            neuralVoiceActivityDetector: fakeVAD
+        )
+
+        #expect(cutFrame > 320_000)
+        #expect(cutFrame < 352_000)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
     @Test func voiceActivityCutUsesRecentNeuralVADSilenceBeforeTarget() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 30.0, amplitude: 0.08)

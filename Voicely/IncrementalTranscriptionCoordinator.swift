@@ -43,7 +43,7 @@ struct IncrementalVoiceActivityCutConfiguration: Sendable {
     var searchWindowSeconds: Double = 8
     var minimumSilenceSeconds: Double = 0.35
     var minimumSegmentSeconds: Double = Double(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds)
-    var earliestCutRatio: Double = 0.8
+    var earliestCutRatio: Double = 22.0 / 29.0
     var forcedCutRatio: Double = 1.0
     var earlyCutConfidence: Double = 0.88
     var targetCutConfidence: Double = 0.62

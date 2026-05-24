@@ -39,7 +39,6 @@ enum QuickAction {
 struct VoicelyApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var syncMonitor = CloudKitSyncMonitor()
-    @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var sharedModelContainer: ModelContainer = {
@@ -76,16 +75,6 @@ struct VoicelyApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(syncMonitor)
-                .overlay {
-                    if shouldShowFirstLaunchOnboarding {
-                        FirstLaunchOnboardingView {
-                            completeFirstLaunchOnboarding()
-                        }
-                        .transition(.opacity)
-                        .zIndex(10)
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: shouldShowFirstLaunchOnboarding)
                 .task {
                     if AppRuntime.isRunningTests {
                         seedUITestNoteIfNeeded()
@@ -102,13 +91,6 @@ struct VoicelyApp: App {
                 }
         }
         .modelContainer(sharedModelContainer)
-    }
-
-    private func completeFirstLaunchOnboarding() {
-        FirstLaunchOnboarding.markCompleted()
-        withAnimation(.easeInOut(duration: 0.2)) {
-            shouldShowFirstLaunchOnboarding = false
-        }
     }
 
     private func seedUITestNoteIfNeeded() {

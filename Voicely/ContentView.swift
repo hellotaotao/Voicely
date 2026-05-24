@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var didSetupServices = false
     @State private var startRecordingQuickActionID = UUID()
     @State private var inboundAudioImportError: String?
+    @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
 
     private var isPhoneDevice: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
@@ -79,6 +80,32 @@ struct ContentView: View {
             }
         } message: {
             Text(inboundAudioImportError ?? "")
+        }
+        .overlay {
+            if shouldShowFirstLaunchOnboarding {
+                FirstLaunchOnboardingView(
+                    modelSetupStatus: onboardingModelSetupStatus,
+                    onComplete: completeFirstLaunchOnboarding
+                )
+                .transition(.opacity)
+                .zIndex(10)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: shouldShowFirstLaunchOnboarding)
+    }
+
+    private var onboardingModelSetupStatus: FirstLaunchModelSetupStatus {
+        FirstLaunchOnboarding.modelSetupStatus(
+            for: modelManager.modelState,
+            progress: modelManager.loadingProgressValue,
+            errorMessage: modelManager.errorMessage
+        )
+    }
+
+    private func completeFirstLaunchOnboarding() {
+        FirstLaunchOnboarding.markCompleted()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            shouldShowFirstLaunchOnboarding = false
         }
     }
 

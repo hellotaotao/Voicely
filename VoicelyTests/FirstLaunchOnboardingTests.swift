@@ -36,6 +36,30 @@ struct FirstLaunchOnboardingTests {
         ])
     }
 
+    @Test func modelSetupStatusReflectsActualPreparationState() {
+        let optimizing = FirstLaunchOnboarding.modelSetupStatus(
+            for: .prewarming,
+            progress: 0.82,
+            errorMessage: nil
+        )
+
+        #expect(optimizing.visualState == .active)
+        #expect(optimizing.title == "Optimizing offline transcription")
+        #expect(optimizing.detail == "Core ML is preparing the selected model for this device.")
+        #expect(optimizing.progress == 0.82)
+
+        let ready = FirstLaunchOnboarding.modelSetupStatus(
+            for: .loaded,
+            progress: 1,
+            errorMessage: nil
+        )
+
+        #expect(ready.visualState == .ready)
+        #expect(ready.title == "Offline transcription ready")
+        #expect(ready.detail == "The selected model is loaded and ready to use.")
+        #expect(ready.progress == nil)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suiteName = "FirstLaunchOnboardingTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

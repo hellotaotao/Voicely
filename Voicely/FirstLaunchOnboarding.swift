@@ -16,6 +16,50 @@ struct FirstLaunchOnboardingPage: Equatable, Identifiable {
     let accentColor: Color
 }
 
+struct FirstLaunchModelSetupStatus: Equatable {
+    enum VisualState: Equatable {
+        case idle
+        case active
+        case ready
+        case failed
+    }
+
+    let visualState: VisualState
+    let title: String
+    let detail: String
+    let progress: Float?
+
+    var showsProgress: Bool {
+        visualState == .active
+    }
+
+    var systemImageName: String {
+        switch visualState {
+        case .idle:
+            return "clock"
+        case .active:
+            return "bolt.horizontal.circle.fill"
+        case .ready:
+            return "checkmark.circle.fill"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch visualState {
+        case .idle:
+            return .secondary
+        case .active:
+            return VoicelyTheme.accent
+        case .ready:
+            return .green
+        case .failed:
+            return .orange
+        }
+    }
+}
+
 enum FirstLaunchOnboarding {
     static let completionKey = "VoicelyDidCompleteFirstLaunchOnboardingV1"
 
@@ -63,9 +107,74 @@ enum FirstLaunchOnboarding {
     static func markCompleted(defaults: UserDefaults = .standard) {
         defaults.set(true, forKey: completionKey)
     }
+
+    static func modelSetupStatus(
+        for modelState: ModelState,
+        progress: Float,
+        errorMessage: String?
+    ) -> FirstLaunchModelSetupStatus {
+        if let errorMessage, !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return FirstLaunchModelSetupStatus(
+                visualState: .failed,
+                title: "Model setup needs attention",
+                detail: errorMessage,
+                progress: nil
+            )
+        }
+
+        switch modelState {
+        case .unloaded:
+            return FirstLaunchModelSetupStatus(
+                visualState: .idle,
+                title: "Checking offline transcription",
+                detail: "Voicely will prepare the selected model when setup starts.",
+                progress: nil
+            )
+        case .loading:
+            return FirstLaunchModelSetupStatus(
+                visualState: .active,
+                title: "Loading offline transcription",
+                detail: "The selected model is being loaded into memory.",
+                progress: clampedProgress(progress)
+            )
+        case .downloading:
+            return FirstLaunchModelSetupStatus(
+                visualState: .active,
+                title: "Downloading offline model",
+                detail: "Voicely is fetching the selected model for local transcription.",
+                progress: clampedProgress(progress)
+            )
+        case .prewarming:
+            return FirstLaunchModelSetupStatus(
+                visualState: .active,
+                title: "Optimizing offline transcription",
+                detail: "Core ML is preparing the selected model for this device.",
+                progress: clampedProgress(progress)
+            )
+        case .loaded:
+            return FirstLaunchModelSetupStatus(
+                visualState: .ready,
+                title: "Offline transcription ready",
+                detail: "The selected model is loaded and ready to use.",
+                progress: nil
+            )
+        }
+    }
+
+    private static func clampedProgress(_ progress: Float) -> Float? {
+        guard progress.isFinite, progress > 0, progress < 1 else {
+            return nil
+        }
+        return min(max(progress, 0), 1)
+    }
 }
 
 struct FirstLaunchOnboardingView: View {
+    var modelSetupStatus: FirstLaunchModelSetupStatus = FirstLaunchOnboarding.modelSetupStatus(
+        for: .unloaded,
+        progress: 0,
+        errorMessage: nil
+    )
     var onComplete: () -> Void
     @State private var selectedPage = 0
 
@@ -174,14 +283,14 @@ struct FirstLaunchOnboardingView: View {
 
     private var setupStatus: some View {
         HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
+            setupStatusAccessory
             VStack(alignment: .leading, spacing: 2) {
-                Text("Preparing offline transcription")
+                Text(modelSetupStatus.title)
                     .font(.caption.weight(.semibold))
-                Text("Model optimization can continue while you read this tour.")
+                Text(modelSetupStatus.detail)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             Spacer(minLength: 0)
         }
@@ -191,6 +300,24 @@ struct FirstLaunchOnboardingView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
+    }
+
+    @ViewBuilder
+    private var setupStatusAccessory: some View {
+        if modelSetupStatus.showsProgress {
+            if let progress = modelSetupStatus.progress {
+                ProgressView(value: progress, total: 1)
+                    .controlSize(.small)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        } else {
+            Image(systemName: modelSetupStatus.systemImageName)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(modelSetupStatus.tint)
+                .frame(width: 20, height: 20)
+        }
     }
 
     private var backgroundView: some View {

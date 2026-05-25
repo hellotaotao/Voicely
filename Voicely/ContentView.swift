@@ -1535,6 +1535,7 @@ struct VoiceNoteDetailView: View {
                 WaveformBars(
                     seed: waveformSeed,
                     progress: waveformProgress,
+                    levels: audioPlayer.waveformLevels,
                     activeTint: VoicelyTheme.accent,
                     inactiveTint: .secondary,
                     height: usesCompactDetailLayout ? 54 : 56,

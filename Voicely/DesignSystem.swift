@@ -34,6 +34,7 @@ enum VoicelyTheme {
 struct WaveformBars: View {
     let seed: Int
     let progress: Double
+    var levels: [Double]? = nil
     var barCount: Int = 80
     var activeTint: Color = .accentColor
     var inactiveTint: Color = .secondary
@@ -41,7 +42,12 @@ struct WaveformBars: View {
     var onSeek: ((Double) -> Void)? = nil
 
     private var bars: [CGFloat] {
-        WaveformBars.generate(seed: seed, count: barCount)
+        if let levels, !levels.isEmpty {
+            return AudioWaveformExtractor.resampledLevels(levels, count: barCount)
+                .map { CGFloat(min(max($0, 0), 1)) }
+        }
+
+        return WaveformBars.generate(seed: seed, count: barCount)
     }
 
     var body: some View {

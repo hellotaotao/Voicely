@@ -40,6 +40,229 @@ struct PendingSeekState {
     }
 }
 
+enum AudioWaveformExtractor {
+    static let defaultBucketCount = 80
+
+    static func normalizedLevels(from url: URL, bucketCount: Int = defaultBucketCount) async throws -> [Double] {
+        let task = Task.detached(priority: .utility) {
+            try extractNormalizedLevels(from: url, bucketCount: bucketCount)
+        }
+
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    static func normalizedLevels(from rawLevels: [Double], minimumLevel: Double = 0.08) -> [Double] {
+        guard !rawLevels.isEmpty else { return [] }
+
+        let sanitized = rawLevels.map { level in
+            level.isFinite ? max(0, level) : 0
+        }
+
+        guard let peak = sanitized.max(), peak > 0 else {
+            return Array(repeating: minimumLevel, count: sanitized.count)
+        }
+
+        return sanitized.map { level in
+            let unitLevel = min(max(level / peak, 0), 1)
+            let shapedLevel = pow(unitLevel, 0.58)
+            return min(max(minimumLevel, shapedLevel), 1)
+        }
+    }
+
+    static func resampledLevels(_ levels: [Double], count: Int) -> [Double] {
+        guard count > 0 else { return [] }
+        guard !levels.isEmpty else { return [] }
+        guard levels.count != count else { return levels }
+        guard count > 1, levels.count > 1 else {
+            return Array(repeating: levels.first ?? 0, count: count)
+        }
+
+        let inputSpan = Double(levels.count - 1)
+        let outputSpan = Double(count - 1)
+
+        return (0..<count).map { index in
+            let position = Double(index) * inputSpan / outputSpan
+            let lowerIndex = Int(position.rounded(.down))
+            let upperIndex = min(lowerIndex + 1, levels.count - 1)
+            let fraction = position - Double(lowerIndex)
+            return levels[lowerIndex] * (1 - fraction) + levels[upperIndex] * fraction
+        }
+    }
+
+    private static func extractNormalizedLevels(from url: URL, bucketCount: Int) throws -> [Double] {
+        guard bucketCount > 0 else { return [] }
+
+        let file = try AVAudioFile(forReading: url)
+        let totalFrames = file.length
+        guard totalFrames > 0 else { return [] }
+
+        var rawLevels: [Double] = []
+        rawLevels.reserveCapacity(bucketCount)
+
+        for bucketIndex in 0..<bucketCount {
+            try Task.checkCancellation()
+
+            let bucketStart = frameBoundary(forBucket: bucketIndex, bucketCount: bucketCount, totalFrames: totalFrames)
+            let bucketEnd = frameBoundary(forBucket: bucketIndex + 1, bucketCount: bucketCount, totalFrames: totalFrames)
+            let startFrame = min(max(0, bucketStart), max(0, totalFrames - 1))
+            let endFrame = min(max(startFrame + 1, bucketEnd), totalFrames)
+            let bucketFrames = max(1, endFrame - startFrame)
+
+            if bucketFrames <= 4_096 {
+                rawLevels.append(
+                    try rmsLevel(in: file, startFrame: startFrame, frameCount: AVAudioFrameCount(bucketFrames))
+                )
+            } else {
+                var sampledLevels: [Double] = []
+                sampledLevels.reserveCapacity(3)
+
+                for fraction in [0.2, 0.5, 0.8] {
+                    try Task.checkCancellation()
+
+                    let windowFrames = min(AVAudioFramePosition(1_024), bucketFrames)
+                    let centeredOffset = AVAudioFramePosition((Double(bucketFrames) * fraction).rounded())
+                    let proposedStart = startFrame + centeredOffset - (windowFrames / 2)
+                    let windowStart = min(
+                        max(startFrame, proposedStart),
+                        max(startFrame, endFrame - windowFrames)
+                    )
+
+                    sampledLevels.append(
+                        try rmsLevel(in: file, startFrame: windowStart, frameCount: AVAudioFrameCount(windowFrames))
+                    )
+                }
+
+                rawLevels.append(sampledLevels.max() ?? 0)
+            }
+        }
+
+        return normalizedLevels(from: smoothed(rawLevels))
+    }
+
+    private static func frameBoundary(
+        forBucket bucketIndex: Int,
+        bucketCount: Int,
+        totalFrames: AVAudioFramePosition
+    ) -> AVAudioFramePosition {
+        guard bucketCount > 0 else { return 0 }
+        let clampedIndex = min(max(bucketIndex, 0), bucketCount)
+        return AVAudioFramePosition(
+            (Double(clampedIndex) / Double(bucketCount) * Double(totalFrames)).rounded(.down)
+        )
+    }
+
+    private static func rmsLevel(
+        in file: AVAudioFile,
+        startFrame: AVAudioFramePosition,
+        frameCount: AVAudioFrameCount
+    ) throws -> Double {
+        let remainingFrames = max(0, file.length - startFrame)
+        let resolvedFrameCount: AVAudioFrameCount
+        if remainingFrames >= AVAudioFramePosition(frameCount) {
+            resolvedFrameCount = frameCount
+        } else {
+            resolvedFrameCount = AVAudioFrameCount(remainingFrames)
+        }
+        guard resolvedFrameCount > 0 else { return 0 }
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: resolvedFrameCount) else {
+            return 0
+        }
+
+        file.framePosition = startFrame
+        try file.read(into: buffer, frameCount: resolvedFrameCount)
+        return rmsLevel(in: buffer)
+    }
+
+    private static func rmsLevel(in buffer: AVAudioPCMBuffer) -> Double {
+        let frameLength = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frameLength > 0, channelCount > 0 else { return 0 }
+
+        if let floatChannelData = buffer.floatChannelData {
+            return rmsLevel(
+                frameLength: frameLength,
+                channelCount: channelCount,
+                isInterleaved: buffer.format.isInterleaved
+            ) { frameIndex, channelIndex in
+                if buffer.format.isInterleaved {
+                    return Double(floatChannelData[0][frameIndex * channelCount + channelIndex])
+                }
+                return Double(floatChannelData[channelIndex][frameIndex])
+            }
+        }
+
+        if let int16ChannelData = buffer.int16ChannelData {
+            return rmsLevel(
+                frameLength: frameLength,
+                channelCount: channelCount,
+                isInterleaved: buffer.format.isInterleaved
+            ) { frameIndex, channelIndex in
+                let sample: Int16
+                if buffer.format.isInterleaved {
+                    sample = int16ChannelData[0][frameIndex * channelCount + channelIndex]
+                } else {
+                    sample = int16ChannelData[channelIndex][frameIndex]
+                }
+                return Double(sample) / Double(Int16.max)
+            }
+        }
+
+        if let int32ChannelData = buffer.int32ChannelData {
+            return rmsLevel(
+                frameLength: frameLength,
+                channelCount: channelCount,
+                isInterleaved: buffer.format.isInterleaved
+            ) { frameIndex, channelIndex in
+                let sample: Int32
+                if buffer.format.isInterleaved {
+                    sample = int32ChannelData[0][frameIndex * channelCount + channelIndex]
+                } else {
+                    sample = int32ChannelData[channelIndex][frameIndex]
+                }
+                return Double(sample) / Double(Int32.max)
+            }
+        }
+
+        return 0
+    }
+
+    private static func rmsLevel(
+        frameLength: Int,
+        channelCount: Int,
+        isInterleaved: Bool,
+        sampleAt: (Int, Int) -> Double
+    ) -> Double {
+        var squaredTotal = 0.0
+
+        for frameIndex in 0..<frameLength {
+            var framePeak = 0.0
+
+            for channelIndex in 0..<channelCount {
+                framePeak = max(framePeak, abs(sampleAt(frameIndex, channelIndex)))
+            }
+
+            squaredTotal += framePeak * framePeak
+        }
+
+        return sqrt(squaredTotal / Double(frameLength))
+    }
+
+    private static func smoothed(_ levels: [Double]) -> [Double] {
+        guard levels.count > 2 else { return levels }
+
+        return levels.enumerated().map { index, level in
+            let previous = levels[max(0, index - 1)]
+            let next = levels[min(levels.count - 1, index + 1)]
+            return previous * 0.2 + level * 0.6 + next * 0.2
+        }
+    }
+}
+
 @MainActor
 class AudioPlayerService: NSObject, ObservableObject {
     @Published var isPlaying = false
@@ -48,13 +271,16 @@ class AudioPlayerService: NSObject, ObservableObject {
     @Published var playbackRate: Float = 1.0
     @Published private(set) var isPreparingAudio = false
     @Published private(set) var playbackStatusMessage: String?
+    @Published private(set) var waveformLevels: [Double]?
     
     private var audioPlayer: AVAudioPlayer?
     private var timer: Timer?
     private var pendingFilePath: String?
     private var preloadTask: Task<Void, Never>?
     private var prepareTask: Task<Void, Never>?
+    private var waveformTask: Task<Void, Never>?
     private var pendingSeekState = PendingSeekState()
+    private static var waveformCache: [String: [Double]] = [:]
     #if !os(macOS) || targetEnvironment(macCatalyst)
     private let audioSession = AVAudioSession.sharedInstance()
     private var isAudioSessionActive = false
@@ -111,16 +337,26 @@ class AudioPlayerService: NSObject, ObservableObject {
 
         preloadTask?.cancel()
         prepareTask?.cancel()
+        waveformTask?.cancel()
         discardLoadedPlayer()
 
         pendingFilePath = filePath.isEmpty ? nil : filePath
         duration = expectedDuration ?? 0
         playbackStatusMessage = nil
         isPreparingAudio = false
+        waveformLevels = nil
         pendingSeekState.clear()
 
         guard let pendingFilePath else {
             return
+        }
+
+        if let cachedLevels = Self.waveformCache[pendingFilePath] {
+            waveformLevels = cachedLevels
+        } else {
+            waveformTask = Task { @MainActor [weak self] in
+                await self?.loadWaveformForCurrentSelection(filePath: pendingFilePath)
+            }
         }
 
         preloadTask = Task { @MainActor [weak self] in
@@ -232,6 +468,7 @@ class AudioPlayerService: NSObject, ObservableObject {
     deinit {
         preloadTask?.cancel()
         prepareTask?.cancel()
+        waveformTask?.cancel()
         audioPlayer?.stop()
         timer?.invalidate()
     }
@@ -352,6 +589,35 @@ private extension AudioPlayerService {
             } else {
                 playbackStatusMessage = "Couldn't open this recording for playback."
             }
+        }
+    }
+
+    @MainActor
+    func loadWaveformForCurrentSelection(filePath: String) async {
+        guard pendingFilePath == filePath else { return }
+
+        if let cachedLevels = Self.waveformCache[filePath] {
+            waveformLevels = cachedLevels
+            return
+        }
+
+        guard let url = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
+            return
+        }
+
+        guard !Task.isCancelled, pendingFilePath == filePath else { return }
+
+        do {
+            let levels = try await AudioWaveformExtractor.normalizedLevels(from: url)
+
+            guard !Task.isCancelled, pendingFilePath == filePath, !levels.isEmpty else { return }
+
+            Self.waveformCache[filePath] = levels
+            waveformLevels = levels
+        } catch is CancellationError {
+            return
+        } catch {
+            debugLog("⚠️ [DEBUG] Failed to extract playback waveform: \(error)")
         }
     }
 

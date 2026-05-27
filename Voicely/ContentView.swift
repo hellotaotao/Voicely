@@ -1545,14 +1545,25 @@ struct VoiceNoteDetailView: View {
                     }
                 )
 
-                HStack(spacing: 12) {
-                    Text(formatTime(audioPlayer.currentTime))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 44, alignment: .leading)
+                ZStack {
+                    HStack {
+                        Text(formatTime(audioPlayer.currentTime))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 44, alignment: .leading)
+
+                        Spacer(minLength: 0)
+
+                        HStack(spacing: 8) {
+                            Text(formatTime(audioPlayer.duration))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                            playbackRateButton
+                        }
+                        .frame(minWidth: 106, alignment: .trailing)
+                    }
 
                     HStack(spacing: 18) {
-                        Spacer(minLength: 0)
                         transportButton(systemImage: "gobackward.15") {
                             audioPlayer.seekBackward(seconds: 15)
                         }
@@ -1560,27 +1571,9 @@ struct VoiceNoteDetailView: View {
                         transportButton(systemImage: "goforward.15") {
                             audioPlayer.seekForward(seconds: 15)
                         }
-                        Spacer(minLength: 0)
                     }
-
-                    HStack(spacing: 6) {
-                        Text(formatTime(audioPlayer.duration))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                        Button(action: cyclePlaybackRate) {
-                            Text(String(format: "%.2g×", audioPlayer.playbackRate))
-                                .font(.caption.weight(.semibold).monospacedDigit())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                        .fill(VoicelyTheme.surfaceRaised)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .frame(minWidth: 90, alignment: .trailing)
                 }
+                .frame(height: 48)
 
                 if audioPlayer.isPreparingAudio {
                     HStack(spacing: 8) {
@@ -1618,7 +1611,27 @@ struct VoiceNoteDetailView: View {
                 .shadow(color: VoicelyTheme.accent.opacity(0.35), radius: 10, y: 4)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(audioPlayer.isPlaying ? "Pause" : "Play")
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.playButton)
+    }
+
+    private var playbackRateButton: some View {
+        Button(action: cyclePlaybackRate) {
+            Text(String(format: "%.2g×", audioPlayer.playbackRate))
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(minWidth: 52)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(VoicelyTheme.surfaceRaised)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Playback Speed")
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.playbackRateButton)
     }
 
     private func transportButton(systemImage: String, action: @escaping () -> Void) -> some View {
@@ -1732,6 +1745,8 @@ struct VoiceNoteDetailView: View {
                     .font(.caption.weight(.semibold))
                 Text(title)
                     .font(.footnote.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .accessibilityIdentifier(transcriptionActionIdentifier(for: title))
             }
             .accessibilityElement(children: .combine)
@@ -1750,6 +1765,8 @@ struct VoiceNoteDetailView: View {
         }
         .accessibilityIdentifier(transcriptionActionIdentifier(for: title))
         .accessibilityLabel(title)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
         .buttonStyle(.plain)
         .disabled(note.audioFilePath.isEmpty || isTranscribingHere || isRemoteTranscribing)
     }

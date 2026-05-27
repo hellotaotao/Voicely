@@ -24,12 +24,15 @@ final class VoicelyUITests: XCTestCase {
         static let noteDetailScreen = "NoteDetailScreen"
         static let noteDetailTitle = "NoteDetailTitle"
         static let noteDetailMetadata = "NoteDetailMetadata"
+        static let audioPlayerCard = "AudioPlayerCard"
+        static let playButton = "PlayButton"
         static let transcriptionCard = "TranscriptionCard"
         static let transcriptionBody = "TranscriptionBody"
         static let transcribeButton = "TranscribeButton"
         static let retranscribeButton = "RetranscribeButton"
         static let copyTranscriptionButton = "CopyTranscriptionButton"
         static let shareTranscriptionButton = "ShareTranscriptionButton"
+        static let playbackRateButton = "PlaybackRateButton"
     }
 
     override func setUpWithError() throws {
@@ -186,6 +189,39 @@ final class VoicelyUITests: XCTestCase {
     }
 
     @MainActor
+    func testDetailPlaybackControlsStayVisuallyBalancedOnCompactWidth() throws {
+        let noteTitle = "Balanced Playback Controls"
+        let transcript = "A compact detail screen should keep playback and transcription controls readable."
+        let app = launchApp(
+            seedNoteTitle: noteTitle,
+            seedNoteAudioPath: "ui-test-balanced-playback.m4a",
+            seedNoteDuration: 125,
+            seedNoteTranscription: transcript,
+            seedNoteTranscriptionModelIdentifier: "openai_whisper-small"
+        )
+
+        XCTAssertTrue(app.staticTexts[noteTitle].waitForExistence(timeout: 5))
+        app.staticTexts[noteTitle].firstMatch.tap()
+
+        let detail = app.element(id: ID.noteDetailScreen)
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        let audioCard = app.element(id: ID.audioPlayerCard)
+        XCTAssertTrue(audioCard.waitForExistence(timeout: 5))
+
+        let playButton = app.playControl
+        XCTAssertTrue(playButton.exists)
+        XCTAssertEqual(playButton.frame.midX, app.windows.firstMatch.frame.midX, accuracy: 6)
+
+        let playbackRateButton = app.playbackRateControl
+        XCTAssertTrue(playbackRateButton.exists)
+        XCTAssertGreaterThanOrEqual(playbackRateButton.frame.width, 52)
+
+        let retranscribeButton = app.buttons[ID.retranscribeButton].firstMatch
+        XCTAssertTrue(retranscribeButton.exists)
+        XCTAssertGreaterThan(retranscribeButton.frame.width, retranscribeButton.frame.height)
+    }
+
+    @MainActor
     func testSeededRecordingTranscribePromptRoutesToSettings() throws {
         let noteTitle = "Seeded Recording"
         let app = launchApp(
@@ -261,6 +297,22 @@ private extension XCUIApplication {
             return identifiedControl
         }
         return buttons["Transcribe"].firstMatch
+    }
+
+    var playControl: XCUIElement {
+        let identifiedControl = element(id: VoicelyUITests.ID.playButton)
+        if identifiedControl.exists {
+            return identifiedControl
+        }
+        return buttons["Play"].firstMatch
+    }
+
+    var playbackRateControl: XCUIElement {
+        let identifiedControl = element(id: VoicelyUITests.ID.playbackRateButton)
+        if identifiedControl.exists {
+            return identifiedControl
+        }
+        return buttons["Playback Speed"].firstMatch
     }
 
     func scrollToElement(_ element: XCUIElement, maxSwipes: Int = 4) {

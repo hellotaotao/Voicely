@@ -33,6 +33,7 @@ enum AccessibilityIdentifiers {
         static let editButton = "NoteDetailEditButton"
         static let audioPlayerCard = "AudioPlayerCard"
         static let playButton = "PlayButton"
+        static let playbackRateButton = "PlaybackRateButton"
         static let transcriptionCard = "TranscriptionCard"
         static let computeTelemetryCard = "ComputeTelemetryCard"
         static let transcriptionBody = "TranscriptionBody"

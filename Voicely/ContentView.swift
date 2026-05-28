@@ -54,7 +54,7 @@ struct ContentView: View {
             requestStartRecordingFromQuickAction()
         }
         .onOpenURL { url in
-            handleIncomingAudioURL(url)
+            handleIncomingURL(url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
@@ -446,9 +446,21 @@ struct ContentView: View {
         await transcriptionService.processPendingTranscriptions(notes: eligibleNotes)
     }
 
-    private func handleIncomingAudioURL(_ url: URL) {
+    private func handleIncomingURL(_ url: URL) {
+        if let deepLink = VoicelyDeepLink(url: url) {
+            handleDeepLink(deepLink)
+            return
+        }
+
         Task { @MainActor in
             await importIncomingAudio(from: url)
+        }
+    }
+
+    private func handleDeepLink(_ deepLink: VoicelyDeepLink) {
+        switch deepLink {
+        case .startRecording:
+            requestStartRecordingFromQuickAction()
         }
     }
 
@@ -1086,6 +1098,7 @@ struct RecordingControls: View {
         isStartingRecording = false
         didStart = true
         onRecordingComplete(note)
+        RecordingLiveActivityController.shared.start(recordingID: note.id, title: note.title)
 
         let coord = IncrementalTranscriptionCoordinator(
             transcriptionService: transcriptionService,
@@ -1127,9 +1140,11 @@ struct RecordingControls: View {
         if audioService.isPaused {
             audioService.resumeRecording()
             coordinator?.resume(intervalSeconds: effectiveIncrementalIntervalSeconds)
+            RecordingLiveActivityController.shared.resume(elapsedDuration: audioService.recordingDuration)
         } else {
             audioService.pauseRecording()
             coordinator?.pause()
+            RecordingLiveActivityController.shared.pause(elapsedDuration: audioService.recordingDuration)
         }
     }
 
@@ -1152,6 +1167,7 @@ struct RecordingControls: View {
 
         let finalFrame = audioService.currentFramePosition
         let stopResult = audioService.stopRecording()
+        RecordingLiveActivityController.shared.end(elapsedDuration: stopResult.duration)
 
         guard let filePath = stopResult.filePath else { return }
 

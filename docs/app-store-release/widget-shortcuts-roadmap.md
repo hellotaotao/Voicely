@@ -25,91 +25,82 @@ Do not copy Noted feature-for-feature. Noted is a mature recording notebook with
 
 Widgets and Shortcuts should support those jobs, not distract with generic note-taking breadth.
 
+## Current Priority
+
+Tao's current priority is to make Voicely feel like an iOS system-level meeting recorder before changing the main recording UI:
+
+1. Live Activity / Dynamic Island recording status first.
+2. App Shortcut / Action Button quick start first.
+3. Timed recording next, because it needs more visible app UI decisions.
+4. Apple Watch later, because it adds watchOS and cross-device complexity for less immediate value.
+
 ## Recommended Phases
 
-## Phase 1 — App Shortcuts First
+## Phase 1 — Recording System Integration
 
-This is the highest leverage because it improves system integration with limited UI surface area.
-
-### Shortcut 1: Start Recording
-
-User phrase examples:
-
-- “Start a Voicely recording”
-- “Record a sensitive meeting in Voicely”
+### Live Activity: Active Recording Status
 
 Behavior:
 
-- Opens Voicely directly into the recording flow.
-- If recording cannot start from the background due to iOS privacy/audio restrictions, open the app and focus the primary record control.
-- Do not silently record without clear user-visible app state.
+- Starts a Recording Live Activity when Voicely starts recording.
+- Shows “Voicely is recording” and elapsed recording time on the Lock Screen and Dynamic Island.
+- Ends the Live Activity when recording stops.
+- Keeps the Activity content state ready for a future `scheduledEndDate`, so timed recording can add remaining-time display without replacing the model.
 
 Implementation direction:
 
-- Add an `AppIntent` such as `StartRecordingIntent`.
-- Use app navigation/deep-link state rather than duplicating recording logic inside the intent.
-- Keep microphone permission onboarding in the app.
+- Use `ActivityKit` from the app and a `WidgetKit` extension for the Lock Screen / Dynamic Island UI.
+- Use system timer rendering for elapsed time instead of manually updating every second.
+- Treat Live Activity as display only; recording control remains in `AudioRecordingService` / `RecordingControls`.
 
-### Shortcut 2: Open Latest Transcript
-
-User phrase examples:
-
-- “Open my latest Voicely transcript”
-- “Show last meeting transcript”
+### Shortcut: Start Recording
 
 Behavior:
 
-- Opens the most recent `VoiceNote` with non-empty transcription.
-- If none exist, opens the library and shows an empty/help state.
+- Supports `voicely://record`.
+- Adds `StartRecordingIntent` and App Shortcuts phrases such as “Start a Voicely recording”.
+- Opens Voicely directly into a visible recording flow.
+- Does not silently record without clear user-visible app state.
 
-Implementation direction:
+Action Button direction:
 
-- Query SwiftData for latest transcribed note in app context.
-- Deep link to selected note ID.
+- Treat iPhone Action Button support as an extension of this shortcut, not a separate recording engine.
+- Users should be able to assign the Voicely start-recording shortcut to Action Button long press where iOS supports that workflow.
 
-### Shortcut 3: Copy Latest Transcript
+### Later App Shortcuts
 
-User phrase examples:
-
-- “Copy latest Voicely transcript”
-
-Behavior:
-
-- Copies latest transcript to the clipboard, or opens app with a clear message if locked/no transcript.
-- This should require user confirmation if privacy risk is high.
-
-Implementation direction:
-
-- Prefer opening the app to a confirmation screen first for sensitive content.
-- Avoid exposing transcript contents in Siri spoken output.
-
-### Shortcut 4: Transcribe Pending Recordings
-
-User phrase examples:
-
-- “Transcribe pending Voicely recordings”
-
-Behavior:
-
-- Opens the app and starts processing queued pending transcriptions on the eligible device.
-- If no model is loaded, routes to model settings.
-
-Implementation direction:
-
-- Reuse existing `TranscriptionService.processPendingTranscriptions` style flow.
-- Do not run heavy transcription inside the intent process.
+- `OpenLatestTranscriptIntent`: open the most recent `VoiceNote` with non-empty transcription.
+- `CopyLatestTranscriptIntent`: copy only after privacy-safe confirmation.
+- `TranscribePendingRecordingsIntent`: open the app and reuse `TranscriptionService.processPendingTranscriptions`.
 
 ### Phase 1 Acceptance Criteria
 
+- Live Activity appears while recording and disappears when recording stops.
+- Dynamic Island compact/minimal/expanded states clearly indicate active recording.
 - Shortcuts appear in iOS Shortcuts app.
-- Each shortcut has privacy-safe wording.
-- No shortcut silently exposes sensitive transcript content.
-- No transcription or recording logic is duplicated across app and intents.
-- App opens to the right state from each shortcut.
+- The Start Recording shortcut can be assigned to Action Button where iOS supports that workflow.
+- The shortcut and `voicely://record` route open Voicely into visible recording state instead of recording invisibly.
+- No recording logic is duplicated across app, intents, and widgets.
 
-## Phase 2 — Lock Screen / Home Screen Widgets
+## Phase 2 — Timed Recording
 
-Widgets should show status and quick entry points, not sensitive transcript text by default.
+Timed recording is next because it is important, but it changes the start-recording and in-recording UI.
+
+Behavior:
+
+- Let the start-recording flow optionally accept a target duration, such as 30, 35, 41, or 60 minutes.
+- Show a prominent countdown warning a few minutes before auto-stop, with choices to extend or stop.
+- Show remaining time in the app and the Recording Live Activity when a target duration exists.
+- Consider a later smart-stop layer that detects farewell phrases plus sustained silence near the scheduled end time before stopping automatically.
+
+Implementation direction:
+
+- Extend `RecordingActivityAttributes.ContentState.scheduledEndDate` rather than introducing a new Live Activity model.
+- Keep auto-stop scheduling in the app recording flow, not in the widget extension.
+
+## Phase 3 — Lock Screen / Home Screen Widgets
+
+Non-Live-Activity widgets should show status and quick entry points, not sensitive transcript text by default.
 
 ### Widget 1: Recording / Transcription Status
 
@@ -167,14 +158,14 @@ Implementation direction:
 - Deep link to latest transcribed note ID if available.
 - If note ID cannot be safely shared, open the app library filtered to completed transcripts.
 
-### Phase 2 Acceptance Criteria
+### Phase 3 Acceptance Criteria
 
 - Widgets do not leak sensitive transcript text on Lock Screen by default.
 - Widget state updates after recording/transcription/sync changes.
 - Widget works when iCloud is unavailable.
 - Widget tap/deep link opens correct app state.
 
-## Phase 3 — Share Sheet / Import Audio
+## Phase 4 — Share Sheet / Import Audio
 
 This is already listed in `AGENTS.md` as a TODO and is important for real workflows.
 
@@ -198,9 +189,9 @@ Acceptance criteria:
 - Original file remains untouched.
 - Transcription uses same local WhisperKit flow.
 
-## Phase 4 — Advanced AppIntents
+## Phase 5 — Advanced AppIntents
 
-Only after Phases 1–3 are stable.
+Only after Phases 1–4 are stable.
 
 Candidates:
 
@@ -244,21 +235,20 @@ Do not run recording or WhisperKit transcription inside widget/intent extension 
 
 Once Phase 1 or Phase 2 exists, update App Store assets:
 
-- Metadata bullet: “Start recordings and reopen transcripts from Shortcuts and widgets.”
-- Screenshot candidate: “Start from Lock Screen or Shortcuts” only after implemented.
+- Metadata bullet: “See active recording status on the Lock Screen and start recordings from Shortcuts.”
+- Screenshot candidate: “Recording on Lock Screen / Dynamic Island” only after device verification.
 - Review notes: mention widgets/shortcuts do not record silently; recording remains user initiated and visible.
 - Privacy notes: widgets expose status only by default, not transcript text.
 
 Do not add these claims to the live listing until the feature ships.
 
-## Recommended First Implementation Slice
+## Recently Implemented Slice
 
-If implementing next, start with this exact slice:
+The first system-integration slice is now represented in code:
 
-1. Add URL/deep-link route handling for `voicely://record` and `voicely://latest-transcript`.
-2. Add AppIntent `StartRecordingIntent` that opens `voicely://record`.
-3. Add AppIntent `OpenLatestTranscriptIntent` that opens `voicely://latest-transcript`.
-4. Add tests or manual verification around routing state.
-5. Only then add the first widget.
+1. `voicely://record` deep-link route.
+2. `StartRecordingIntent` / App Shortcuts metadata for visible start-recording flow.
+3. Recording Live Activity model, controller, and WidgetKit extension.
+4. Timed recording remains the next major product feature.
 
-Reason: shortcuts become useful quickly, and the same route layer supports later widgets.
+Manual device verification is still needed for Lock Screen, Dynamic Island, and Action Button assignment behavior.

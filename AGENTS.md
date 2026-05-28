@@ -38,6 +38,9 @@ If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared 
 - Keep `Info.plist` changes minimal and documented in PRs when permissions or entitlements change.
 
 ## To Do
+- Validate the new iOS system recording integrations on device: Live Activity / Dynamic Island recording status and the Start Voicely Recording App Shortcut / Action Button assignment path. (`Voicely/RecordingLiveActivityController.swift`, `VoicelyWidgets/`, `Voicely/StartRecordingIntent.swift`, `Voicely/VoicelyDeepLink.swift`)
+- Add meeting-length recording controls as the next major product step: let users choose an auto-stop duration when starting recording, support precise durations such as 30/35/41/60 minutes, show a prominent countdown warning a few minutes before stopping, offer extend/stop-now choices, and later explore smart auto-stop when farewell phrases plus silence indicate the meeting has ended. (`Voicely/ContentView.swift`, `Voicely/AudioRecordingService.swift`, `Voicely/RecordingActivityAttributes.swift`)
+- Explore Apple Watch companion support later: start with Watch as an iPhone recording remote/status surface before considering direct Watch microphone recording and sync. (future watchOS target / WatchConnectivity files)
 - Replace simulated transcription progress with real progress reporting (e.g., integrate WhisperKit callbacks / segment progress) and reflect in UI. (`Voicely/TranscriptionService.swift`, `Voicely/ContentView.swift`)
 - Fix `processPendingTranscriptions` so notes aren't skipped when another transcription is active; wait/retry or queue work. (`Voicely/TranscriptionService.swift`)
 - Ensure the simulated progress task is always cancelled on early exit/error/cancellation. (`Voicely/TranscriptionService.swift`)

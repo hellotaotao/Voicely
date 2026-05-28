@@ -8,9 +8,17 @@
 
 /* Begin PBXBuildFile section */
 		2B18228C2DED2F1200550CD1 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 2B1822252DEB5A0000550CD1 /* WhisperKit */; };
+		F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B10F64286FD94C19AA7AA7E6;
+			remoteInfo = VoicelyWidgets;
+		};
 		2B1822082DEB579F00550CD1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
@@ -27,10 +35,25 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		8F8DDF41F0D64D8FB6CBA76B /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		2B1821F62DEB579E00550CD1 /* Voicely.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Voicely.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822072DEB579F00550CD1 /* VoicelyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoicelyWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -41,6 +64,13 @@
 			);
 			target = 2B1821F52DEB579E00550CD1 /* Voicely */;
 		};
+		AB2470A80CAA4262A2CFF3D1 /* Exceptions for "VoicelyWidgets" folder in "VoicelyWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -50,6 +80,14 @@
 				2B1822192DEB579F00550CD1 /* Exceptions for "Voicely" folder in "Voicely" target */,
 			);
 			path = Voicely;
+			sourceTree = "<group>";
+		};
+		27DAE2FC170948BF866FF301 /* VoicelyWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AB2470A80CAA4262A2CFF3D1 /* Exceptions for "VoicelyWidgets" folder in "VoicelyWidgets" target */,
+			);
+			path = VoicelyWidgets;
 			sourceTree = "<group>";
 		};
 		2B18220A2DEB579F00550CD1 /* VoicelyTests */ = {
@@ -70,6 +108,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				2B18228C2DED2F1200550CD1 /* WhisperKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B946AF2E1FD14FA2AC84FBC3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -94,6 +139,7 @@
 			isa = PBXGroup;
 			children = (
 				2B1821F82DEB579E00550CD1 /* Voicely */,
+				27DAE2FC170948BF866FF301 /* VoicelyWidgets */,
 				2B18220A2DEB579F00550CD1 /* VoicelyTests */,
 				2B1822142DEB579F00550CD1 /* VoicelyUITests */,
 				2B1821F72DEB579E00550CD1 /* Products */,
@@ -104,6 +150,7 @@
 			isa = PBXGroup;
 			children = (
 				2B1821F62DEB579E00550CD1 /* Voicely.app */,
+				FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */,
 				2B1822072DEB579F00550CD1 /* VoicelyTests.xctest */,
 				2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */,
 			);
@@ -120,10 +167,12 @@
 				2B1821F22DEB579E00550CD1 /* Sources */,
 				2B1821F32DEB579E00550CD1 /* Frameworks */,
 				2B1821F42DEB579E00550CD1 /* Resources */,
+				8F8DDF41F0D64D8FB6CBA76B /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				583A88150FA644DAB2FD9261 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				2B1821F82DEB579E00550CD1 /* Voicely */,
@@ -135,6 +184,28 @@
 			productName = Voicely;
 			productReference = 2B1821F62DEB579E00550CD1 /* Voicely.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 55896E36908B49BAB511D7E4 /* Build configuration list for PBXNativeTarget "VoicelyWidgets" */;
+			buildPhases = (
+				6BF7FF85D832416F9402E1BA /* Sources */,
+				B946AF2E1FD14FA2AC84FBC3 /* Frameworks */,
+				BC7DB975251E47528CFE23BB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				27DAE2FC170948BF866FF301 /* VoicelyWidgets */,
+			);
+			name = VoicelyWidgets;
+			packageProductDependencies = (
+			);
+			productName = VoicelyWidgets;
+			productReference = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		2B1822062DEB579F00550CD1 /* VoicelyTests */ = {
 			isa = PBXNativeTarget;
@@ -195,6 +266,9 @@
 					2B1821F52DEB579E00550CD1 = {
 						CreatedOnToolsVersion = 16.4;
 					};
+					B10F64286FD94C19AA7AA7E6 = {
+						CreatedOnToolsVersion = 16.4;
+					};
 					2B1822062DEB579F00550CD1 = {
 						CreatedOnToolsVersion = 16.4;
 						TestTargetID = 2B1821F52DEB579E00550CD1;
@@ -223,6 +297,7 @@
 			projectRoot = "";
 			targets = (
 				2B1821F52DEB579E00550CD1 /* Voicely */,
+				B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */,
 				2B1822062DEB579F00550CD1 /* VoicelyTests */,
 				2B1822102DEB579F00550CD1 /* VoicelyUITests */,
 			);
@@ -245,6 +320,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		2B18220F2DEB579F00550CD1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC7DB975251E47528CFE23BB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -275,9 +357,21 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6BF7FF85D832416F9402E1BA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		583A88150FA644DAB2FD9261 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */;
+			targetProxy = C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */;
+		};
 		2B1822092DEB579F00550CD1 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 2B1821F52DEB579E00550CD1 /* Voicely */;
@@ -305,7 +399,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				EXTRACT_APPINTENTS_METADATA = NO;
+				EXTRACT_APPINTENTS_METADATA = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Voicely/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -349,7 +443,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				EXTRACT_APPINTENTS_METADATA = NO;
+				EXTRACT_APPINTENTS_METADATA = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Voicely/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -376,6 +470,60 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				WHISPERKIT_VERSION = 0.16.0;
+			};
+			name = Release;
+		};
+		1A530520BF4945668009DCAC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CU3VTR9MRH;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B58C5CE205944E2AA656F1FB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CU3VTR9MRH;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -593,6 +741,15 @@
 			buildConfigurations = (
 				2B18221B2DEB579F00550CD1 /* Debug */,
 				2B18221C2DEB579F00550CD1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		55896E36908B49BAB511D7E4 /* Build configuration list for PBXNativeTarget "VoicelyWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A530520BF4945668009DCAC /* Debug */,
+				B58C5CE205944E2AA656F1FB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

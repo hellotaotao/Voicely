@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var startRecordingQuickActionID = UUID()
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
+    @State private var compactNavigationPath: [UUID] = []
 
     private var isPhoneDevice: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
@@ -137,35 +138,55 @@ struct ContentView: View {
         .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
+    @ViewBuilder
     private var defaultNavigationView: some View {
+        if isPhoneDevice {
+            compactPhoneNavigationView
+        } else {
+            splitNavigationView
+        }
+    }
+
+    private var compactPhoneNavigationView: some View {
+        NavigationStack(path: $compactNavigationPath) {
+            noteLibraryList(
+                usesSplitNavigationSelection: false,
+                opensDetailInCompactStack: true
+            )
+            .navigationTitle("Voicely")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                libraryToolbarContent
+            }
+            .toolbarBackground(.visible, for: .navigationBar)
+            .navigationDestination(for: UUID.self) { noteID in
+                if let note = voiceNotes.first(where: { $0.id == noteID }) {
+                    detailView(note)
+                } else {
+                    DetailPlaceholderView()
+                }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
+                    .environmentObject(modelManager)
+            }
+            .task {
+                await setupServices()
+            }
+        }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
+    }
+
+    private var splitNavigationView: some View {
         NavigationSplitView {
-            noteLibraryList(usesSplitNavigationSelection: true)
+            noteLibraryList(
+                usesSplitNavigationSelection: true,
+                opensDetailInCompactStack: false
+            )
                 .navigationTitle("Voicely")
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button {
-                            showingSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .font(.body.weight(.regular))
-                        }
-                        .tint(VoicelyTheme.accent)
-                        .accessibilityLabel("Settings")
-                        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.settingsButton)
-                    }
-
-                    ToolbarItem(placement: .principal) {
-                        if cloudManager.isCloudEnabled {
-                            SyncStatusView()
-                                .environmentObject(cloudManager)
-                        }
-                    }
-
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        EditButton()
-                            .tint(VoicelyTheme.accent)
-                    }
+                    libraryToolbarContent
                 }
                 .toolbarBackground(.visible, for: .navigationBar)
                 .sheet(isPresented: $showingSettings) {
@@ -179,6 +200,33 @@ struct ContentView: View {
             detailPane
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
+    }
+
+    @ToolbarContentBuilder
+    private var libraryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+                showingSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.body.weight(.regular))
+            }
+            .tint(VoicelyTheme.accent)
+            .accessibilityLabel("Settings")
+            .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.settingsButton)
+        }
+
+        ToolbarItem(placement: .principal) {
+            if cloudManager.isCloudEnabled {
+                SyncStatusView()
+                    .environmentObject(cloudManager)
+            }
+        }
+
+        ToolbarItem(placement: .navigationBarTrailing) {
+            EditButton()
+                .tint(VoicelyTheme.accent)
+        }
     }
 
     private func sidebarWidth(for geometry: GeometryProxy) -> CGFloat {
@@ -213,9 +261,15 @@ struct ContentView: View {
         }
     }
 
-    private func noteLibraryList(usesSplitNavigationSelection: Bool) -> some View {
+    private func noteLibraryList(
+        usesSplitNavigationSelection: Bool,
+        opensDetailInCompactStack: Bool = false
+    ) -> some View {
         ZStack(alignment: .bottom) {
-            noteList(usesSplitNavigationSelection: usesSplitNavigationSelection)
+            noteList(
+                usesSplitNavigationSelection: usesSplitNavigationSelection,
+                opensDetailInCompactStack: opensDetailInCompactStack
+            )
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(VoicelyTheme.groupedBackground)
@@ -234,6 +288,9 @@ struct ContentView: View {
                 onRecordingComplete: { note in
                     modelContext.insert(note)
                     selectedNoteID = note.id
+                    if opensDetailInCompactStack {
+                        compactNavigationPath = [note.id]
+                    }
                 }
             )
             .padding(.horizontal, 14)
@@ -246,16 +303,25 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func noteList(usesSplitNavigationSelection: Bool) -> some View {
+    private func noteList(
+        usesSplitNavigationSelection: Bool,
+        opensDetailInCompactStack: Bool
+    ) -> some View {
         if usesSplitNavigationSelection {
             List(selection: $selectedNoteID) {
-                noteListContent(usesSplitNavigationSelection: true)
+                noteListContent(
+                    usesSplitNavigationSelection: true,
+                    opensDetailInCompactStack: false
+                )
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.noteList)
         } else {
             List {
-                noteListContent(usesSplitNavigationSelection: false)
+                noteListContent(
+                    usesSplitNavigationSelection: false,
+                    opensDetailInCompactStack: opensDetailInCompactStack
+                )
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.noteList)
@@ -263,7 +329,10 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func noteListContent(usesSplitNavigationSelection: Bool) -> some View {
+    private func noteListContent(
+        usesSplitNavigationSelection: Bool,
+        opensDetailInCompactStack: Bool
+    ) -> some View {
         if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .available {
             Section {
                 SyncStatusBannerCard(
@@ -297,7 +366,11 @@ struct ContentView: View {
                     .listRowSeparator(.hidden)
             } else {
                 ForEach(voiceNotes) { note in
-                    noteRow(note: note, usesSplitNavigationSelection: usesSplitNavigationSelection)
+                    noteRow(
+                        note: note,
+                        usesSplitNavigationSelection: usesSplitNavigationSelection,
+                        opensDetailInCompactStack: opensDetailInCompactStack
+                    )
                         .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -330,7 +403,11 @@ struct ContentView: View {
         }
     }
 
-    private func noteRow(note: VoiceNote, usesSplitNavigationSelection: Bool) -> some View {
+    private func noteRow(
+        note: VoiceNote,
+        usesSplitNavigationSelection: Bool,
+        opensDetailInCompactStack: Bool
+    ) -> some View {
         let row = VoiceNoteRow(
             note: note,
             transcriptionService: transcriptionService,
@@ -346,6 +423,9 @@ struct ContentView: View {
             } else {
                 Button {
                     selectedNoteID = note.id
+                    if opensDetailInCompactStack {
+                        compactNavigationPath = [note.id]
+                    }
                 } label: {
                     row.foregroundStyle(.primary)
                 }
@@ -379,6 +459,7 @@ struct ContentView: View {
     private func syncInitialSelection() {
         guard !voiceNotes.isEmpty else {
             selectedNoteID = nil
+            compactNavigationPath = []
             return
         }
 
@@ -391,6 +472,9 @@ struct ContentView: View {
 
         guard voiceNotes.contains(where: { $0.id == selectedNoteID }) else {
             self.selectedNoteID = isPhoneDevice ? nil : voiceNotes.first?.id
+            if isPhoneDevice {
+                compactNavigationPath = []
+            }
             return
         }
     }
@@ -544,6 +628,7 @@ struct ContentView: View {
         if selectedNoteID == note.id {
             if isPhoneDevice {
                 selectedNoteID = nil
+                compactNavigationPath = []
             } else {
                 selectedNoteID = voiceNotes.first { $0.id != note.id }?.id
             }

@@ -1661,7 +1661,7 @@ struct VoiceNoteDetailView: View {
                                 .foregroundStyle(.tertiary)
                             playbackRateButton
                         }
-                        .frame(minWidth: 106, alignment: .trailing)
+                        .fixedSize(horizontal: true, vertical: false)
                     }
 
                     HStack(spacing: 18) {
@@ -1722,8 +1722,8 @@ struct VoiceNoteDetailView: View {
                 .font(.caption.weight(.semibold).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
-                .frame(minWidth: 52)
-                .padding(.horizontal, 8)
+                .frame(minWidth: 34)
+                .padding(.horizontal, 5)
                 .padding(.vertical, 4)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)

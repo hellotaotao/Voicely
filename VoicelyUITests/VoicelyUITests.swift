@@ -214,7 +214,7 @@ final class VoicelyUITests: XCTestCase {
 
         let playbackRateButton = app.playbackRateControl
         XCTAssertTrue(playbackRateButton.exists)
-        XCTAssertGreaterThanOrEqual(playbackRateButton.frame.width, 52)
+        XCTAssertLessThanOrEqual(playbackRateButton.frame.width, 46)
 
         let retranscribeButton = app.buttons[ID.retranscribeButton].firstMatch
         XCTAssertTrue(retranscribeButton.exists)

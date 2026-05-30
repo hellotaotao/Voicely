@@ -72,4 +72,20 @@ struct CloudStorageManagerTests {
         #expect(fileManager.fileExists(atPath: destinationURL.path))
         #expect(destinationData == sourceData)
     }
+
+    @Test @MainActor func missingSelectedAudioShowsUnavailableInsteadOfDownloading() async throws {
+        let player = AudioPlayerService()
+        let missingFilename = "missing-\(UUID().uuidString).m4a"
+
+        player.loadAudio(from: missingFilename)
+
+        for _ in 0..<20 {
+            if player.playbackStatusMessage != nil {
+                break
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(player.playbackStatusMessage == "Audio file unavailable.")
+    }
 }

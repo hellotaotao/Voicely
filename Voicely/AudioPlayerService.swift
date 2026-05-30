@@ -488,7 +488,9 @@ private extension AudioPlayerService {
     func prefetchAudioForCurrentSelection(filePath: String) async {
         guard pendingFilePath == filePath else { return }
 
-        guard let url = CloudStorageManager.shared.getFileURL(for: filePath) else {
+        let storageManager = CloudStorageManager.shared
+
+        guard let url = storageManager.getFileURL(for: filePath) else {
             debugLog("❌ [DEBUG] Failed to get file URL for: \(filePath)")
             if pendingFilePath == filePath {
                 playbackStatusMessage = "Audio file unavailable."
@@ -501,14 +503,16 @@ private extension AudioPlayerService {
         if FileManager.default.fileExists(atPath: url.path) {
             debugLog("✅ [DEBUG] Audio file exists at path")
         } else {
-            debugLog("⚠️ [DEBUG] Audio file NOT found at path - may need iCloud download")
+            debugLog("❌ [DEBUG] Audio file NOT found at path")
+            playbackStatusMessage = "Audio file unavailable."
+            return
         }
 
-        CloudStorageManager.shared.startDownloadingFromCloud(url: url)
+        storageManager.startDownloadingFromCloud(url: url)
 
         guard pendingFilePath == filePath else { return }
 
-        if CloudStorageManager.shared.isFileReadyForPlayback(at: url) {
+        if storageManager.isFileReadyForPlayback(at: url) {
             playbackStatusMessage = nil
             return
         }
@@ -517,7 +521,7 @@ private extension AudioPlayerService {
 
         while !Task.isCancelled, pendingFilePath == filePath {
             try? await Task.sleep(nanoseconds: 500_000_000)
-            if CloudStorageManager.shared.isFileReadyForPlayback(at: url) {
+            if storageManager.isFileReadyForPlayback(at: url) {
                 playbackStatusMessage = nil
                 return
             }
@@ -540,7 +544,12 @@ private extension AudioPlayerService {
 
         guard let url = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
             guard pendingFilePath == filePath else { return }
-            playbackStatusMessage = "Audio is still downloading from iCloud."
+            if let candidateURL = CloudStorageManager.shared.getFileURL(for: filePath),
+               CloudStorageManager.shared.isAudioFileMissing(at: candidateURL) {
+                playbackStatusMessage = "Audio file unavailable."
+            } else {
+                playbackStatusMessage = "Audio is still downloading from iCloud."
+            }
             return
         }
 

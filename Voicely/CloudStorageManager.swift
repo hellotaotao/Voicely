@@ -435,6 +435,11 @@ class CloudStorageManager: ObservableObject {
     func prepareFileForReading(at path: String, timeout: TimeInterval = 90) async -> URL? {
         guard let url = getFileURL(for: path) else { return nil }
 
+        guard !isAudioFileMissing(at: url) else {
+            debugLog("❌ [DEBUG] Audio file missing: \(url.lastPathComponent)")
+            return nil
+        }
+
         startDownloadingFromCloud(url: url)
 
         guard isCloudManagedURL(url) else {
@@ -468,6 +473,10 @@ class CloudStorageManager: ObservableObject {
 
     func isFileReadyForPlayback(at url: URL) -> Bool {
         isFileReadyForReading(url)
+    }
+
+    func isAudioFileMissing(at url: URL) -> Bool {
+        !fileManager.fileExists(atPath: url.path)
     }
     
     // Delete a file from storage

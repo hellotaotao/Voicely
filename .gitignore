@@ -2,3 +2,6 @@ build/
 .claude/
 .vscode/
 docs/agent-reviews/
+
+# Xcode user state
+xcuserdata/

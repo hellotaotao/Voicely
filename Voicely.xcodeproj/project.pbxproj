@@ -8,17 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		2B18228C2DED2F1200550CD1 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 2B1822252DEB5A0000550CD1 /* WhisperKit */; };
-		F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = B10F64286FD94C19AA7AA7E6;
-			remoteInfo = VoicelyWidgets;
-		};
 		2B1822082DEB579F00550CD1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
@@ -33,18 +26,25 @@
 			remoteGlobalIDString = 2B1821F52DEB579E00550CD1;
 			remoteInfo = Voicely;
 		};
+		C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B10F64286FD94C19AA7AA7E6;
+			remoteInfo = VoicelyWidgets;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		8F8DDF41F0D64D8FB6CBA76B /* Embed App Extensions */ = {
+		8F8DDF41F0D64D8FB6CBA76B /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed App Extensions */,
+				F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed Foundation Extensions */,
 			);
-			name = "Embed App Extensions";
+			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -74,20 +74,20 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		2B1821F82DEB579E00550CD1 /* Voicely */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				2B1822192DEB579F00550CD1 /* Exceptions for "Voicely" folder in "Voicely" target */,
-			);
-			path = Voicely;
-			sourceTree = "<group>";
-		};
 		27DAE2FC170948BF866FF301 /* VoicelyWidgets */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				AB2470A80CAA4262A2CFF3D1 /* Exceptions for "VoicelyWidgets" folder in "VoicelyWidgets" target */,
 			);
 			path = VoicelyWidgets;
+			sourceTree = "<group>";
+		};
+		2B1821F82DEB579E00550CD1 /* Voicely */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				2B1822192DEB579F00550CD1 /* Exceptions for "Voicely" folder in "Voicely" target */,
+			);
+			path = Voicely;
 			sourceTree = "<group>";
 		};
 		2B18220A2DEB579F00550CD1 /* VoicelyTests */ = {
@@ -111,13 +111,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B946AF2E1FD14FA2AC84FBC3 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		2B1822042DEB579F00550CD1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -126,6 +119,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		2B18220E2DEB579F00550CD1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B946AF2E1FD14FA2AC84FBC3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -167,7 +167,7 @@
 				2B1821F22DEB579E00550CD1 /* Sources */,
 				2B1821F32DEB579E00550CD1 /* Frameworks */,
 				2B1821F42DEB579E00550CD1 /* Resources */,
-				8F8DDF41F0D64D8FB6CBA76B /* Embed App Extensions */,
+				8F8DDF41F0D64D8FB6CBA76B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
@@ -184,28 +184,6 @@
 			productName = Voicely;
 			productReference = 2B1821F62DEB579E00550CD1 /* Voicely.app */;
 			productType = "com.apple.product-type.application";
-		};
-		B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 55896E36908B49BAB511D7E4 /* Build configuration list for PBXNativeTarget "VoicelyWidgets" */;
-			buildPhases = (
-				6BF7FF85D832416F9402E1BA /* Sources */,
-				B946AF2E1FD14FA2AC84FBC3 /* Frameworks */,
-				BC7DB975251E47528CFE23BB /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				27DAE2FC170948BF866FF301 /* VoicelyWidgets */,
-			);
-			name = VoicelyWidgets;
-			packageProductDependencies = (
-			);
-			productName = VoicelyWidgets;
-			productReference = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */;
-			productType = "com.apple.product-type.app-extension";
 		};
 		2B1822062DEB579F00550CD1 /* VoicelyTests */ = {
 			isa = PBXNativeTarget;
@@ -253,6 +231,28 @@
 			productReference = 2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 55896E36908B49BAB511D7E4 /* Build configuration list for PBXNativeTarget "VoicelyWidgets" */;
+			buildPhases = (
+				6BF7FF85D832416F9402E1BA /* Sources */,
+				B946AF2E1FD14FA2AC84FBC3 /* Frameworks */,
+				BC7DB975251E47528CFE23BB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				27DAE2FC170948BF866FF301 /* VoicelyWidgets */,
+			);
+			name = VoicelyWidgets;
+			packageProductDependencies = (
+			);
+			productName = VoicelyWidgets;
+			productReference = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -261,12 +261,9 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1640;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 2650;
 				TargetAttributes = {
 					2B1821F52DEB579E00550CD1 = {
-						CreatedOnToolsVersion = 16.4;
-					};
-					B10F64286FD94C19AA7AA7E6 = {
 						CreatedOnToolsVersion = 16.4;
 					};
 					2B1822062DEB579F00550CD1 = {
@@ -276,6 +273,9 @@
 					2B1822102DEB579F00550CD1 = {
 						CreatedOnToolsVersion = 16.4;
 						TestTargetID = 2B1821F52DEB579E00550CD1;
+					};
+					B10F64286FD94C19AA7AA7E6 = {
+						CreatedOnToolsVersion = 16.4;
 					};
 				};
 			};
@@ -367,11 +367,6 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		583A88150FA644DAB2FD9261 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */;
-			targetProxy = C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */;
-		};
 		2B1822092DEB579F00550CD1 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 2B1821F52DEB579E00550CD1 /* Voicely */;
@@ -382,9 +377,41 @@
 			target = 2B1821F52DEB579E00550CD1 /* Voicely */;
 			targetProxy = 2B1822122DEB579F00550CD1 /* PBXContainerItemProxy */;
 		};
+		583A88150FA644DAB2FD9261 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */;
+			targetProxy = C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		1A530520BF4945668009DCAC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CU3VTR9MRH;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.19.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		2B18221B2DEB579F00550CD1 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -415,7 +442,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.18.0;
+				MARKETING_VERSION = 0.19.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -459,7 +486,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.18.0;
+				MARKETING_VERSION = 0.19.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -470,60 +497,6 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				WHISPERKIT_VERSION = 0.16.0;
-			};
-			name = Release;
-		};
-		1A530520BF4945668009DCAC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = CU3VTR9MRH;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 0.18.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
-		};
-		B58C5CE205944E2AA656F1FB /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = CU3VTR9MRH;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 0.18.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -724,6 +697,33 @@
 			};
 			name = Release;
 		};
+		B58C5CE205944E2AA656F1FB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CU3VTR9MRH;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.19.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -745,15 +745,6 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		55896E36908B49BAB511D7E4 /* Build configuration list for PBXNativeTarget "VoicelyWidgets" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				1A530520BF4945668009DCAC /* Debug */,
-				B58C5CE205944E2AA656F1FB /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		2B18221F2DEB579F00550CD1 /* Build configuration list for PBXNativeTarget "VoicelyTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -768,6 +759,15 @@
 			buildConfigurations = (
 				2B1822232DEB579F00550CD1 /* Debug */,
 				2B1822242DEB579F00550CD1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		55896E36908B49BAB511D7E4 /* Build configuration list for PBXNativeTarget "VoicelyWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A530520BF4945668009DCAC /* Debug */,
+				B58C5CE205944E2AA656F1FB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

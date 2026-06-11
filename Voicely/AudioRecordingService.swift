@@ -69,6 +69,7 @@ class AudioRecordingService: ObservableObject {
     private struct SharedState {
         var framePosition: AVAudioFramePosition = 0
         var latestLevel: Float = 0
+        var isWritingSuspended = false
     }
     private let sharedState = OSAllocatedUnfairLock<SharedState>(initialState: SharedState())
 
@@ -233,6 +234,7 @@ class AudioRecordingService: ObservableObject {
         sharedState.withLock { state in
             state.framePosition = 0
             state.latestLevel = 0
+            state.isWritingSuspended = false
         }
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
@@ -327,24 +329,36 @@ class AudioRecordingService: ObservableObject {
     // MARK: Pause / Resume
 
     func pauseRecording() {
-        guard isRecording, !isPaused, let eng = engine else { return }
-        eng.pause()
+        guard isRecording, !isPaused, engine != nil else { return }
+        // Keep the engine (and mic IO) running and only suspend file writes:
+        // iOS refuses to restart input IO from the background, so stopping IO
+        // here would make resume impossible from the lock screen Live Activity.
+        sharedState.withLock { $0.isWritingSuspended = true }
         isPaused = true
         stopUITimer()
         audioLevel = 0.0
         debugLog("⏸ [AudioRecordingService] Paused")
     }
 
-    func resumeRecording() {
-        guard isRecording, isPaused, let eng = engine else { return }
-        do {
-            try eng.start()
-            isPaused = false
-            startUITimer()
-            debugLog("▶️ [AudioRecordingService] Resumed")
-        } catch {
-            debugLog("❌ [AudioRecordingService] Resume failed: \(error)")
+    @discardableResult
+    func resumeRecording() -> Bool {
+        guard isRecording, isPaused, let eng = engine else { return false }
+        if !eng.isRunning {
+            // Engine actually stopped (e.g. after an interruption) — needs a
+            // real IO restart, which only works in the foreground.
+            do {
+                try prepareRecordingSessionForCapture()
+                try eng.start()
+            } catch {
+                debugLog("❌ [AudioRecordingService] Resume failed: \(error)")
+                return false
+            }
         }
+        sharedState.withLock { $0.isWritingSuspended = false }
+        isPaused = false
+        startUITimer()
+        debugLog("▶️ [AudioRecordingService] Resumed")
+        return true
     }
 
     // MARK: UI timer (single 10 Hz tick)
@@ -390,6 +404,7 @@ class AudioRecordingService: ObservableObject {
     ) {
         guard let converter else { return }
         guard inputBuffer.frameLength > 0 else { return }
+        guard !sharedState.withLock({ $0.isWritingSuspended }) else { return }
 
         let ratio = outputFormat.sampleRate / inputFormat.sampleRate
         let outputFrameCapacity = AVAudioFrameCount(

@@ -17,8 +17,7 @@ struct StartRecordingIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        QuickAction.markPendingStartRecording()
-        QuickAction.postStartRecordingRequest()
+        QuickAction.requestStartRecording()
         return .result()
     }
 }

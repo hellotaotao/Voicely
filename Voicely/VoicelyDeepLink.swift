@@ -9,6 +9,7 @@ import Foundation
 
 enum VoicelyDeepLink: Equatable {
     case startRecording
+    case toggleRecordingPause
 
     init?(url: URL) {
         guard url.scheme?.localizedCaseInsensitiveCompare("voicely") == .orderedSame else {
@@ -22,6 +23,11 @@ enum VoicelyDeepLink: Equatable {
 
         if host == "record" || pathComponents.first == "record" {
             self = .startRecording
+            return
+        }
+
+        if host == "recording", pathComponents.first == "toggle-pause" {
+            self = .toggleRecordingPause
             return
         }
 

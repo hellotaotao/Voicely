@@ -25,7 +25,7 @@ struct RecordingLiveActivityWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label("Recording", systemImage: "record.circle.fill")
+                    Label(context.state.recordingState.displayName, systemImage: context.state.recordingState == .paused ? "pause.circle.fill" : "record.circle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.red)
                 }
@@ -36,18 +36,22 @@ struct RecordingLiveActivityWidget: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(context.attributes.title)
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text(context.state.recordingState.displayName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(context.attributes.title)
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text(context.state.recordingState.displayName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        RecordingPauseButton(state: context.state, diameter: 36)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } compactLeading: {
-                Image(systemName: "record.circle.fill")
+                Image(systemName: context.state.recordingState == .paused ? "pause.circle.fill" : "record.circle.fill")
                     .foregroundStyle(.red)
             } compactTrailing: {
                 ActivityElapsedTimeView(state: context.state, compact: true)
@@ -74,18 +78,21 @@ private struct RecordingLiveActivityLockScreenView: View {
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.red)
             }
+            .fixedSize()
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Voicely is recording")
+                Text(lockScreenTitle)
                     .font(.headline)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.78)
                 Text(context.attributes.title)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-
-            Spacer(minLength: 8)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(2)
 
             VStack(alignment: .trailing, spacing: 3) {
                 Text("Elapsed")
@@ -93,9 +100,43 @@ private struct RecordingLiveActivityLockScreenView: View {
                     .foregroundStyle(.secondary)
                 ActivityElapsedTimeView(state: context.state, compact: false)
                     .font(.title3.weight(.semibold).monospacedDigit())
+                    .multilineTextAlignment(.trailing)
             }
+            .frame(width: 72, alignment: .trailing)
+            .layoutPriority(1)
+
+            RecordingPauseButton(state: context.state, diameter: 44)
         }
+        .padding(.horizontal, 10)
         .padding(.vertical, 4)
+    }
+
+    private var lockScreenTitle: String {
+        switch context.state.recordingState {
+        case .recording:
+            return "Voicely is recording"
+        case .paused:
+            return "Voicely is paused"
+        case .stopping:
+            return "Voicely is stopping"
+        }
+    }
+}
+
+private struct RecordingPauseButton: View {
+    let state: RecordingActivityAttributes.ContentState
+    let diameter: CGFloat
+
+    var body: some View {
+        Button(intent: ToggleRecordingPauseIntent()) {
+            Image(systemName: state.recordingState == .paused ? "play.fill" : "pause.fill")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: diameter, height: diameter)
+                .background(Color.red, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(state.recordingState == .paused ? "Resume recording" : "Pause recording")
     }
 }
 

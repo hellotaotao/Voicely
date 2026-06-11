@@ -16,6 +16,12 @@ struct VoicelyDeepLinkTests {
         #expect(VoicelyDeepLink(url: url) == .startRecording)
     }
 
+    @Test func recordingTogglePauseDeepLinkParsesRecordingPath() throws {
+        let url = try #require(URL(string: "voicely://recording/toggle-pause"))
+
+        #expect(VoicelyDeepLink(url: url) == .toggleRecordingPause)
+    }
+
     @Test func nonVoicelyURLIsNotADeepLink() throws {
         let url = try #require(URL(string: "file:///tmp/meeting.m4a"))
 

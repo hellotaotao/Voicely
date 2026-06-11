@@ -11,6 +11,7 @@ import UserNotifications
 
 extension Notification.Name {
     static let startRecordingQuickAction = Notification.Name("VoicelyStartRecordingQuickAction")
+    static let toggleRecordingPauseQuickAction = Notification.Name("VoicelyToggleRecordingPauseQuickAction")
 }
 
 enum QuickAction {
@@ -32,6 +33,11 @@ enum QuickAction {
 
     static func postStartRecordingRequest() {
         NotificationCenter.default.post(name: .startRecordingQuickAction, object: nil)
+    }
+
+    static func requestStartRecording(postNotification: () -> Void = { QuickAction.postStartRecordingRequest() }) {
+        markPendingStartRecording()
+        postNotification()
     }
 }
 
@@ -76,6 +82,10 @@ struct VoicelyApp: App {
             ContentView()
                 .environmentObject(syncMonitor)
                 .task {
+                    #if DEBUG
+                    await launchRecordingLiveActivityPreviewIfNeeded()
+                    #endif
+
                     if AppRuntime.isRunningTests {
                         seedUITestNoteIfNeeded()
                     } else {
@@ -92,6 +102,37 @@ struct VoicelyApp: App {
         }
         .modelContainer(sharedModelContainer)
     }
+
+    #if DEBUG
+    @MainActor private static var didLaunchRecordingActivityPreview = false
+
+    @MainActor
+    private func launchRecordingLiveActivityPreviewIfNeeded() async {
+        let processInfo = ProcessInfo.processInfo
+        let environment = processInfo.environment
+        let arguments = Set(processInfo.arguments)
+        let isRequested = environment["VOICELY_SHOW_RECORDING_ACTIVITY_PREVIEW"] == "1"
+            || arguments.contains("VOICELY_SHOW_RECORDING_ACTIVITY_PREVIEW")
+
+        guard isRequested, !Self.didLaunchRecordingActivityPreview else { return }
+        Self.didLaunchRecordingActivityPreview = true
+
+        let title = environment["VOICELY_LIVE_ACTIVITY_PREVIEW_TITLE"] ?? "Voice Note 11:42 am"
+        let elapsedDuration = environment["VOICELY_LIVE_ACTIVITY_PREVIEW_ELAPSED_SECONDS"].flatMap(TimeInterval.init) ?? 21
+        let state = environment["VOICELY_LIVE_ACTIVITY_PREVIEW_STATE"] ?? "recording"
+
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        RecordingLiveActivityController.shared.start(
+            recordingID: UUID(),
+            title: title,
+            elapsedDuration: elapsedDuration
+        )
+
+        if state == "paused" {
+            RecordingLiveActivityController.shared.pause(elapsedDuration: elapsedDuration)
+        }
+    }
+    #endif
 
     private func seedUITestNoteIfNeeded() {
         let environment = ProcessInfo.processInfo.environment
@@ -174,13 +215,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         performActionFor shortcutItem: UIApplicationShortcutItem,
         completionHandler: @escaping (Bool) -> Void
     ) {
-        guard shortcutItem.type == QuickAction.startRecordingType else {
-            completionHandler(false)
-            return
-        }
+        completionHandler(handleShortcutItem(shortcutItem))
+    }
 
-        QuickAction.postStartRecordingRequest()
-        completionHandler(true)
+    func handleShortcutItem(
+        _ shortcutItem: UIApplicationShortcutItem,
+        requestStartRecording: () -> Void = { QuickAction.requestStartRecording() }
+    ) -> Bool {
+        guard shortcutItem.type == QuickAction.startRecordingType else { return false }
+
+        requestStartRecording()
+        return true
     }
     
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var didSetupServices = false
     @State private var startRecordingQuickActionID = UUID()
+    @State private var togglePauseQuickActionID = UUID()
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
@@ -52,7 +53,10 @@ struct ContentView: View {
             consumePendingStartRecordingQuickActionIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .startRecordingQuickAction)) { _ in
-            requestStartRecordingFromQuickAction()
+            consumePendingStartRecordingQuickActionIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleRecordingPauseQuickAction)) { _ in
+            requestTogglePauseFromQuickAction()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -282,6 +286,7 @@ struct ContentView: View {
                 audioService: audioService,
                 transcriptionService: transcriptionService,
                 startRecordingQuickActionID: startRecordingQuickActionID,
+                togglePauseQuickActionID: togglePauseQuickActionID,
                 onManageModels: {
                     showingSettings = true
                 },
@@ -545,6 +550,8 @@ struct ContentView: View {
         switch deepLink {
         case .startRecording:
             requestStartRecordingFromQuickAction()
+        case .toggleRecordingPause:
+            requestTogglePauseFromQuickAction()
         }
     }
 
@@ -600,6 +607,10 @@ struct ContentView: View {
 
     private func requestStartRecordingFromQuickAction() {
         startRecordingQuickActionID = UUID()
+    }
+
+    private func requestTogglePauseFromQuickAction() {
+        togglePauseQuickActionID = UUID()
     }
 
     private func deleteNotes(offsets: IndexSet) {
@@ -828,6 +839,7 @@ struct RecordingControls: View {
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
     let startRecordingQuickActionID: UUID
+    let togglePauseQuickActionID: UUID
     let onManageModels: () -> Void
     let onRecordingComplete: (VoiceNote) -> Void
     @State private var showingModelPicker = false
@@ -940,8 +952,12 @@ struct RecordingControls: View {
         .onChange(of: startRecordingQuickActionID) { _, _ in
             startRecordingFromQuickAction()
         }
+        .onChange(of: togglePauseQuickActionID) { _, _ in
+            togglePauseResumeFromQuickAction()
+        }
         .onAppear {
             audioService.prewarmRecordingSessionIfPossible()
+            registerLiveActivityControls()
         }
         .onChange(of: audioService.hasPermission) { _, _ in
             audioService.prewarmRecordingSessionIfPossible()
@@ -1206,6 +1222,7 @@ struct RecordingControls: View {
             note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
         }
         coordinator = coord
+        registerLiveActivityControls(coordinator: coord)
         coord.start(intervalSeconds: effectiveIncrementalIntervalSeconds)
     }
 
@@ -1222,9 +1239,37 @@ struct RecordingControls: View {
     }
 
     private func togglePauseResume() {
+        Self.togglePauseResume(
+            audioService: audioService,
+            coordinator: coordinator,
+            incrementalIntervalSeconds: effectiveIncrementalIntervalSeconds
+        )
+    }
+
+    private func togglePauseResumeFromQuickAction() {
+        guard audioService.isRecording else { return }
+        togglePauseResume()
+    }
+
+    private func registerLiveActivityControls(coordinator: IncrementalTranscriptionCoordinator? = nil) {
+        RecordingControlCommandCenter.shared.setTogglePauseHandler { [audioService] in
+            guard audioService.isRecording else { return }
+            Self.togglePauseResume(
+                audioService: audioService,
+                coordinator: coordinator,
+                incrementalIntervalSeconds: effectiveIncrementalIntervalSeconds
+            )
+        }
+    }
+
+    private static func togglePauseResume(
+        audioService: AudioRecordingService,
+        coordinator: IncrementalTranscriptionCoordinator?,
+        incrementalIntervalSeconds: Int
+    ) {
         if audioService.isPaused {
-            audioService.resumeRecording()
-            coordinator?.resume(intervalSeconds: effectiveIncrementalIntervalSeconds)
+            guard audioService.resumeRecording() else { return }
+            coordinator?.resume(intervalSeconds: incrementalIntervalSeconds)
             RecordingLiveActivityController.shared.resume(elapsedDuration: audioService.recordingDuration)
         } else {
             audioService.pauseRecording()
@@ -1246,6 +1291,7 @@ struct RecordingControls: View {
         let capturedCoordinator = coordinator
         let recordingNote = currentRecordingNote
         coordinator = nil
+        registerLiveActivityControls()
         currentRecordingNote = nil
         isStartingRecording = false
         recordingStartedAt = nil

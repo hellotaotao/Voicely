@@ -408,6 +408,14 @@ class CloudStorageManager: ObservableObject {
         debugLog("🔍 [DEBUG] Checking iCloud download status for: \(url.lastPathComponent)")
         
         do {
+            guard fileManager.fileExists(atPath: url.path) else {
+                // Placeholder-only item: the resource-value check below would
+                // throw because the materialised file does not exist yet.
+                try fileManager.startDownloadingUbiquitousItem(at: url)
+                print("Started downloading file from iCloud: \(url.lastPathComponent)")
+                return
+            }
+
             var isDownloaded: AnyObject?
             try (url as NSURL).getResourceValue(&isDownloaded, forKey: .ubiquitousItemDownloadingStatusKey)
             
@@ -476,7 +484,17 @@ class CloudStorageManager: ObservableObject {
     }
 
     func isAudioFileMissing(at url: URL) -> Bool {
-        !fileManager.fileExists(atPath: url.path)
+        if fileManager.fileExists(atPath: url.path) {
+            return false
+        }
+        // A not-yet-downloaded iCloud item exists locally only as a
+        // ".<name>.icloud" placeholder; treat it as present so download can start.
+        return !fileManager.fileExists(atPath: Self.cloudPlaceholderURL(for: url).path)
+    }
+
+    static func cloudPlaceholderURL(for url: URL) -> URL {
+        url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).icloud")
     }
     
     // Delete a file from storage

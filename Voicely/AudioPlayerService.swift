@@ -500,9 +500,7 @@ private extension AudioPlayerService {
 
         debugLog("🔍 [DEBUG] Audio file URL: \(url.path)")
 
-        if FileManager.default.fileExists(atPath: url.path) {
-            debugLog("✅ [DEBUG] Audio file exists at path")
-        } else {
+        if storageManager.isAudioFileMissing(at: url) {
             debugLog("❌ [DEBUG] Audio file NOT found at path")
             playbackStatusMessage = "Audio file unavailable."
             return

@@ -185,7 +185,7 @@ final class IncrementalTranscriptionCoordinator {
             return
         }
 
-        guard upToFrame > lastSegmentEndFrame + minimumSegmentFrames else { return }
+        guard upToFrame > lastSegmentEndFrame + requiredMinimumSegmentFrames(useVoiceActivityCut: useVoiceActivityCut) else { return }
 
         isProcessingSegment = true
         defer {
@@ -199,7 +199,7 @@ final class IncrementalTranscriptionCoordinator {
         )
         while let request = nextRequest {
             pendingSegmentRequest = nil
-            if request.frameEnd > lastSegmentEndFrame + minimumSegmentFrames {
+            if request.frameEnd > lastSegmentEndFrame + requiredMinimumSegmentFrames(useVoiceActivityCut: request.useVoiceActivityCut) {
                 await transcribeCurrentSegment(
                     upToFrame: request.frameEnd,
                     useVoiceActivityCut: request.useVoiceActivityCut
@@ -354,11 +354,18 @@ final class IncrementalTranscriptionCoordinator {
         return endFrame < requestedEndFrame ? .voiceActivity : .targetFallback
     }
 
+    /// The minimum chunk length only applies to periodic VAD cuts. The final
+    /// flush (non-VAD) must transcribe whatever remains, however short,
+    /// otherwise the tail of the recording is silently lost.
+    private func requiredMinimumSegmentFrames(useVoiceActivityCut: Bool) -> AVAudioFramePosition {
+        useVoiceActivityCut ? minimumSegmentFrames : 0
+    }
+
     private func queuePendingSegment(
         upToFrame: AVAudioFramePosition,
         useVoiceActivityCut: Bool
     ) {
-        guard upToFrame > lastSegmentEndFrame + minimumSegmentFrames else { return }
+        guard upToFrame > lastSegmentEndFrame + requiredMinimumSegmentFrames(useVoiceActivityCut: useVoiceActivityCut) else { return }
 
         if var pendingSegmentRequest {
             pendingSegmentRequest.frameEnd = max(pendingSegmentRequest.frameEnd, upToFrame)

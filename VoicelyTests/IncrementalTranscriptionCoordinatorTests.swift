@@ -459,6 +459,59 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(await harness.numberOfCalls() == 2)
     }
 
+    @Test @MainActor func stopTranscribesFinalTailShorterThanMinimumChunk() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 40)
+        let service = TranscriptionService()
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: service,
+            recordingFileURL: pcmURL
+        )
+        coordinator.transcribeOverride = { @Sendable _ in "hello" }
+
+        // First segment cuts at ~30 s, leaving a tail shorter than the
+        // 20 s minimum chunk when the recording stops at 40 s.
+        await coordinator.transcribeSegment(upToFrame: 480_000)
+        let transcript = await coordinator.stop(currentFrame: 640_000)
+
+        #expect(transcript == "hello\nhello")
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
+    @Test @MainActor func stopQueuedBehindInFlightSegmentTranscribesShortTail() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 40)
+        let service = TranscriptionService()
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: service,
+            recordingFileURL: pcmURL
+        )
+        let harness = SegmentTranscriptionHarness()
+        coordinator.transcribeOverride = { @Sendable path in
+            await harness.transcribe(path)
+        }
+
+        let segmentTask = Task { @MainActor in
+            await coordinator.transcribeSegment(upToFrame: 480_000)
+        }
+        await harness.waitForCallCount(1)
+
+        // Stop while the first segment is still transcribing; the remaining
+        // tail is shorter than the minimum chunk but must not be dropped.
+        let stopTask = Task { @MainActor in
+            await coordinator.stop(currentFrame: 640_000)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        await harness.resumeFirstCall()
+        let transcript = await stopTask.value
+        await segmentTask.value
+
+        #expect(transcript == "segment 1\nsegment 2")
+        #expect(await harness.numberOfCalls() == 2)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
     @Test @MainActor func transcriptCallbackPublishesAccumulatedTranscript() async throws {
         let pcmURL = try makeSilentCAF(seconds: 70)
         let service = TranscriptionService()

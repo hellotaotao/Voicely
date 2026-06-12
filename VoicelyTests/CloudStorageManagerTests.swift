@@ -73,6 +73,71 @@ struct CloudStorageManagerTests {
         #expect(destinationData == sourceData)
     }
 
+    @Test @MainActor func icloudPlaceholderIsNotTreatedAsMissingAudio() throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+        let localURL = rootURL.appendingPathComponent("local", isDirectory: true)
+        let cloudURL = rootURL.appendingPathComponent("cloud", isDirectory: true)
+        let filename = "recording.m4a"
+        let placeholderURL = cloudURL.appendingPathComponent(".\(filename).icloud")
+
+        try fileManager.createDirectory(at: localURL, withIntermediateDirectories: true, attributes: nil)
+        try fileManager.createDirectory(at: cloudURL, withIntermediateDirectories: true, attributes: nil)
+        try Data().write(to: placeholderURL)
+        defer {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let manager = CloudStorageManager(
+            testLocalContainerURL: localURL,
+            testCloudContainerURL: cloudURL,
+            testCloudEnabled: true
+        )
+
+        #expect(manager.isAudioFileMissing(at: cloudURL.appendingPathComponent(filename)) == false)
+        #expect(manager.isAudioFileMissing(at: cloudURL.appendingPathComponent("other.m4a")) == true)
+    }
+
+    @Test @MainActor func prepareFileForReadingWaitsForPlaceholderToDownload() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+        let localURL = rootURL.appendingPathComponent("local", isDirectory: true)
+        let cloudURL = rootURL.appendingPathComponent("cloud", isDirectory: true)
+        let filename = "recording.m4a"
+        let fileURL = cloudURL.appendingPathComponent(filename)
+        let placeholderURL = cloudURL.appendingPathComponent(".\(filename).icloud")
+
+        try fileManager.createDirectory(at: localURL, withIntermediateDirectories: true, attributes: nil)
+        try fileManager.createDirectory(at: cloudURL, withIntermediateDirectories: true, attributes: nil)
+        try Data().write(to: placeholderURL)
+        defer {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let manager = CloudStorageManager(
+            testLocalContainerURL: localURL,
+            testCloudContainerURL: cloudURL,
+            testCloudEnabled: true
+        )
+
+        let prepareTask = Task { @MainActor in
+            await manager.prepareFileForReading(at: filename, timeout: 5)
+        }
+
+        // Simulate iCloud materialising the file shortly after the read request.
+        try await Task.sleep(nanoseconds: 600_000_000)
+        try Data("audio".utf8).write(to: fileURL)
+
+        let preparedURL = await prepareTask.value
+        #expect(preparedURL?.lastPathComponent == filename)
+    }
+
     @Test @MainActor func missingSelectedAudioShowsUnavailableInsteadOfDownloading() async throws {
         let player = AudioPlayerService()
         let missingFilename = "missing-\(UUID().uuidString).m4a"

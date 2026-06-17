@@ -141,6 +141,9 @@ class CloudKitSyncMonitor: ObservableObject {
             }
             return "iCloud account available."
         case .error(let message):
+            if message == "No iCloud account found" {
+                return "iCloud sync is off. Sign in to iCloud in Settings to sync recordings across devices."
+            }
             return "Error: \(message)"
         case .recovering:
             return "Resetting local data and refreshing cloud status..."
@@ -155,7 +158,10 @@ class CloudKitSyncMonitor: ObservableObject {
             return .orange
         case .available:
             return .green
-        case .error:
+        case .error(let message):
+            if message == "No iCloud account found" {
+                return .orange
+            }
             return .red
         }
     }

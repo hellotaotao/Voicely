@@ -10,7 +10,7 @@ import Testing
 @testable import Voicely
 
 struct CloudStorageManagerTests {
-    @Test @MainActor func deleteFileRemovesMatchingLocalAndCloudCopies() throws {
+    @Test @MainActor func deleteFileRemovesMatchingLocalAndCloudCopies() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
             UUID().uuidString,
@@ -36,7 +36,7 @@ struct CloudStorageManagerTests {
             testCloudEnabled: true
         )
 
-        manager.deleteFile(at: filename)
+        await manager.deleteFile(at: filename)?.value
 
         #expect(fileManager.fileExists(atPath: localFileURL.path) == false)
         #expect(fileManager.fileExists(atPath: cloudFileURL.path) == false)

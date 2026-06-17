@@ -43,15 +43,26 @@ final class SileroNeuralVoiceActivityDetector: NeuralVoiceActivityDetecting {
     private let model: MLModel
     private var hiddenState: MLMultiArray
     private var cellState: MLMultiArray
+    private let audioInput: MLMultiArray
     private static let stateShape: [NSNumber] = [1, 128]
 
-    init() throws {
-        let modelURL = try Self.locateModelURL()
+    /// Loading the compiled CoreML model dominates detector creation cost, so
+    /// it is loaded once per process and shared. MLModel predictions are
+    /// thread-safe; each detector instance keeps only its own LSTM state.
+    private static let sharedModelResult: Result<MLModel, Error> = Result {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .all
-        model = try MLModel(contentsOf: modelURL, configuration: configuration)
+        return try MLModel(contentsOf: locateModelURL(), configuration: configuration)
+    }
+
+    init() throws {
+        model = try Self.sharedModelResult.get()
         hiddenState = try Self.zeroState()
         cellState = try Self.zeroState()
+        audioInput = try MLMultiArray(
+            shape: [1, NSNumber(value: Self.chunkSize)],
+            dataType: .float32
+        )
     }
 
     func speechProbabilities(in samples: [Float]) throws -> [NeuralVoiceActivityFrame] {
@@ -79,7 +90,12 @@ final class SileroNeuralVoiceActivityDetector: NeuralVoiceActivityDetecting {
     }
 
     private func process(_ samples: [Float]) throws -> Float {
-        let audioInput = try Self.multiArray(from: samples, shape: [1, NSNumber(value: Self.chunkSize)])
+        samples.withUnsafeBufferPointer { source in
+            guard let base = source.baseAddress else { return }
+            audioInput.dataPointer
+                .bindMemory(to: Float.self, capacity: Self.chunkSize)
+                .update(from: base, count: min(samples.count, Self.chunkSize))
+        }
         let provider = try MLDictionaryFeatureProvider(dictionary: [
             "audio_input": MLFeatureValue(multiArray: audioInput),
             "hidden_state": MLFeatureValue(multiArray: hiddenState),
@@ -110,15 +126,6 @@ final class SileroNeuralVoiceActivityDetector: NeuralVoiceActivityDetecting {
 
     private static func zeroState() throws -> MLMultiArray {
         try MLMultiArray(shape: stateShape, dataType: .float32)
-    }
-
-    private static func multiArray(from values: [Float], shape: [NSNumber]) throws -> MLMultiArray {
-        let array = try MLMultiArray(shape: shape, dataType: .float32)
-        let pointer = array.dataPointer.bindMemory(to: Float.self, capacity: values.count)
-        for index in values.indices {
-            pointer[index] = values[index]
-        }
-        return array
     }
 
     private static func locateModelURL() throws -> URL {

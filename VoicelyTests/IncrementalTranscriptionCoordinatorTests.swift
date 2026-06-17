@@ -92,6 +92,25 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
     }
 
+    /// Counts streaming calls so tests can assert chunked scans and early exit.
+    final class CountingNeuralVAD: NeuralVoiceActivityDetecting {
+        private(set) var callCount = 0
+        let speechProbability: Double
+
+        init(speechProbability: Double) {
+            self.speechProbability = speechProbability
+        }
+
+        func speechProbabilities(in samples: [Float]) throws -> [NeuralVoiceActivityFrame] {
+            callCount += 1
+            return [NeuralVoiceActivityFrame(
+                startFrame: 0,
+                endFrame: samples.count,
+                speechProbability: speechProbability
+            )]
+        }
+    }
+
 
     static func makeVADFrames(
         durationSeconds: Double,
@@ -120,7 +139,7 @@ struct IncrementalTranscriptionCoordinatorTests {
 
     @Test func defaultIntervalHelperUsesWhisperSafeCadence() {
         #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 29)
-        #expect(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds == 20)
+        #expect(IncrementalTranscriptionTiming.minimumCutSeconds == 15)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 29)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 29)
         #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 29)
@@ -158,32 +177,7 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
 
-    @Test func adaptiveThresholdGetsLessStrictAfterTargetTime() {
-        let config = IncrementalVoiceActivityCutConfiguration.default
-        let early = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
-            elapsedSeconds: 23.2,
-            targetSeconds: 29,
-            forcedCutSeconds: 29,
-            configuration: config
-        )
-        let target = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
-            elapsedSeconds: 29,
-            targetSeconds: 29,
-            forcedCutSeconds: 29,
-            configuration: config
-        )
-        let late = IncrementalTranscriptionCoordinator.adaptiveCutConfidenceThreshold(
-            elapsedSeconds: 30,
-            targetSeconds: 29,
-            forcedCutSeconds: 29,
-            configuration: config
-        )
-
-        #expect(early > target)
-        #expect(target > late)
-    }
-
-    @Test func voiceActivityCutWaitsBeforeEarliestBoundary() throws {
+    @Test func voiceActivityCutWaitsWhileBatchIsStillFilling() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 8.0, amplitude: 0.08),
             (seconds: 1.0, amplitude: 0.0),
@@ -202,12 +196,12 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
-    @Test func voiceActivityCutCanStartLookingForStrongSilenceAroundTwentyTwoSeconds() throws {
+    @Test func voiceActivityCutDoesNotRunBeforeFullBatchAccumulates() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 22.0, amplitude: 0.08)
         ])
         let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
-            seconds: 2,
+            seconds: 7,
             silentRanges: [0.4..<1.0]
         ))
 
@@ -219,18 +213,19 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        #expect(cutFrame > 320_000)
-        #expect(cutFrame < 352_000)
+        #expect(cutFrame == 0)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
-    @Test func voiceActivityCutUsesRecentNeuralVADSilenceBeforeTarget() throws {
+    @Test func voiceActivityCutPicksSilenceAfterMinimumCutPoint() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 30.0, amplitude: 0.08)
         ])
+        // Analysis window starts at minimumCutSeconds (15 s); silence at
+        // 4.0–4.8 s into the window is 19.0–19.8 s into the recording.
         let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
-            seconds: 8,
+            seconds: 14,
             silentRanges: [4.0..<4.8]
         ))
 
@@ -241,19 +236,41 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        #expect(cutFrame >= 420_000)
-        #expect(cutFrame <= 435_200)
-        #expect(cutFrame < 480_000)
+        #expect(cutFrame > 304_000)
+        #expect(cutFrame <= 316_800)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
-    @Test func voiceActivityCutFallsBackToTargetWhenNeuralVADFindsNoSilence() throws {
+    @Test func voiceActivityCutPrefersLaterSilenceAmongEquals() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 30.0, amplitude: 0.08)
         ])
         let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
-            seconds: 8,
+            seconds: 14,
+            silentRanges: [2.0..<3.0, 8.0..<9.0]
+        ))
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: 480_000,
+            neuralVoiceActivityDetector: fakeVAD
+        )
+
+        // Equal-confidence silences: the later one wins so less audio carries over.
+        #expect(cutFrame > 368_000)
+        #expect(cutFrame <= 384_000)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
+    @Test func voiceActivityCutFallsBackToBatchEndWhenNeuralVADFindsNoSilence() throws {
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 30.0, amplitude: 0.08)
+        ])
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 14,
             silentRanges: []
         ))
 
@@ -264,7 +281,30 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        #expect(cutFrame == 480_000)
+        // Batch is capped at targetSegmentSeconds (29 s = 464 000 frames).
+        #expect(cutFrame == 464_000)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
+    @Test func voiceActivityCutCapsBatchAtTargetEvenWhenMoreAudioIsAvailable() throws {
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 40.0, amplitude: 0.08)
+        ])
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 14,
+            silentRanges: []
+        ))
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: 640_000,
+            neuralVoiceActivityDetector: fakeVAD
+        )
+
+        // Overshoot past one batch carries over instead of producing a >30 s chunk.
+        #expect(cutFrame == 464_000)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -355,31 +395,6 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(coordinator.accumulatedTranscript == "")
     }
 
-    @Test @MainActor func coordinatorWritesPersistentSegmentCutLog() async throws {
-        let service = TranscriptionService()
-        let pcmURL = try makeSilentCAF(seconds: 25)
-        let logURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("coordinator_segment_cuts_\(UUID().uuidString).jsonl")
-        let coordinator = IncrementalTranscriptionCoordinator(
-            transcriptionService: service,
-            recordingFileURL: pcmURL
-        )
-        coordinator.segmentLogWriter = IncrementalSegmentLogStore(fileURL: logURL)
-        coordinator.transcribeOverride = { _ in "final segment" }
-
-        let transcript = await coordinator.stop(currentFrame: 400_000)
-        let records = try IncrementalSegmentLogStore(fileURL: logURL).readRecords()
-
-        #expect(transcript == "final segment")
-        #expect(records.count == 1)
-        #expect(records[0].cutKind == .final)
-        #expect(records[0].durationSeconds == 25)
-        #expect(records[0].recordingFileName == pcmURL.lastPathComponent)
-
-        try? FileManager.default.removeItem(at: pcmURL)
-        try? FileManager.default.removeItem(at: logURL)
-    }
-
     @Test @MainActor func extractSegmentProducesCorrectFrameCount() throws {
         // 5-second CAF file at 16 kHz = 80 000 frames
         let pcmURL = try makeSilentCAF(seconds: 5)
@@ -468,8 +483,8 @@ struct IncrementalTranscriptionCoordinatorTests {
         )
         coordinator.transcribeOverride = { @Sendable _ in "hello" }
 
-        // First segment cuts at ~30 s, leaving a tail shorter than the
-        // 20 s minimum chunk when the recording stops at 40 s.
+        // First segment cuts at one full batch (~29 s), leaving a tail
+        // shorter than a batch when the recording stops at 40 s.
         await coordinator.transcribeSegment(upToFrame: 480_000)
         let transcript = await coordinator.stop(currentFrame: 640_000)
 
@@ -552,6 +567,30 @@ struct IncrementalTranscriptionCoordinatorTests {
     @Test func noSpeechPlaceholdersAreRemovedFromSegmentText() {
         #expect(IncrementalTranscriptionCoordinator.sanitizedSegmentText(" [Silence]\n[BLANK_AUDIO]\n(humming) ") == nil)
         #expect(IncrementalTranscriptionCoordinator.sanitizedSegmentText("hello\n[BLANK_AUDIO]\n(music)") == "hello")
+    }
+
+    @Test func neuralSpeechAnalyzerStreamsFileAndStopsAtFirstSpeech() throws {
+        let fileURL = try makeSilentCAF(seconds: 60)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let detector = CountingNeuralVAD(speechProbability: 0.82)
+
+        let result = try NeuralSpeechAnalyzer.containsProbableSpeech(at: fileURL, detector: detector)
+
+        #expect(result == true)
+        // Speech in the first chunk must stop the scan immediately.
+        #expect(detector.callCount == 1)
+    }
+
+    @Test func neuralSpeechAnalyzerScansWholeSilentFileInChunks() throws {
+        let fileURL = try makeSilentCAF(seconds: 35)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let detector = CountingNeuralVAD(speechProbability: 0.02)
+
+        let result = try NeuralSpeechAnalyzer.containsProbableSpeech(at: fileURL, detector: detector)
+
+        #expect(result == false)
+        // 35 s of audio in ~10 s streaming chunks: several calls, bounded memory.
+        #expect(detector.callCount >= 4)
     }
 
     @Test func neuralSpeechAnalyzerRejectsConfidentSilence() throws {

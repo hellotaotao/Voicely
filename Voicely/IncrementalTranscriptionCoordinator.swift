@@ -10,7 +10,9 @@ struct IncrementalTranscriptionTiming {
     static let intervalSecondsStorageKey = "incrementalTranscriptionIntervalSeconds"
     static let legacyIntervalMinutesStorageKey = "incrementalTranscriptionInterval"
     static let defaultIntervalSeconds = 29
-    static let minimumEffectiveSpeechChunkSeconds = 20
+    /// Earliest position inside a full batch where a VAD cut is allowed,
+    /// so every chunk sent to Whisper carries at least this much audio.
+    static let minimumCutSeconds = 15
 
     static func sanitizedIntervalSeconds(_: Int) -> Int {
         defaultIntervalSeconds
@@ -40,14 +42,8 @@ struct IncrementalTranscriptionTiming {
 }
 
 struct IncrementalVoiceActivityCutConfiguration: Sendable {
-    var searchWindowSeconds: Double = 8
     var minimumSilenceSeconds: Double = 0.35
-    var minimumSegmentSeconds: Double = Double(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds)
-    var earliestCutRatio: Double = 22.0 / 29.0
-    var forcedCutRatio: Double = 1.0
-    var earlyCutConfidence: Double = 0.88
-    var targetCutConfidence: Double = 0.62
-    var lateCutConfidence: Double = 0.25
+    var minimumCutSeconds: Double = Double(IncrementalTranscriptionTiming.minimumCutSeconds)
     var speechProbabilityThreshold: Double = 0.30
 
     static let `default` = IncrementalVoiceActivityCutConfiguration()
@@ -74,21 +70,13 @@ final class IncrementalTranscriptionCoordinator {
     /// Closure that returns the current number of frames written to the recording file.
     var frameCountProvider: () -> AVAudioFramePosition = { 0 }
 
-    /// Optional progress relay for UI updates when a segment is being transcribed.
-    var progressCallback: ((Float) -> Void)? = nil
-
     /// Optional transcript relay after a segment appends to the accumulated transcript.
     var transcriptCallback: ((String) -> Void)? = nil
-
-    var segmentLogWriter: (any IncrementalSegmentLogWriting)? = AppRuntime.isRunningTests
-        ? nil
-        : IncrementalSegmentLogStore()
 
     // MARK: Private
 
     private let transcriptionService: TranscriptionService
     private let recordingFileURL: URL
-    private let segmentLogSessionID = UUID()
     private let recordingSampleRate: Double
 
     private var segmentTimer: Timer?
@@ -101,18 +89,24 @@ final class IncrementalTranscriptionCoordinator {
         var useVoiceActivityCut: Bool
     }
 
-    private let minimumSegmentFrames: AVAudioFramePosition
+    private let minimumCutFrames: AVAudioFramePosition
 
     private var pendingSegmentRequest: PendingSegmentRequest?
     private var segmentProcessingWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private var targetIntervalFrames: AVAudioFramePosition {
+        AVAudioFramePosition(Double(targetIntervalSeconds) * recordingSampleRate)
+    }
 
     // MARK: Init
 
     init(transcriptionService: TranscriptionService, recordingFileURL: URL) {
         self.transcriptionService = transcriptionService
         self.recordingFileURL = recordingFileURL
-        self.minimumSegmentFrames = Self.minimumSegmentFrames(for: recordingFileURL)
         self.recordingSampleRate = Self.sampleRate(for: recordingFileURL)
+        self.minimumCutFrames = AVAudioFramePosition(
+            Double(IncrementalTranscriptionTiming.minimumCutSeconds) * recordingSampleRate
+        )
     }
 
     // MARK: Lifecycle
@@ -225,13 +219,6 @@ final class IncrementalTranscriptionCoordinator {
         ) else {
             return
         }
-        logSegmentCut(
-            index: index,
-            startFrame: startFrame,
-            requestedEndFrame: requestedEndFrame,
-            endFrame: endFrame,
-            useVoiceActivityCut: useVoiceActivityCut
-        )
 
         let extracted = await Task.detached {
             Self.extractSegment(
@@ -248,26 +235,14 @@ final class IncrementalTranscriptionCoordinator {
             try? FileManager.default.removeItem(at: segmentURL)
         }
 
-        if transcribeOverride == nil {
-            let containsProbableSpeech = await Task.detached(priority: .utility) {
-                NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: segmentURL)
-            }.value
-
-            guard containsProbableSpeech else {
-                progressCallback?(1.0)
-                return
-            }
-        }
-
+        // No separate speech preflight here: transcribeAudio runs the same
+        // neural VAD gate before invoking Whisper, so checking twice would
+        // just double the inference cost per segment.
         let textResult: String?
         if let override = transcribeOverride {
             textResult = await override(segmentURL.path)
         } else {
-            textResult = await transcriptionService.transcribeAudio(filePath: segmentURL.path) { [weak self] progress in
-                Task { @MainActor [weak self] in
-                    self?.progressCallback?(progress)
-                }
-            }?.text
+            textResult = await transcriptionService.transcribeAudio(filePath: segmentURL.path)?.text
         }
 
         if let text = Self.sanitizedSegmentText(textResult) {
@@ -298,67 +273,19 @@ final class IncrementalTranscriptionCoordinator {
             )
         }.value
 
-        guard cutFrame > startFrame + minimumSegmentFrames else {
+        guard cutFrame > startFrame + minimumCutFrames else {
             return nil
         }
 
         return cutFrame
     }
 
-    private func logSegmentCut(
-        index: Int,
-        startFrame: AVAudioFramePosition,
-        requestedEndFrame: AVAudioFramePosition,
-        endFrame: AVAudioFramePosition,
-        useVoiceActivityCut: Bool
-    ) {
-        guard let segmentLogWriter else { return }
-
-        let record = IncrementalSegmentLogRecord(
-            createdAt: Date(),
-            sessionID: segmentLogSessionID,
-            recordingFileName: recordingFileURL.lastPathComponent,
-            segmentIndex: index,
-            cutKind: Self.cutKind(
-                useVoiceActivityCut: useVoiceActivityCut,
-                requestedEndFrame: requestedEndFrame,
-                endFrame: endFrame
-            ),
-            sampleRate: recordingSampleRate,
-            startFrame: Int64(startFrame),
-            requestedEndFrame: Int64(requestedEndFrame),
-            endFrame: Int64(endFrame),
-            targetIntervalSeconds: targetIntervalSeconds,
-            usedVoiceActivityCut: useVoiceActivityCut
-        )
-
-        do {
-            try segmentLogWriter.append(record)
-            debugLog(
-                "📈 [IncrementalCoordinator] Segment cut \(record.segmentIndex): duration=\(String(format: "%.2f", record.durationSeconds))s requested=\(String(format: "%.2f", record.requestedDurationSeconds))s kind=\(record.cutKind.rawValue) log=\(segmentLogWriter.logFileURL.path)"
-            )
-        } catch {
-            debugLog("⚠️ [IncrementalCoordinator] Failed to write segment cut log: \(error)")
-        }
-    }
-
-    private nonisolated static func cutKind(
-        useVoiceActivityCut: Bool,
-        requestedEndFrame: AVAudioFramePosition,
-        endFrame: AVAudioFramePosition
-    ) -> IncrementalSegmentCutKind {
-        guard useVoiceActivityCut else {
-            return .final
-        }
-
-        return endFrame < requestedEndFrame ? .voiceActivity : .targetFallback
-    }
-
-    /// The minimum chunk length only applies to periodic VAD cuts. The final
-    /// flush (non-VAD) must transcribe whatever remains, however short,
-    /// otherwise the tail of the recording is silently lost.
+    /// Periodic VAD cuts wait until a full batch has accumulated so the VAD
+    /// runs once per batch instead of probing every tick. The final flush
+    /// (non-VAD) must transcribe whatever remains, however short, otherwise
+    /// the tail of the recording is silently lost.
     private func requiredMinimumSegmentFrames(useVoiceActivityCut: Bool) -> AVAudioFramePosition {
-        useVoiceActivityCut ? minimumSegmentFrames : 0
+        useVoiceActivityCut ? targetIntervalFrames : 0
     }
 
     private func queuePendingSegment(
@@ -408,22 +335,12 @@ final class IncrementalTranscriptionCoordinator {
         )
     }
 
-    private nonisolated static func minimumSegmentFrames(for fileURL: URL) -> AVAudioFramePosition {
-        do {
-            let sourceFile = try AVAudioFile(forReading: fileURL)
-            return AVAudioFramePosition(Double(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds) * sourceFile.processingFormat.sampleRate)
-        } catch {
-            debugLog("⚠️ [IncrementalCoordinator] Failed to read recording sample rate: \(error)")
-            return AVAudioFramePosition(IncrementalTranscriptionTiming.minimumEffectiveSpeechChunkSeconds * 16_000)
-        }
-    }
-
     private nonisolated static func sampleRate(for fileURL: URL) -> Double {
         do {
             let sourceFile = try AVAudioFile(forReading: fileURL)
             return sourceFile.processingFormat.sampleRate
         } catch {
-            debugLog("⚠️ [IncrementalCoordinator] Failed to read recording sample rate for logging: \(error)")
+            debugLog("⚠️ [IncrementalCoordinator] Failed to read recording sample rate: \(error)")
             return 16_000
         }
     }
@@ -466,10 +383,15 @@ final class IncrementalTranscriptionCoordinator {
     }
 
 
-    /// Chooses a cut point using Silero neural VAD probabilities plus adaptive boundary scoring.
+    /// Chooses a cut point with a single neural VAD pass per full batch.
     ///
-    /// Returns `startFrame` when it is too early or no acceptable boundary exists yet,
-    /// which tells the coordinator to keep recording before cutting the chunk.
+    /// The coordinator accumulates `targetSegmentSeconds` of audio, then this
+    /// runs Silero VAD once over [start + minimumCutSeconds, batch end] and cuts
+    /// at the best silence found, or at the batch end when no silence exists.
+    /// Audio past the cut carries over into the next batch.
+    ///
+    /// Returns `startFrame` while the batch is still filling, which tells the
+    /// coordinator to keep recording before cutting the chunk.
     nonisolated static func voiceActivityAwareCutFrame(
         fileURL: URL,
         startFrame: AVAudioFramePosition,
@@ -482,35 +404,30 @@ final class IncrementalTranscriptionCoordinator {
             let sourceFile = try AVAudioFile(forReading: fileURL)
             let format = sourceFile.processingFormat
             let sampleRate = format.sampleRate
-            let availableEndFrame = min(targetFrame, sourceFile.length)
-            let minimumSegmentFrames = AVAudioFramePosition(configuration.minimumSegmentSeconds * sampleRate)
+            let targetSeconds = max(configuration.minimumCutSeconds, targetSegmentSeconds)
+            let targetFrames = AVAudioFramePosition(targetSeconds * sampleRate)
+            let minimumCutFrames = AVAudioFramePosition(configuration.minimumCutSeconds * sampleRate)
 
-            guard availableEndFrame > startFrame + minimumSegmentFrames else {
+            // A batch is exactly `targetSeconds` long; audio past it carries
+            // over so every chunk stays within Whisper's 30 s window.
+            let batchEndFrame = min(targetFrame, sourceFile.length, startFrame + targetFrames)
+
+            guard batchEndFrame >= startFrame + targetFrames else {
                 return startFrame
             }
 
-            let elapsedSeconds = Double(availableEndFrame - startFrame) / sampleRate
-            let targetSeconds = max(configuration.minimumSegmentSeconds, targetSegmentSeconds)
-            let earliestCutSeconds = max(configuration.minimumSegmentSeconds, targetSeconds * configuration.earliestCutRatio)
-            let forcedCutSeconds = max(earliestCutSeconds, targetSeconds * configuration.forcedCutRatio)
-
-            guard elapsedSeconds >= earliestCutSeconds else {
-                return startFrame
-            }
-
-            let searchWindowFrames = AVAudioFramePosition(configuration.searchWindowSeconds * sampleRate)
-            let analysisStartFrame = max(startFrame + minimumSegmentFrames, availableEndFrame - searchWindowFrames)
-            let framesToRead = AVAudioFrameCount(availableEndFrame - analysisStartFrame)
-            guard framesToRead > 0 else { return startFrame }
+            let analysisStartFrame = startFrame + minimumCutFrames
+            let framesToRead = AVAudioFrameCount(batchEndFrame - analysisStartFrame)
+            guard framesToRead > 0 else { return batchEndFrame }
 
             sourceFile.framePosition = analysisStartFrame
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: framesToRead) else {
-                return startFrame
+                return batchEndFrame
             }
 
             try sourceFile.read(into: buffer, frameCount: framesToRead)
             let samples = monoFloatSamples(from: buffer)
-            guard !samples.isEmpty else { return startFrame }
+            guard !samples.isEmpty else { return batchEndFrame }
 
             let detector = try neuralVoiceActivityDetector ?? SileroNeuralVoiceActivityDetector()
             let vadFrames = try detector.speechProbabilities(in: samples)
@@ -520,30 +437,12 @@ final class IncrementalTranscriptionCoordinator {
                 minimumSilenceFrames: max(1, Int(configuration.minimumSilenceSeconds * sampleRate))
             )
 
-            let requiredConfidence = adaptiveCutConfidenceThreshold(
-                elapsedSeconds: elapsedSeconds,
-                targetSeconds: targetSeconds,
-                forcedCutSeconds: forcedCutSeconds,
-                configuration: configuration
-            )
-
-            if let candidate, candidate.confidence >= requiredConfidence {
-                let cutFrame = analysisStartFrame + AVAudioFramePosition(candidate.localFrame)
-                guard cutFrame > startFrame + minimumSegmentFrames else { return startFrame }
-                return min(cutFrame, availableEndFrame)
+            guard let candidate else {
+                return batchEndFrame
             }
 
-            if elapsedSeconds >= forcedCutSeconds {
-                if let candidate {
-                    let cutFrame = analysisStartFrame + AVAudioFramePosition(candidate.localFrame)
-                    if cutFrame > startFrame + minimumSegmentFrames {
-                        return min(cutFrame, availableEndFrame)
-                    }
-                }
-                return availableEndFrame
-            }
-
-            return startFrame
+            let cutFrame = analysisStartFrame + AVAudioFramePosition(candidate.localFrame)
+            return min(max(cutFrame, analysisStartFrame), batchEndFrame)
         } catch {
             debugLog("⚠️ [IncrementalCoordinator] Neural VAD cut failed: \(error)")
             return targetFrame
@@ -568,37 +467,6 @@ final class IncrementalTranscriptionCoordinator {
             }
         }
         return samples
-    }
-
-    nonisolated static func adaptiveCutConfidenceThreshold(
-        elapsedSeconds: Double,
-        targetSeconds: Double,
-        forcedCutSeconds: Double,
-        configuration: IncrementalVoiceActivityCutConfiguration = .default
-    ) -> Double {
-        let earliestSeconds = max(configuration.minimumSegmentSeconds, targetSeconds * configuration.earliestCutRatio)
-        if elapsedSeconds <= earliestSeconds {
-            return configuration.earlyCutConfidence
-        }
-        if elapsedSeconds <= targetSeconds {
-            let progress = (elapsedSeconds - earliestSeconds) / max(targetSeconds - earliestSeconds, 0.001)
-            return interpolate(
-                from: configuration.earlyCutConfidence,
-                to: configuration.targetCutConfidence,
-                progress: progress
-            )
-        }
-        let progress = (elapsedSeconds - targetSeconds) / max(forcedCutSeconds - targetSeconds, 0.001)
-        return interpolate(
-            from: configuration.targetCutConfidence,
-            to: configuration.lateCutConfidence,
-            progress: min(max(progress, 0), 1)
-        )
-    }
-
-    nonisolated private static func interpolate(from start: Double, to end: Double, progress: Double) -> Double {
-        let clamped = min(max(progress, 0), 1)
-        return start + (end - start) * clamped
     }
 
     nonisolated private static func bestNeuralSilenceCutCandidate(

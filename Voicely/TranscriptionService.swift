@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Foundation
+import os
 import WhisperKit
 
 enum TranscriptionEngine {
@@ -869,7 +870,10 @@ private extension TranscriptionService {
                 skipSpecialTokens: true,
                 withoutTimestamps: false,
                 wordTimestamps: false,
-                clipTimestamps: [0.0]
+                clipTimestamps: [0.0],
+                // Incremental segments are pre-cut to ≤29 s by our own VAD;
+                // WhisperKit must treat each input as a single window.
+                chunkingStrategy: ChunkingStrategy.none
             )
 
             if !customPrompt.isEmpty, let tokenizer = whisperKit.tokenizer {
@@ -878,6 +882,9 @@ private extension TranscriptionService {
                 print("Using custom prompt: \(customPrompt)")
             }
 
+            // Whisper invokes this once per decoded token; only hop to the
+            // main actor when the fraction moved enough to be visible.
+            let lastReportedFraction = OSAllocatedUnfairLock<Float>(initialState: 0)
             let transcriptionResults = try await whisperKit.transcribe(
                 audioPath: audioPath,
                 decodeOptions: decodeOptions
@@ -887,8 +894,15 @@ private extension TranscriptionService {
                     return false
                 }
                 let fraction = Float(whisperKit.progress.fractionCompleted)
-                Task { @MainActor in
-                    updateProgressOnMain(fraction)
+                let shouldPublish = lastReportedFraction.withLock { last in
+                    guard fraction >= last + 0.01 || fraction >= 1.0 else { return false }
+                    last = fraction
+                    return true
+                }
+                if shouldPublish {
+                    Task { @MainActor in
+                        updateProgressOnMain(fraction)
+                    }
                 }
                 return nil
             }

@@ -5,6 +5,7 @@
 //  Created by Tao Wang on 1/6/2025.
 //
 
+import Accelerate
 @preconcurrency import AVFoundation
 import Combine
 import Foundation
@@ -44,7 +45,6 @@ class AudioRecordingService: ObservableObject {
     @Published var isPaused = false
     @Published var recordingDuration: TimeInterval = 0
     @Published var hasPermission = false
-    @Published var audioLevel: Float = 0.0
     @Published private(set) var isPreparingRecordingSession = false
 
     // MARK: New: exposes PCM file URL and live frame position
@@ -256,7 +256,6 @@ class AudioRecordingService: ObservableObject {
         isRecording = true
         isPaused = false
         recordingDuration = 0
-        audioLevel = 0.0
 
         startUITimer()
 
@@ -284,7 +283,6 @@ class AudioRecordingService: ObservableObject {
 
         isRecording = false
         isPaused = false
-        audioLevel = 0.0
 
         let duration = recordingDuration
         let m4aFilename = pendingM4AURL?.lastPathComponent
@@ -336,7 +334,6 @@ class AudioRecordingService: ObservableObject {
         sharedState.withLock { $0.isWritingSuspended = true }
         isPaused = true
         stopUITimer()
-        audioLevel = 0.0
         debugLog("⏸ [AudioRecordingService] Paused")
     }
 
@@ -455,23 +452,20 @@ class AudioRecordingService: ObservableObject {
 
     private nonisolated func computeRMS(_ buffer: AVAudioPCMBuffer) -> Float {
         guard let data = buffer.floatChannelData?[0] else { return 0 }
-        let count = Int(buffer.frameLength)
+        let count = vDSP_Length(buffer.frameLength)
         guard count > 0 else { return 0 }
 
-        var sum: Float = 0
-        for i in 0..<count { sum += data[i] * data[i] }
-        return (sum / Float(count)).squareRoot()
+        var rms: Float = 0
+        vDSP_rmsqv(data, 1, &rms, count)
+        return rms
     }
 
     /// Pull-model UI tick: runs on MainActor at 10 Hz.
-    /// Reads shared state once under the lock, then updates @Published properties.
+    /// Only publishes the duration; the waveform pulls the raw level itself
+    /// via peekAudioLevel() at its own render cadence.
     private func tickUIFromSharedState() {
-        let snapshot = sharedState.withLock { ($0.framePosition, $0.latestLevel) }
-        recordingDuration = Double(snapshot.0) / 16000.0
-
-        let normalised = min(Float(1.0), snapshot.1 * 10)
-        let smoothed = audioLevel * 0.3 + normalised * 0.7
-        audioLevel = smoothed < 0.04 ? 0 : smoothed
+        let framePosition = sharedState.withLock { $0.framePosition }
+        recordingDuration = Double(framePosition) / 16000.0
     }
 
     // MARK: PCM (CAF) → M4A conversion

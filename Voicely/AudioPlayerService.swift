@@ -5,6 +5,7 @@
 //  Created by Tao Wang on 16/6/2025.
 //
 
+import Accelerate
 import Foundation
 import AVFoundation
 import Combine
@@ -183,6 +184,14 @@ enum AudioWaveformExtractor {
         let channelCount = Int(buffer.format.channelCount)
         guard frameLength > 0, channelCount > 0 else { return 0 }
 
+        // Mono float covers Voicely's own recordings; vDSP is far faster than
+        // the per-sample closure path below.
+        if channelCount == 1, let floatChannelData = buffer.floatChannelData {
+            var rms: Float = 0
+            vDSP_rmsqv(floatChannelData[0], 1, &rms, vDSP_Length(frameLength))
+            return Double(rms)
+        }
+
         if let floatChannelData = buffer.floatChannelData {
             return rmsLevel(
                 frameLength: frameLength,
@@ -281,6 +290,18 @@ class AudioPlayerService: NSObject, ObservableObject {
     private var waveformTask: Task<Void, Never>?
     private var pendingSeekState = PendingSeekState()
     private static var waveformCache: [String: [Double]] = [:]
+    private static var waveformCacheInsertionOrder: [String] = []
+    private static let waveformCacheLimit = 32
+
+    private static func storeWaveform(_ levels: [Double], for key: String) {
+        if waveformCache.updateValue(levels, forKey: key) == nil {
+            waveformCacheInsertionOrder.append(key)
+            if waveformCacheInsertionOrder.count > waveformCacheLimit {
+                let evicted = waveformCacheInsertionOrder.removeFirst()
+                waveformCache.removeValue(forKey: evicted)
+            }
+        }
+    }
     #if !os(macOS) || targetEnvironment(macCatalyst)
     private let audioSession = AVAudioSession.sharedInstance()
     private var isAudioSessionActive = false
@@ -619,7 +640,7 @@ private extension AudioPlayerService {
 
             guard !Task.isCancelled, pendingFilePath == filePath, !levels.isEmpty else { return }
 
-            Self.waveformCache[filePath] = levels
+            Self.storeWaveform(levels, for: filePath)
             waveformLevels = levels
         } catch is CancellationError {
             return

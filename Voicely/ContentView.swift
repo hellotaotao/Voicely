@@ -155,7 +155,8 @@ struct ContentView: View {
         NavigationStack(path: $compactNavigationPath) {
             noteLibraryList(
                 usesSplitNavigationSelection: false,
-                opensDetailInCompactStack: true
+                opensDetailInCompactStack: true,
+                showsRecordingControls: false
             )
             .navigationTitle("Voicely")
             .navigationBarTitleDisplayMode(.large)
@@ -170,13 +171,18 @@ struct ContentView: View {
                     DetailPlaceholderView()
                 }
             }
-            .sheet(isPresented: $showingSettings) {
-                SettingsView()
-                    .environmentObject(modelManager)
-            }
-            .task {
-                await setupServices()
-            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            recordingControlsBar(opensDetailInCompactStack: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+                .environmentObject(modelManager)
+        }
+        .task {
+            await setupServices()
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
@@ -267,7 +273,8 @@ struct ContentView: View {
 
     private func noteLibraryList(
         usesSplitNavigationSelection: Bool,
-        opensDetailInCompactStack: Bool = false
+        opensDetailInCompactStack: Bool = false,
+        showsRecordingControls: Bool = true
     ) -> some View {
         ZStack(alignment: .bottom) {
             noteList(
@@ -277,34 +284,40 @@ struct ContentView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(VoicelyTheme.groupedBackground)
-                .contentMargins(.bottom, sidebarRecordingOverlayInset, for: .scrollContent)
+                .contentMargins(.bottom, showsRecordingControls ? sidebarRecordingOverlayInset : 16, for: .scrollContent)
                 .refreshable {
                     await cloudManager.refreshSync()
                 }
 
-            RecordingControls(
-                audioService: audioService,
-                transcriptionService: transcriptionService,
-                startRecordingQuickActionID: startRecordingQuickActionID,
-                togglePauseQuickActionID: togglePauseQuickActionID,
-                onManageModels: {
-                    showingSettings = true
-                },
-                onRecordingComplete: { note in
-                    modelContext.insert(note)
-                    selectedNoteID = note.id
-                    if opensDetailInCompactStack {
-                        compactNavigationPath = [note.id]
-                    }
-                }
-            )
-            .padding(.horizontal, 14)
-            .padding(.bottom, 12)
-            .zIndex(1)
+            if showsRecordingControls {
+                recordingControlsBar(opensDetailInCompactStack: opensDetailInCompactStack)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
+                    .zIndex(1)
+            }
         }
         .background(VoicelyTheme.groupedBackground)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
+    }
+
+    private func recordingControlsBar(opensDetailInCompactStack: Bool) -> some View {
+        RecordingControls(
+            audioService: audioService,
+            transcriptionService: transcriptionService,
+            startRecordingQuickActionID: startRecordingQuickActionID,
+            togglePauseQuickActionID: togglePauseQuickActionID,
+            onManageModels: {
+                showingSettings = true
+            },
+            onRecordingComplete: { note in
+                modelContext.insert(note)
+                selectedNoteID = note.id
+                if opensDetailInCompactStack {
+                    compactNavigationPath = [note.id]
+                }
+            }
+        )
     }
 
     @ViewBuilder
@@ -338,17 +351,12 @@ struct ContentView: View {
         usesSplitNavigationSelection: Bool,
         opensDetailInCompactStack: Bool
     ) -> some View {
-        if syncMonitor.syncStatus != .idle && syncMonitor.syncStatus != .available {
+        if shouldShowSyncStatusBanner {
             Section {
                 SyncStatusBannerCard(
                     description: syncMonitor.statusDescription,
                     tint: syncMonitor.statusColor,
-                    showsRetry: {
-                        if case .error = syncMonitor.syncStatus {
-                            return true
-                        }
-                        return false
-                    }(),
+                    showsRetry: shouldShowSyncRetry,
                     retryAction: {
                         Task {
                             await syncMonitor.checkCloudKitAccountStatus()
@@ -408,6 +416,24 @@ struct ContentView: View {
         }
     }
 
+    private var shouldShowSyncStatusBanner: Bool {
+        switch syncMonitor.syncStatus {
+        case .idle, .available:
+            return false
+        case .error(let message):
+            return message != "No iCloud account found"
+        case .checkingAccount, .recovering:
+            return true
+        }
+    }
+
+    private var shouldShowSyncRetry: Bool {
+        guard case .error(let message) = syncMonitor.syncStatus else {
+            return false
+        }
+        return message != "No iCloud account found"
+    }
+
     private func noteRow(
         note: VoiceNote,
         usesSplitNavigationSelection: Bool,
@@ -415,7 +441,11 @@ struct ContentView: View {
     ) -> some View {
         let row = VoiceNoteRow(
             note: note,
-            transcriptionService: transcriptionService,
+            isLocallyTranscribing: transcriptionService.isLocallyTranscribing(note),
+            isRemoteTranscribing: transcriptionService.isTranscribingOnAnotherDevice(note),
+            isPending: transcriptionService.shouldShowPendingState(note),
+            localProgress: transcriptionService.localProgress(for: note),
+            isRecordingPaused: isRecordingPaused(note),
             isSelected: selectedNoteID == note.id
         )
 
@@ -453,7 +483,11 @@ struct ContentView: View {
     }
 
     private func detailView(_ note: VoiceNote) -> some View {
-        VoiceNoteDetailView(note: note, showingSettings: $showingSettings)
+        VoiceNoteDetailView(
+            note: note,
+            audioService: audioService,
+            showingSettings: $showingSettings
+        )
             .environmentObject(transcriptionService)
     }
 
@@ -651,25 +685,30 @@ struct ContentView: View {
     private func cancelTranscription(for note: VoiceNote) {
         transcriptionService.cancelTranscription(for: note)
     }
+
+    private func isRecordingPaused(_ note: VoiceNote) -> Bool {
+        audioService.isRecording
+            && audioService.isPaused
+            && note.isTranscribing
+            && note.duration <= 0
+    }
 }
 
 // MARK: - Voice Note Row
 
 struct VoiceNoteRow: View {
+    // Plain values instead of observing TranscriptionService: high-frequency
+    // progress publishes then only re-render rows whose inputs changed.
     let note: VoiceNote
-    @ObservedObject var transcriptionService: TranscriptionService
+    let isLocallyTranscribing: Bool
+    let isRemoteTranscribing: Bool
+    let isPending: Bool
+    let localProgress: Float
+    let isRecordingPaused: Bool
     var isSelected = false
-
-    private var isLocallyTranscribing: Bool {
-        transcriptionService.isLocallyTranscribing(note)
-    }
 
     private var isAwaitingTranscription: Bool {
         note.isAwaitingTranscription
-    }
-
-    private var isRemoteTranscribing: Bool {
-        transcriptionService.isTranscribingOnAnotherDevice(note)
     }
 
     private var hasVisibleTranscript: Bool {
@@ -688,17 +727,6 @@ struct VoiceNoteRow: View {
         note.isTranscribing && note.duration > 0 && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
-    private var isPending: Bool {
-        transcriptionService.shouldShowPendingState(note)
-    }
-
-    private var localProgress: Float {
-        if isLocallyTranscribing {
-            return transcriptionService.localProgress(for: note)
-        }
-        return max(0, min(note.transcriptionProgress, 1))
-    }
-
     private var lastTranscriptionFailureMessage: String? {
         guard let message = note.transcriptionLastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
               !message.isEmpty else {
@@ -711,17 +739,20 @@ struct VoiceNoteRow: View {
         let trimmed = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         if isLocallyTranscribing { return "Transcribing…" }
+        if isRecordingPaused { return "Recording paused. Resume when you are ready." }
         if isRecordingInProgress { return "Recording… waiting for the first live transcript." }
         if isFinalizingTranscription { return "Finalizing transcription…" }
         if isAwaitingTranscription { return "Queued for transcription." }
         if isRemoteTranscribing { return "Transcribing on another device." }
-        if let lastTranscriptionFailureMessage { return lastTranscriptionFailureMessage }
+        if let lastTranscriptionFailureMessage { return "\(lastTranscriptionFailureMessage) Open to retry." }
         return nil
     }
 
     private var statusBadge: PillBadge? {
         if isLocallyTranscribing {
             return PillBadge(text: "Transcribing…", systemImage: "waveform", variant: .accent)
+        } else if isRecordingPaused {
+            return PillBadge(text: "Paused", systemImage: "pause.circle", variant: .warning)
         } else if isLiveUpdatingTranscript {
             return PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
         } else if isRecordingInProgress {
@@ -736,12 +767,15 @@ struct VoiceNoteRow: View {
             let title = lastTranscriptionFailureMessage == nil ? "Transcription pending" : "Retry queued"
             let variant: PillBadge.Variant = lastTranscriptionFailureMessage == nil ? .warning : .danger
             return PillBadge(text: title, systemImage: "clock.arrow.circlepath", variant: variant)
+        } else if lastTranscriptionFailureMessage != nil {
+            return PillBadge(text: "Open to retry", systemImage: "wand.and.stars", variant: .danger)
         }
         return nil
     }
 
     private var durationText: String {
-        isRecordingInProgress ? "Recording" : formatDuration(note.duration)
+        if isRecordingPaused { return "Paused" }
+        return isRecordingInProgress ? "Recording" : formatDuration(note.duration)
     }
 
     var body: some View {
@@ -761,7 +795,7 @@ struct VoiceNoteRow: View {
                     Spacer(minLength: 4)
 
                     HStack(spacing: 3) {
-                        Image(systemName: isRecordingInProgress ? "record.circle" : "waveform")
+                        Image(systemName: rowDurationSystemImage)
                             .font(.caption2)
                         Text(durationText)
                             .font(.caption)
@@ -820,6 +854,12 @@ struct VoiceNoteRow: View {
                 VoicelyTheme.surface.opacity(0.72)
             }
         }
+    }
+
+    private var rowDurationSystemImage: String {
+        if isRecordingPaused { return "pause.circle" }
+        if isRecordingInProgress { return "record.circle" }
+        return "waveform"
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
@@ -894,6 +934,14 @@ struct RecordingControls: View {
         case .loading, .downloading, .prewarming: return .orange
         case .unloaded: return modelManager.isModelAvailableOffline(modelManager.selectedModel) ? .secondary : .accentColor
         }
+    }
+
+    private var recordingTint: Color {
+        audioService.isPaused ? .orange : .red
+    }
+
+    private var recordingStatusText: String {
+        audioService.isPaused ? "Paused" : "Recording"
     }
 
     private var quickSelectableModels: [String] {
@@ -1084,32 +1132,37 @@ struct RecordingControls: View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
                 Circle()
-                    .fill(Color.red)
+                    .fill(recordingTint)
                     .frame(width: 8, height: 8)
-                    .opacity(audioService.isPaused ? 0.4 : 1.0)
+                    .opacity(audioService.isPaused ? 0.65 : 1.0)
 
-                AudioWaveformView(
-                    isAnimating: audioService.isRecording && !audioService.isPaused,
-                    audioService: audioService
-                )
-                .frame(height: 22)
-                .frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(recordingStatusText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(recordingTint)
+                    AudioWaveformView(
+                        isAnimating: audioService.isRecording && !audioService.isPaused,
+                        audioService: audioService
+                    )
+                    .frame(height: 18)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(formatDuration(audioService.recordingDuration))
                     .font(.footnote.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundStyle(.red)
+                    .foregroundStyle(recordingTint)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 9)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.red.opacity(0.10))
+                    .fill(recordingTint.opacity(0.10))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.red.opacity(0.22), lineWidth: 1)
+                    .stroke(recordingTint.opacity(0.22), lineWidth: 1)
             )
 
             Button(action: togglePauseResume) {
@@ -1120,6 +1173,7 @@ struct RecordingControls: View {
                     .background(Color.primary.opacity(0.06), in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(audioService.isPaused ? "Resume" : "Pause")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.pauseRecordingButton)
 
             stopButton
@@ -1207,9 +1261,6 @@ struct RecordingControls: View {
         )
         coord.frameCountProvider = { [weak audioService] in
             audioService?.currentFramePosition ?? 0
-        }
-        coord.progressCallback = { [note] progress in
-            note.transcriptionProgress = max(0, min(progress, 1))
         }
         coord.transcriptCallback = { [note] transcript in
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
@@ -1317,10 +1368,6 @@ struct RecordingControls: View {
         note.transcriptionProgress = 0.0
 
         Task { @MainActor in
-            capturedCoordinator?.progressCallback = { progress in
-                note.transcriptionProgress = max(0, min(progress, 1))
-            }
-
             let accumulatedTranscript: String
             if let coord = capturedCoordinator {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
@@ -1394,6 +1441,7 @@ struct RecordingControls: View {
 
 struct VoiceNoteDetailView: View {
     let note: VoiceNote
+    @ObservedObject var audioService: AudioRecordingService
     @Binding var showingSettings: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
@@ -1442,6 +1490,10 @@ struct VoiceNoteDetailView: View {
         note.isTranscribing && note.duration <= 0 && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
+    private var isRecordingPaused: Bool {
+        isRecordingInProgress && audioService.isPaused
+    }
+
     private var isFinalizingTranscription: Bool {
         note.isTranscribing && note.duration > 0 && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
@@ -1456,6 +1508,10 @@ struct VoiceNoteDetailView: View {
 
     private var shouldShowPendingState: Bool {
         transcriptionService.shouldShowPendingState(note)
+    }
+
+    private var shouldShowPrimaryTranscribeActionInBody: Bool {
+        isAwaitingTranscription || shouldShowPendingState || lastTranscriptionFailureMessage != nil
     }
 
     private var localTranscriptionProgress: Float {
@@ -1516,6 +1572,7 @@ struct VoiceNoteDetailView: View {
     }
 
     private var durationLabel: String {
+        if isRecordingPaused { return "Paused" }
         if isRecordingInProgress { return "Recording" }
         let total = Int(note.duration.rounded())
         let minutes = total / 60
@@ -1643,6 +1700,8 @@ struct VoiceNoteDetailView: View {
 
             if isLocallyTranscribing {
                 PillBadge(text: "Processing", systemImage: "waveform", variant: .accent)
+            } else if isRecordingPaused {
+                PillBadge(text: "Paused", systemImage: "pause.circle", variant: .warning)
             } else if isLiveUpdatingTranscript {
                 PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
             } else if isRecordingInProgress {
@@ -1873,8 +1932,10 @@ struct VoiceNoteDetailView: View {
                     requestTranscription(takeOver: true)
                 }
             } else if note.transcription.isEmpty {
-                retranscribeActionButton(title: "Transcribe", systemImage: "wand.and.stars") {
-                    requestTranscription()
+                if !shouldShowPrimaryTranscribeActionInBody && !isTranscribingHere {
+                    retranscribeActionButton(title: "Transcribe", systemImage: "wand.and.stars") {
+                        requestTranscription()
+                    }
                 }
             } else {
                 retranscribeActionButton(title: "Re-transcribe", systemImage: "arrow.clockwise") {
@@ -2041,6 +2102,18 @@ struct VoiceNoteDetailView: View {
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
             }
+        } else if isRecordingPaused && !hasVisibleTranscript {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "pause.circle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Recording paused")
+                        .font(.subheadline.weight(.medium))
+                }
+                Text("Resume or stop the recording from the controls at the bottom of the screen.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         } else if isRecordingInProgress && !hasVisibleTranscript {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -2087,8 +2160,13 @@ struct VoiceNoteDetailView: View {
         } else if hasVisibleTranscript {
             if isLiveUpdatingTranscript {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Recording — transcript updates live")
+                    if isRecordingPaused {
+                        Image(systemName: "pause.circle.fill")
+                            .foregroundStyle(.orange)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(isRecordingPaused ? "Recording paused" : "Recording — transcript updates live")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
@@ -2401,8 +2479,11 @@ struct DetailPlaceholderView: View {
 
 struct AudioWaveformView: View {
     let isAnimating: Bool
-    @ObservedObject var audioService: AudioRecordingService
+    // Not @ObservedObject: the level is pulled from the audio-thread lock at
+    // the TimelineView cadence, so service publishes don't re-render this view.
+    let audioService: AudioRecordingService
     @State private var waveHeights: [CGFloat] = Array(repeating: 0.2, count: 22)
+    @State private var smoothedLevel: Float = 0
 
     var body: some View {
         Group {
@@ -2432,9 +2513,14 @@ struct AudioWaveformView: View {
     }
 
     private func updateWaveHeights() {
+        let normalised = min(Float(1.0), audioService.peekAudioLevel() * 10)
+        var smoothed = smoothedLevel * 0.3 + normalised * 0.7
+        if smoothed < 0.04 { smoothed = 0 }
+        smoothedLevel = smoothed
+
         var newHeights = waveHeights
         newHeights.removeFirst()
-        let base = CGFloat(max(0, min(1, audioService.audioLevel)))
+        let base = CGFloat(max(0, min(1, smoothed)))
         let adjusted = pow(base, 0.6)
         let variation = CGFloat.random(in: 0.85...1.1)
         let level = adjusted * variation

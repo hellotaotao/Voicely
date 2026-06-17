@@ -75,6 +75,7 @@ class CloudStorageManager: ObservableObject {
     @objc private func iCloudIdentityDidChange() {
         Task { @MainActor in
             let wasEnabled = isCloudEnabled
+            ensuredDirectoryPaths.removeAll()
             setupCloudContainer()
             if isCloudEnabled && !wasEnabled {
                 setupMetadataQuery()
@@ -152,14 +153,26 @@ class CloudStorageManager: ObservableObject {
             debugLog("⚠️ [DEBUG] iCloud account token is nil - user may not be signed in")
     }
 
+    private var ensuredDirectoryPaths: Set<String> = []
+
     private func createDirectoryIfNeeded(at url: URL, excludeFromBackup: Bool) {
+        // Hot paths call this once per file access; skip the repeated
+        // filesystem existence checks after the directory is known good.
+        guard !ensuredDirectoryPaths.contains(url.path) else { return }
+
+        var directoryReady = true
         if !fileManager.fileExists(atPath: url.path) {
             do {
                 try fileManager.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
                 print("Created audio directory: \(url.path)")
             } catch {
                 print("Failed to create audio directory: \(error)")
+                directoryReady = false
             }
+        }
+
+        if directoryReady {
+            ensuredDirectoryPaths.insert(url.path)
         }
 
         if excludeFromBackup {
@@ -379,8 +392,10 @@ class CloudStorageManager: ObservableObject {
         let directory = getAudioStorageDirectory()
         let resultURL = directory.appendingPathComponent(path)
         debugLog("🔍 [DEBUG] Constructed URL from filename: \(resultURL.path)")
-        
-        // Check file accessibility
+
+#if DEBUG
+        // Diagnostic only — attribute reads on iCloud paths can block, so the
+        // check must not ship in release builds.
         do {
             let attributes = try fileManager.attributesOfItem(atPath: resultURL.path)
             debugLog("✅ [DEBUG] File accessible, size: \(attributes[.size] ?? "unknown") bytes")
@@ -390,7 +405,8 @@ class CloudStorageManager: ObservableObject {
                 debugLog("❌ [DEBUG] Permission denied (Error 257) - iCloud sync issue detected")
             }
         }
-        
+#endif
+
         return resultURL
     }
     
@@ -497,25 +513,30 @@ class CloudStorageManager: ObservableObject {
             .appendingPathComponent(".\(url.lastPathComponent).icloud")
     }
     
-    // Delete a file from storage
-    func deleteFile(at path: String) {
+    // Delete a file from storage. Candidate resolution happens on the main
+    // actor; the filesystem work runs detached so deletes never block the UI.
+    @discardableResult
+    func deleteFile(at path: String) -> Task<Void, Never>? {
         let candidateURLs = deletionCandidateURLs(for: path)
-        guard !candidateURLs.isEmpty else { return }
+        guard !candidateURLs.isEmpty else { return nil }
 
-        var deletedPaths: [String] = []
-        for url in candidateURLs where fileManager.fileExists(atPath: url.path) {
-            do {
-                try fileManager.removeItem(at: url)
-                deletedPaths.append(url.path)
-            } catch {
-                print("Failed to delete file at \(url.path): \(error)")
+        return Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            var deletedPaths: [String] = []
+            for url in candidateURLs where fileManager.fileExists(atPath: url.path) {
+                do {
+                    try fileManager.removeItem(at: url)
+                    deletedPaths.append(url.path)
+                } catch {
+                    print("Failed to delete file at \(url.path): \(error)")
+                }
             }
-        }
 
-        if deletedPaths.isEmpty {
-            print("No audio file found to delete for path: \(path)")
-        } else {
-            print("Deleted file(s): \(deletedPaths.joined(separator: ", "))")
+            if deletedPaths.isEmpty {
+                print("No audio file found to delete for path: \(path)")
+            } else {
+                print("Deleted file(s): \(deletedPaths.joined(separator: ", "))")
+            }
         }
     }
     

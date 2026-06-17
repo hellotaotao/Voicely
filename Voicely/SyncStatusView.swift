@@ -74,34 +74,6 @@ struct SyncStatusView: View {
     }
 }
 
-// MARK: - Pull to Refresh for Voice Notes List
-
-struct RefreshableVoiceNotesList: View {
-    let voiceNotes: [VoiceNote]
-    let onDelete: (IndexSet) -> Void
-    @Binding var showingSettings: Bool
-    @EnvironmentObject var cloudManager: CloudStorageManager
-    @EnvironmentObject var transcriptionService: TranscriptionService
-    
-    var body: some View {
-        List {
-            ForEach(voiceNotes) { note in
-                NavigationLink(
-                    destination: VoiceNoteDetailView(note: note, showingSettings: $showingSettings)
-                        .environmentObject(transcriptionService)
-                ) {
-                    VoiceNoteRow(note: note, transcriptionService: transcriptionService)
-                }
-                .listRowSeparator(.hidden)
-            }
-            .onDelete(perform: onDelete)
-        }
-        .refreshable {
-            await cloudManager.refreshSync()
-        }
-    }
-}
-
 #Preview {
     SyncStatusView()
         .environmentObject(CloudStorageManager.shared)

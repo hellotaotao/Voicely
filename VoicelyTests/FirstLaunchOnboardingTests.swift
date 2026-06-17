@@ -31,7 +31,7 @@ struct FirstLaunchOnboardingTests {
         #expect(FirstLaunchOnboarding.pages.map(\.title) == [
             "Capture every thought",
             "Transcribe privately",
-            "Compare model performance",
+            "Choose the right model",
             "Ready when you are"
         ])
     }

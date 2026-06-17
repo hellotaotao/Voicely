@@ -80,9 +80,9 @@ enum FirstLaunchOnboarding {
         ),
         FirstLaunchOnboardingPage(
             id: "metrics",
-            title: "Compare model performance",
-            subtitle: "Compare the selected compute route, processing time ratio, and realtime speed after each note.",
-            systemImage: "cpu.fill",
+            title: "Choose the right model",
+            subtitle: "Start with the recommended offline model, then explore faster or more accurate options whenever you need them.",
+            systemImage: "slider.horizontal.3",
             accentColor: .purple
         ),
         FirstLaunchOnboardingPage(
@@ -290,7 +290,8 @@ struct FirstLaunchOnboardingView: View {
                 Text(modelSetupStatus.detail)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }

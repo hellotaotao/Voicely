@@ -12,6 +12,7 @@ import UserNotifications
 extension Notification.Name {
     static let startRecordingQuickAction = Notification.Name("VoicelyStartRecordingQuickAction")
     static let toggleRecordingPauseQuickAction = Notification.Name("VoicelyToggleRecordingPauseQuickAction")
+    static let stopRecordingQuickAction = Notification.Name("VoicelyStopRecordingQuickAction")
 }
 
 enum QuickAction {
@@ -148,6 +149,7 @@ struct VoicelyApp: App {
         let noteTitle = environment["VOICELY_UI_TEST_NOTE_TITLE"] ?? "UI Test Note"
         let audioFilePath = environment["VOICELY_UI_TEST_NOTE_AUDIO_PATH"] ?? ""
         let seededNote = VoiceNote(title: noteTitle, audioFilePath: audioFilePath)
+        seededNote.titleWasManuallyEdited = true
         if let durationValue = environment["VOICELY_UI_TEST_NOTE_DURATION"].flatMap(Double.init) {
             seededNote.duration = durationValue
         }

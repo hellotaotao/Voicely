@@ -27,6 +27,10 @@ enum WaveformSeedGenerator {
 final class VoiceNote {
     var id: UUID = UUID()
     var title: String = "Voice Note"
+    /// True once the user has explicitly set the title, or the note was created
+    /// with a meaningful title (imported file name, seeded data). When false,
+    /// the title is auto-derived from the transcript on completion.
+    var titleWasManuallyEdited: Bool = false
     var timestamp: Date = Date()
     var duration: TimeInterval = 0
     var audioFilePath: String = ""
@@ -166,6 +170,17 @@ extension VoiceNote {
         transcriptionLeaseExpiresAt = nil
         transcriptionLastErrorMessage = nil
         pendingTranscription = false
+        applyAutoTitleIfNeeded()
+    }
+
+    /// Replaces an auto-generated title with one derived from the transcript's
+    /// first sentence. No-op once the user has set their own title, or when the
+    /// transcript has no usable speech. Runs fully on-device.
+    func applyAutoTitleIfNeeded() {
+        guard !titleWasManuallyEdited else { return }
+        guard let derived = VoiceNoteAutoTitle.derive(from: transcription) else { return }
+        guard derived != title else { return }
+        title = derived
     }
 
     func markTranscriptionFailure(_ message: String) {

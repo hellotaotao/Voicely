@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var didSetupServices = false
     @State private var startRecordingQuickActionID = UUID()
     @State private var togglePauseQuickActionID = UUID()
+    @State private var stopRecordingQuickActionID = UUID()
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
@@ -57,6 +58,9 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleRecordingPauseQuickAction)) { _ in
             requestTogglePauseFromQuickAction()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stopRecordingQuickAction)) { _ in
+            requestStopRecordingFromQuickAction()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -166,7 +170,7 @@ struct ContentView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .navigationDestination(for: UUID.self) { noteID in
                 if let note = voiceNotes.first(where: { $0.id == noteID }) {
-                    detailView(note)
+                    detailView(note, showsInlineRecordingControls: true)
                 } else {
                     DetailPlaceholderView()
                 }
@@ -307,6 +311,7 @@ struct ContentView: View {
             transcriptionService: transcriptionService,
             startRecordingQuickActionID: startRecordingQuickActionID,
             togglePauseQuickActionID: togglePauseQuickActionID,
+            stopRecordingQuickActionID: stopRecordingQuickActionID,
             onManageModels: {
                 showingSettings = true
             },
@@ -482,11 +487,12 @@ struct ContentView: View {
         .background(VoicelyTheme.groupedBackground)
     }
 
-    private func detailView(_ note: VoiceNote) -> some View {
+    private func detailView(_ note: VoiceNote, showsInlineRecordingControls: Bool = false) -> some View {
         VoiceNoteDetailView(
             note: note,
             audioService: audioService,
-            showingSettings: $showingSettings
+            showingSettings: $showingSettings,
+            showsInlineRecordingControls: showsInlineRecordingControls
         )
             .environmentObject(transcriptionService)
     }
@@ -598,6 +604,9 @@ struct ContentView: View {
                 title: importedAudio.title,
                 audioFilePath: importedAudio.filePath
             )
+            // The imported file name is a meaningful, user-facing title; keep it
+            // rather than overwriting it with an auto-derived transcript title.
+            note.titleWasManuallyEdited = true
             note.duration = await audioDuration(for: importedAudio.fileURL)
 
             let isModelLoaded = transcriptionService.isWhisperAvailable()
@@ -645,6 +654,10 @@ struct ContentView: View {
 
     private func requestTogglePauseFromQuickAction() {
         togglePauseQuickActionID = UUID()
+    }
+
+    private func requestStopRecordingFromQuickAction() {
+        stopRecordingQuickActionID = UUID()
     }
 
     private func deleteNotes(offsets: IndexSet) {
@@ -774,8 +787,9 @@ struct VoiceNoteRow: View {
     }
 
     private var durationText: String {
-        if isRecordingPaused { return "Paused" }
-        return isRecordingInProgress ? "Recording" : formatDuration(note.duration)
+        // Only shown when not recording (see body), so this is always the
+        // finished recording's total length.
+        formatDuration(note.duration)
     }
 
     var body: some View {
@@ -794,14 +808,20 @@ struct VoiceNoteRow: View {
 
                     Spacer(minLength: 4)
 
-                    HStack(spacing: 3) {
-                        Image(systemName: rowDurationSystemImage)
-                            .font(.caption2)
-                        Text(durationText)
-                            .font(.caption)
-                            .monospacedDigit()
+                    // While recording, leave this slot empty: the status badge
+                    // already says "Recording"/"Paused", and the row has no
+                    // access to the live elapsed time. The total duration
+                    // appears here once the recording finishes.
+                    if !isRecordingInProgress {
+                        HStack(spacing: 3) {
+                            Image(systemName: "waveform")
+                                .font(.caption2)
+                            Text(durationText)
+                                .font(.caption)
+                                .monospacedDigit()
+                        }
+                        .foregroundStyle(.tertiary)
                     }
-                    .foregroundStyle(.tertiary)
                 }
 
                 Text(note.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
@@ -856,12 +876,6 @@ struct VoiceNoteRow: View {
         }
     }
 
-    private var rowDurationSystemImage: String {
-        if isRecordingPaused { return "pause.circle" }
-        if isRecordingInProgress { return "record.circle" }
-        return "waveform"
-    }
-
     private func formatDuration(_ duration: TimeInterval) -> String {
         let total = Int(duration.rounded())
         let minutes = total / 60
@@ -880,6 +894,7 @@ struct RecordingControls: View {
     @ObservedObject var transcriptionService: TranscriptionService
     let startRecordingQuickActionID: UUID
     let togglePauseQuickActionID: UUID
+    let stopRecordingQuickActionID: UUID
     let onManageModels: () -> Void
     let onRecordingComplete: (VoiceNote) -> Void
     @State private var showingModelPicker = false
@@ -1002,6 +1017,9 @@ struct RecordingControls: View {
         }
         .onChange(of: togglePauseQuickActionID) { _, _ in
             togglePauseResumeFromQuickAction()
+        }
+        .onChange(of: stopRecordingQuickActionID) { _, _ in
+            stopRecordingFromQuickAction()
         }
         .onAppear {
             audioService.prewarmRecordingSessionIfPossible()
@@ -1302,6 +1320,11 @@ struct RecordingControls: View {
         togglePauseResume()
     }
 
+    private func stopRecordingFromQuickAction() {
+        guard audioService.isRecording else { return }
+        stopRecording()
+    }
+
     private func registerLiveActivityControls(coordinator: IncrementalTranscriptionCoordinator? = nil) {
         RecordingControlCommandCenter.shared.setTogglePauseHandler { [audioService] in
             guard audioService.isRecording else { return }
@@ -1443,6 +1466,10 @@ struct VoiceNoteDetailView: View {
     let note: VoiceNote
     @ObservedObject var audioService: AudioRecordingService
     @Binding var showingSettings: Bool
+    /// When true (iPhone full-screen push detail), the live pause/stop controls
+    /// are rendered inside this view because the library's controls are hidden.
+    /// In split layouts (iPad/Mac) the sidebar controls stay visible, so this is false.
+    var showsInlineRecordingControls = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
@@ -1556,6 +1583,14 @@ struct VoiceNoteDetailView: View {
         UIDevice.current.userInterfaceIdiom == .phone && horizontalSizeClass == .compact
     }
 
+    /// Caps the detail content width only on Mac (Catalyst). On a very wide
+    /// window — e.g. fullscreen on an ultrawide display — an unconstrained
+    /// layout stretches the waveform and transcript across the whole screen.
+    /// iPhone/iPad always fill, so no width is wasted there.
+    private var detailContentMaxWidth: CGFloat {
+        ProcessInfo.processInfo.isMacCatalystApp ? 1100 : .infinity
+    }
+
     private var retranscribeConfirmationMessage: String {
         let nextModel = selectedModelDisplayName ?? "the currently selected model"
 
@@ -1572,8 +1607,10 @@ struct VoiceNoteDetailView: View {
     }
 
     private var durationLabel: String {
-        if isRecordingPaused { return "Paused" }
-        if isRecordingInProgress { return "Recording" }
+        // While recording, show the live elapsed time here. The recording /
+        // paused state itself is conveyed by the coloured status pill, so
+        // repeating the word "Recording" in this slot would be redundant.
+        if isRecordingInProgress { return formatTime(audioService.recordingDuration) }
         let total = Int(note.duration.rounded())
         let minutes = total / 60
         let seconds = total % 60
@@ -1597,8 +1634,25 @@ struct VoiceNoteDetailView: View {
                 transcriptionCard
             }
             .padding(usesCompactDetailLayout ? 16 : 20)
+            .frame(maxWidth: detailContentMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
         .background(VoicelyTheme.groupedBackground)
+        .safeAreaInset(edge: .bottom) {
+            if showsInlineRecordingControls && isRecordingInProgress {
+                DetailRecordingControlBar(
+                    audioService: audioService,
+                    onTogglePause: {
+                        NotificationCenter.default.post(name: .toggleRecordingPauseQuickAction, object: nil)
+                    },
+                    onStop: {
+                        NotificationCenter.default.post(name: .stopRecordingQuickAction, object: nil)
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+        }
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.screen)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -2246,7 +2300,11 @@ struct VoiceNoteDetailView: View {
 
     private func toggleEdit() {
         if isEditing {
+            let titleChanged = editedTitle != note.title
             note.title = editedTitle
+            if titleChanged, !editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                note.titleWasManuallyEdited = true
+            }
             note.transcription = editedTranscription
             if editedTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.transcriptionModelIdentifier = nil

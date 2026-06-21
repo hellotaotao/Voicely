@@ -251,6 +251,9 @@ struct SettingsView: View {
                             .textCase(.uppercase)
                         Text(ModelManager.displayName(for: modelManager.selectedModel))
                             .font(.title3.weight(.semibold))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                            .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 6) {
                             modelStateBadge
                             PillBadge(text: "On-device", systemImage: "iphone", variant: .accent)
@@ -368,20 +371,31 @@ struct SettingsView: View {
                 HStack {
                     Text("Model")
                         .font(.subheadline)
-                    Spacer()
-                    Picker("", selection: $modelManager.selectedModel) {
-                        ForEach(modelManager.availableModels, id: \.self) { model in
-                            HStack {
-                                if modelManager.isModelAvailableOffline(model) {
-                                    Image(systemName: "checkmark.circle.fill")
+                        .fixedSize()
+                    Spacer(minLength: 12)
+                    Menu {
+                        Picker("", selection: $modelManager.selectedModel) {
+                            ForEach(modelManager.availableModels, id: \.self) { model in
+                                HStack {
+                                    if modelManager.isModelAvailableOffline(model) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                    }
+                                    Text(ModelManager.displayName(for: model))
                                 }
-                                Text(ModelManager.displayName(for: model))
+                                .tag(model)
                             }
-                            .tag(model)
                         }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(ModelManager.displayName(for: modelManager.selectedModel))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .imageScale(.small)
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(VoicelyTheme.accent)
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
                     .accessibilityIdentifier(AccessibilityIdentifiers.Settings.modelPicker)
                     .onChange(of: modelManager.selectedModel) { _, newValue in
                         let nextState = ModelManager.selectionStateAfterPickingModel(

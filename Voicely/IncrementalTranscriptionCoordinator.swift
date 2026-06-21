@@ -515,10 +515,11 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     nonisolated static func sanitizedSegmentText(_ text: String?) -> String? {
-        // The finalizer substitutes [BLANK_AUDIO] when every line is non-speech; a
-        // segment with no speech should be dropped instead of accumulating that placeholder.
+        // A segment with no real speech (the whole thing is non-speech) is dropped
+        // rather than accumulating a placeholder into the live transcript. Decided by
+        // meaning (sanitizer finds no speech), not by matching a placeholder string.
         guard let finalized = LocalTranscriptFinalizer.finalizedText(text),
-              finalized != LocalTranscriptFinalizer.blankAudioTranscript else {
+              TranscriptSanitizer.cleanedTranscript(finalized) != nil else {
             return nil
         }
         return finalized

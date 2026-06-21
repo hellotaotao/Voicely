@@ -22,13 +22,16 @@ struct LocalTranscriptFinalizerTests {
         #expect(result?.overlapMergeCount == 0)
     }
 
-    @Test func returnsBlankAudioForOnlyNonSpeechText() {
-        let result = LocalTranscriptFinalizer.finalizeTranscript("[BLANK_AUDIO]\n(music)")
+    @Test func keepsWhisperNonSpeechVerbatimWhenWholeClipIsNonSpeech() {
+        // 整段都是非语音:如实保留 Whisper 原文(相邻去重),不再抹成 [BLANK_AUDIO]。
+        #expect(LocalTranscriptFinalizer.finalizeTranscript("(music)\n(music)")?.text == "(music)")
+        #expect(LocalTranscriptFinalizer.finalizeTranscript("[Laughter]")?.text == "[Laughter]")
+    }
 
-        #expect(result?.text == "[BLANK_AUDIO]")
-        #expect(result?.removedLineCount == 2)
-        #expect(result?.duplicateLineCount == 0)
-        #expect(result?.overlapMergeCount == 0)
+    @Test func returnsNilWhenNothingWasTranscribed() {
+        // 纯空白 / 空输入仍返回 nil —— 这是「真没出文字」,交给上层当真出错处理。
+        #expect(LocalTranscriptFinalizer.finalizeTranscript("") == nil)
+        #expect(LocalTranscriptFinalizer.finalizeTranscript("   \n  ") == nil)
     }
 
     @Test func mergesConservativeBoundaryOverlap() {

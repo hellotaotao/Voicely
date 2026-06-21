@@ -91,7 +91,10 @@ struct VoiceNoteAutoTitleTests {
         #expect(VoiceNoteAutoTitle.derive(from: "   \n  ") == nil)
     }
 
-    @Test func returnsNilForBlankAudioSentinel() {
+    @Test func returnsNilForNonSpeechOnlyTranscript() {
+        // 整段非语音不该当标题:Whisper 原文(music/laughter)与历史 [BLANK_AUDIO] 都跳过。
+        #expect(VoiceNoteAutoTitle.derive(from: "(music)") == nil)
+        #expect(VoiceNoteAutoTitle.derive(from: "[Laughter]") == nil)
         #expect(VoiceNoteAutoTitle.derive(from: LocalTranscriptFinalizer.blankAudioTranscript) == nil)
     }
 }

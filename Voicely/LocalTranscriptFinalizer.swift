@@ -27,14 +27,19 @@ enum LocalTranscriptFinalizer {
 
         let rawLines = text.components(separatedBy: .newlines)
         var finalizedLines: [String] = []
+        var nonSpeechLines: [String] = []
         var removedLineCount = 0
         var duplicateLineCount = 0
         var overlapMergeCount = 0
 
         for rawLine in rawLines {
             guard let cleanedLine = TranscriptSanitizer.cleanedLine(rawLine) else {
-                if !rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmedNonSpeech = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedNonSpeech.isEmpty {
                     removedLineCount += 1
+                    if nonSpeechLines.last != trimmedNonSpeech {
+                        nonSpeechLines.append(trimmedNonSpeech)
+                    }
                 }
                 continue
             }
@@ -61,8 +66,9 @@ enum LocalTranscriptFinalizer {
 
         guard !finalizedText.isEmpty else {
             guard removedLineCount > 0 else { return nil }
+            // 整段都是非语音:如实保留 Whisper 的原话(相邻去重),不再抹成 [BLANK_AUDIO]。
             return FinalizedTranscript(
-                text: blankAudioTranscript,
+                text: nonSpeechLines.joined(separator: "\n"),
                 removedLineCount: removedLineCount,
                 duplicateLineCount: duplicateLineCount,
                 overlapMergeCount: overlapMergeCount

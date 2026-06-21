@@ -36,8 +36,11 @@ enum VoiceNoteAutoTitle {
     /// transcript has no usable speech to title from.
     static func derive(from transcript: String) -> String? {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // No real speech to title from (whole transcript is non-speech such as
+        // "(music)" / "[Laughter]" / legacy "[BLANK_AUDIO]") — decided by meaning,
+        // not by matching a placeholder string.
         guard !trimmed.isEmpty,
-              trimmed != LocalTranscriptFinalizer.blankAudioTranscript else {
+              TranscriptSanitizer.cleanedTranscript(trimmed) != nil else {
             return nil
         }
 

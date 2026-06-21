@@ -976,10 +976,6 @@ struct RecordingControls: View {
         audioService.isPaused ? .orange : .red
     }
 
-    private var recordingStatusText: String {
-        audioService.isPaused ? "Paused" : "Recording"
-    }
-
     private var quickSelectableModels: [String] {
         guard let modelManager else { return [] }
         return modelManager.localModels.sorted { lhs, rhs in
@@ -1175,16 +1171,11 @@ struct RecordingControls: View {
                     .frame(width: 8, height: 8)
                     .opacity(audioService.isPaused ? 0.65 : 1.0)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(recordingStatusText)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(recordingTint)
-                    AudioWaveformView(
-                        isAnimating: audioService.isRecording && !audioService.isPaused,
-                        audioService: audioService
-                    )
-                    .frame(height: 18)
-                }
+                AudioWaveformView(
+                    isAnimating: audioService.isRecording && !audioService.isPaused,
+                    audioService: audioService
+                )
+                .frame(height: 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(formatDuration(audioService.recordingDuration))
@@ -1616,6 +1607,23 @@ struct VoiceNoteDetailView: View {
         ProcessInfo.processInfo.isMacCatalystApp ? 1100 : .infinity
     }
 
+    /// Shown under the transcription header when re-running would switch
+    /// models — the "I picked a better model, now re-do it" case. nil when a
+    /// re-run would reuse the model already applied, or there's nothing to
+    /// re-transcribe yet, or transcription is currently running.
+    private var retranscribeModelHint: String? {
+        guard !note.transcription.isEmpty,
+              !shouldShowTakeOverAction,
+              !isTranscribingHere,
+              !isRemoteTranscribing,
+              let next = selectedModelDisplayName,
+              let current = note.transcriptionModelDisplayName,
+              next != current else {
+            return nil
+        }
+        return "Re-transcribe will use \(next)"
+    }
+
     private var retranscribeConfirmationMessage: String {
         let nextModel = selectedModelDisplayName ?? "the currently selected model"
 
@@ -1929,17 +1937,22 @@ struct VoiceNoteDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .center, spacing: 10) {
                     Text("Transcription")
-                        .font(.subheadline.weight(.semibold))
-                    if let modelName = note.transcriptionModelDisplayName {
-                        Text(modelName)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
+                        .font(.headline)
                     Spacer(minLength: 8)
                     transcriptionToolbar
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.top, 12)
+                .padding(.bottom, retranscribeModelHint == nil ? 12 : 6)
+
+                if let hint = retranscribeModelHint {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
+                }
 
                 Divider().opacity(0.5)
 

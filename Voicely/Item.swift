@@ -14,6 +14,15 @@ enum TranscriptionOwnershipState: String {
     case completed
 }
 
+/// How a finished transcription attempt turned out, so the UI can show the right
+/// calm state without re-deriving it from scattered flags. Absent (nil) means the
+/// note hasn't produced a finished attempt yet.
+enum VoiceNoteTranscriptionOutcome: String {
+    case transcribed   // produced text (including verbatim non-speech like "Music")
+    case noSpeech      // VAD found no speech anywhere — nothing to transcribe
+    case failed        // a real error we couldn't recover from (diagnostic kept internally)
+}
+
 enum WaveformSeedGenerator {
     static func stableSeed(for uuid: UUID) -> Int {
         let hash = uuid.uuidString.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { partial, byte in
@@ -42,6 +51,7 @@ final class VoiceNote {
     var pendingTranscription: Bool = false // Mark if waiting for transcription
     var lastTranscriptionDuration: TimeInterval = 0
     var transcriptionStateRaw: String = ""
+    var transcriptionOutcomeRaw: String = ""
     var transcriptionOriginDeviceID: String?
     var transcriptionOwnerDeviceID: String?
     var transcriptionAttemptID: String?
@@ -82,6 +92,15 @@ extension VoiceNote {
         }
         set {
             transcriptionStateRaw = newValue?.rawValue ?? ""
+        }
+    }
+
+    var transcriptionOutcome: VoiceNoteTranscriptionOutcome? {
+        get {
+            VoiceNoteTranscriptionOutcome(rawValue: transcriptionOutcomeRaw)
+        }
+        set {
+            transcriptionOutcomeRaw = newValue?.rawValue ?? ""
         }
     }
 
@@ -160,6 +179,7 @@ extension VoiceNote {
         transcriptionQueuedAt = queuedAt
         transcriptionLeaseExpiresAt = leaseExpiresAt
         transcriptionLastErrorMessage = nil
+        transcriptionOutcomeRaw = ""
         pendingTranscription = false
     }
 

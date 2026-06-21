@@ -491,11 +491,6 @@ class TranscriptionService: ObservableObject {
 }
 
 private extension TranscriptionService {
-    enum TranscriptionFailureReason {
-        case noUsableTranscript
-        case retryPreservedExistingTranscript
-    }
-
     enum ProcessingAction {
         case claimNew(attemptID: String, queuedAt: Date)
         case resumeOwned(attemptID: String)
@@ -725,10 +720,17 @@ private extension TranscriptionService {
         let noteID = note.id
         let hadExistingTranscript = LocalTranscriptFinalizer.finalizeTranscript(note.transcription) != nil
 
-        let transcription = await transcribeAudio(filePath: note.audioFilePath) { [weak self] progress in
+        let onProgress: (Float) -> Void = { [weak self] value in
             Task { @MainActor in
-                self?.progressByNoteID[noteID] = progress
+                self?.progressByNoteID[noteID] = value
             }
+        }
+
+        var outcome = await transcribeAudioOutcome(filePath: note.audioFilePath, progressCallback: onProgress)
+
+        // A real Whisper error is often transient — retry once before giving up.
+        if case .whisperError = outcome, !wasTranscriptionCancelled() {
+            outcome = await transcribeAudioOutcome(filePath: note.audioFilePath, progressCallback: onProgress)
         }
 
         stopLeaseHeartbeat()
@@ -740,32 +742,52 @@ private extension TranscriptionService {
             return
         }
 
-        if let result = transcription {
+        if wasTranscriptionCancelled() {
+            requeueNote(note, queuedAt: nowProvider())
+            return
+        }
+
+        switch outcome {
+        case .transcribed(let result):
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             note.recordTranscriptionTelemetry(transcriptionTelemetry)
             note.completeTranscription()
+            note.transcriptionOutcome = .transcribed
             note.clearTransientTranscriptionFlags()
-        } else {
+
+        case .noSpeech:
+            // The whole clip had no speech — finish calmly. This is not an error.
             if !hadExistingTranscript {
                 note.transcription = ""
                 note.lastTranscriptionDuration = 0
                 note.transcriptionModelIdentifier = nil
                 note.clearTranscriptionTelemetrySummary()
             }
-
-            if wasTranscriptionCancelled() {
-                requeueNote(note, queuedAt: nowProvider())
-                return
-            }
-
-            let failureReason: TranscriptionFailureReason = hadExistingTranscript
-                ? .retryPreservedExistingTranscript
-                : .noUsableTranscript
             note.completeTranscription()
+            note.transcriptionOutcome = hadExistingTranscript ? .transcribed : .noSpeech
             note.clearTransientTranscriptionFlags()
-            note.markTranscriptionFailure(transcriptionFailureMessage(for: failureReason))
+
+        case .modelUnavailable, .audioUnavailable, .cancelled:
+            // Nothing to blame the user for: the model isn't loaded yet, the audio
+            // isn't downloaded yet, or it was cancelled. Requeue and let it run again
+            // automatically once the condition clears (e.g. modelLoadedNotification).
+            requeueNote(note, queuedAt: nowProvider())
+
+        case .whisperError(let diagnostic):
+            // A real error survived the retry. Don't pretend it succeeded, and don't
+            // dump jargon on the user — keep the real reason internally for us.
+            if !hadExistingTranscript {
+                note.transcription = ""
+                note.lastTranscriptionDuration = 0
+                note.transcriptionModelIdentifier = nil
+                note.clearTranscriptionTelemetrySummary()
+            }
+            note.completeTranscription()
+            note.transcriptionOutcome = hadExistingTranscript ? .transcribed : .failed
+            note.markTranscriptionFailure(diagnostic ?? "transcription error")
+            note.clearTransientTranscriptionFlags()
         }
     }
 
@@ -822,15 +844,6 @@ private extension TranscriptionService {
     func stopLeaseHeartbeat() {
         leaseHeartbeatTask?.cancel()
         leaseHeartbeatTask = nil
-    }
-
-    func transcriptionFailureMessage(for reason: TranscriptionFailureReason) -> String {
-        switch reason {
-        case .noUsableTranscript:
-            return "The last attempt did not produce a usable transcript. You can retry or choose a different model."
-        case .retryPreservedExistingTranscript:
-            return "The last re-transcription attempt failed. The existing transcript was kept."
-        }
     }
 
     func transcribeWithWhisper(

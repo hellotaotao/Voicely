@@ -278,10 +278,14 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
-    @Test @MainActor func emptyTranscriptionResultStopsQueueAndClearsMetadata() async {
+    @Test @MainActor func blankWhisperOutputRetriesThenMarksFailedAndClearsMetadata() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
-        service.transcribeImpl = { _, _ in "   \n" }
+        var attempts = 0
+        service.transcribeImpl = { _, _ in
+            attempts += 1
+            return "   \n"  // Whisper ran but produced nothing usable → a real error
+        }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
         note.transcriptionOriginDeviceID = "phone"
@@ -292,12 +296,78 @@ struct TranscriptionServiceTests {
         let didStart = await service.requestTranscription(for: note)
 
         #expect(didStart == true)
+        #expect(attempts == 2)  // first try + one automatic retry
         #expect(note.transcription.isEmpty)
         #expect(note.transcriptionState == .completed)
+        #expect(note.transcriptionOutcome == .failed)
         #expect(note.pendingTranscription == false)
         #expect(note.lastTranscriptionDuration == 0)
         #expect(note.transcriptionModelIdentifier == nil)
-        #expect(note.transcriptionLastErrorMessage == "The last attempt did not produce a usable transcript. You can retry or choose a different model.")
+        // Real diagnostic is kept internally for us to investigate — not shown to the user.
+        #expect(note.transcriptionLastErrorMessage == "blank output")
+    }
+
+    @Test @MainActor func realErrorRecoversOnAutomaticRetry() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        var attempts = 0
+        service.transcribeImpl = { _, _ in
+            attempts += 1
+            return attempts == 1 ? .whisperError("transient") : .text("recovered")
+        }
+
+        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        #expect(attempts == 2)
+        #expect(note.transcription == "recovered")
+        #expect(note.transcriptionState == .completed)
+        #expect(note.transcriptionOutcome == .transcribed)
+        #expect(note.transcriptionLastErrorMessage == nil)
+    }
+
+    @Test @MainActor func noSpeechCompletesNoteAsNoSpeechWithoutError() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.transcribeImpl = { _, _ in .noSpeech }
+
+        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        #expect(note.transcription.isEmpty)
+        #expect(note.transcriptionState == .completed)
+        #expect(note.transcriptionOutcome == .noSpeech)
+        #expect(note.pendingTranscription == false)
+        #expect(note.isTranscribing == false)
+        // No speech is a normal outcome, not an error.
+        #expect(note.transcriptionLastErrorMessage == nil)
+    }
+
+    @Test @MainActor func modelUnavailableKeepsNoteQueuedWithoutFailure() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.transcribeImpl = { _, _ in .modelUnavailable }
+
+        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        // Model not ready yet: not a failure — requeue and wait for it to load.
+        #expect(note.transcriptionState == .queued)
+        #expect(note.pendingTranscription == true)
+        #expect(note.transcriptionOutcome == nil)
+        #expect(note.transcriptionLastErrorMessage == nil)
     }
 
 

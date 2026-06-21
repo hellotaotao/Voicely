@@ -23,6 +23,8 @@ struct ContentView: View {
     @State private var didSetupServices = false
     @State private var startRecordingQuickActionID = UUID()
     @State private var togglePauseQuickActionID = UUID()
+    @State private var recordingInterruptionID = UUID()
+    @State private var recordingInterruptionNotice: String?
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
@@ -58,6 +60,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .toggleRecordingPauseQuickAction)) { _ in
             requestTogglePauseFromQuickAction()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .recordingInterruptedBySystem)) { _ in
+            recordingInterruptionID = UUID()
+            recordingInterruptionNotice = "An incoming call or another app interrupted recording. What you recorded so far has been saved. Start a new recording to continue."
+        }
         .onOpenURL { url in
             handleIncomingURL(url)
         }
@@ -85,6 +91,23 @@ struct ContentView: View {
             }
         } message: {
             Text(inboundAudioImportError ?? "")
+        }
+        .alert(
+            "Recording Stopped",
+            isPresented: Binding(
+                get: { recordingInterruptionNotice != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        recordingInterruptionNotice = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                recordingInterruptionNotice = nil
+            }
+        } message: {
+            Text(recordingInterruptionNotice ?? "")
         }
         .overlay {
             if shouldShowFirstLaunchOnboarding {
@@ -314,6 +337,7 @@ struct ContentView: View {
             transcriptionService: transcriptionService,
             startRecordingQuickActionID: startRecordingQuickActionID,
             togglePauseQuickActionID: togglePauseQuickActionID,
+            recordingInterruptionID: recordingInterruptionID,
             onManageModels: {
                 showingSettings = true
             },
@@ -891,6 +915,7 @@ struct RecordingControls: View {
     @ObservedObject var transcriptionService: TranscriptionService
     let startRecordingQuickActionID: UUID
     let togglePauseQuickActionID: UUID
+    let recordingInterruptionID: UUID
     let onManageModels: () -> Void
     let onRecordingComplete: (VoiceNote) -> Void
     @State private var showingModelPicker = false
@@ -1013,6 +1038,9 @@ struct RecordingControls: View {
         }
         .onChange(of: togglePauseQuickActionID) { _, _ in
             togglePauseResumeFromQuickAction()
+        }
+        .onChange(of: recordingInterruptionID) { _, _ in
+            stopRecordingDueToInterruption()
         }
         .onAppear {
             audioService.prewarmRecordingSessionIfPossible()
@@ -1350,6 +1378,19 @@ struct RecordingControls: View {
             return
         }
 
+        finalizeRecording()
+    }
+
+    /// Force-finalizes the active recording without the accidental-stop guard.
+    /// Used when the system interrupts recording (incoming call, another app
+    /// taking the audio session) — an interruption is never accidental and may
+    /// arrive within the first second of recording.
+    private func stopRecordingDueToInterruption() {
+        guard audioService.isRecording else { return }
+        finalizeRecording()
+    }
+
+    private func finalizeRecording() {
         let capturedCoordinator = coordinator
         let recordingNote = currentRecordingNote
         coordinator = nil

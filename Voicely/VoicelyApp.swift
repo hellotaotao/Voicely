@@ -12,6 +12,10 @@ import UserNotifications
 extension Notification.Name {
     static let startRecordingQuickAction = Notification.Name("VoicelyStartRecordingQuickAction")
     static let toggleRecordingPauseQuickAction = Notification.Name("VoicelyToggleRecordingPauseQuickAction")
+    /// Posted when the system interrupts the active recording (incoming call,
+    /// another app taking the audio session). Drives a clean finalize of the
+    /// in-progress recording so the UI never shows a phantom "recording" state.
+    static let recordingInterruptedBySystem = Notification.Name("VoicelyRecordingInterruptedBySystem")
 }
 
 enum QuickAction {

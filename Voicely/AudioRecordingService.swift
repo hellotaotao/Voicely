@@ -83,16 +83,52 @@ class AudioRecordingService: ObservableObject {
 
     #if !os(macOS) || targetEnvironment(macCatalyst)
     private var audioSession = AVAudioSession.sharedInstance()
+    private var interruptionObserver: NSObjectProtocol?
     #endif
 
     // MARK: Init
 
     init() {
         checkPermission()
+        registerForAudioSessionInterruptions()
     }
 
     deinit {
         prewarmTask?.cancel()
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        #endif
+    }
+
+    // MARK: Interruptions
+
+    /// iOS forbids restarting input IO from the background, so a recording
+    /// cannot reliably survive an interruption (incoming call, another app
+    /// grabbing the audio session). Policy: end the recording cleanly and let
+    /// the UI layer finalize it, rather than show a phantom "recording" state.
+    private func registerForAudioSessionInterruptions() {
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: audioSession,
+            queue: .main
+        ) { [weak self] notification in
+            guard AudioInterruptionDecision.shouldEndRecording(userInfo: notification.userInfo) else {
+                return
+            }
+            MainActor.assumeIsolated {
+                self?.handleInterruptionThatEndsRecording()
+            }
+        }
+        #endif
+    }
+
+    private func handleInterruptionThatEndsRecording() {
+        guard isRecording else { return }
+        debugLog("⚠️ [AudioRecordingService] Audio session interrupted — ending recording")
+        NotificationCenter.default.post(name: .recordingInterruptedBySystem, object: nil)
     }
 
     // MARK: Permission

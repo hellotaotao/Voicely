@@ -778,6 +778,9 @@ private extension TranscriptionService {
         case .whisperError(let diagnostic):
             // A real error survived the retry. Don't pretend it succeeded, and don't
             // dump jargon on the user — keep the real reason internally for us.
+            #if DEBUG
+            print("❌ [TranscriptionService] note \(noteID) failed after retry: \(diagnostic ?? "unknown error")")
+            #endif
             if !hadExistingTranscript {
                 note.transcription = ""
                 note.lastTranscriptionDuration = 0

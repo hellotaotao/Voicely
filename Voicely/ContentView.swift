@@ -959,7 +959,7 @@ struct RecordingControls: View {
         guard let selectedModel = modelManager?.selectedModel, !selectedModel.isEmpty else {
             return "Small"
         }
-        return ModelManager.displayName(for: selectedModel)
+        return ModelManager.displayNameWithLanguageTag(for: selectedModel)
     }
 
     private var statusTint: Color {
@@ -1453,7 +1453,7 @@ struct RecordingControls: View {
     }
 
     private func modelPickerButtonTitle(for model: String) -> String {
-        let displayName = ModelManager.displayName(for: model)
+        let displayName = ModelManager.displayNameWithLanguageTag(for: model)
         if modelManager?.selectedModel == model {
             return "✓ \(displayName)"
         }
@@ -1506,7 +1506,7 @@ struct VoiceNoteDetailView: View {
         guard let selectedModel = transcriptionService.modelManager?.selectedModel, !selectedModel.isEmpty else {
             return nil
         }
-        return ModelManager.displayName(for: selectedModel)
+        return ModelManager.displayNameWithLanguageTag(for: selectedModel)
     }
 
     private var isLocallyTranscribing: Bool {

@@ -118,10 +118,13 @@ private struct ModelRecommendationRow: View {
     private var title: String {
         let displayName = ModelManager.displayName(for: model)
         let parts = displayName.split(separator: " ")
-        guard let last = parts.last, isSizeToken(String(last)) else {
-            return displayName
+        let base: String
+        if let last = parts.last, isSizeToken(String(last)) {
+            base = parts.dropLast().joined(separator: " ")
+        } else {
+            base = displayName
         }
-        return parts.dropLast().joined(separator: " ")
+        return ModelManager.isEnglishOnly(model) ? base + ModelManager.englishOnlySuffix : base
     }
 
     private var sizeLabel: String? {

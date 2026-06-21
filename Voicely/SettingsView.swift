@@ -249,7 +249,7 @@ struct SettingsView: View {
                             .tracking(0.9)
                             .foregroundStyle(.secondary)
                             .textCase(.uppercase)
-                        Text(ModelManager.displayName(for: modelManager.selectedModel))
+                        Text(ModelManager.displayNameWithLanguageTag(for: modelManager.selectedModel))
                             .font(.title3.weight(.semibold))
                             .lineLimit(2)
                             .minimumScaleFactor(0.8)
@@ -380,14 +380,14 @@ struct SettingsView: View {
                                     if modelManager.isModelAvailableOffline(model) {
                                         Image(systemName: "checkmark.circle.fill")
                                     }
-                                    Text(ModelManager.displayName(for: model))
+                                    Text(ModelManager.displayNameWithLanguageTag(for: model))
                                 }
                                 .tag(model)
                             }
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Text(ModelManager.displayName(for: modelManager.selectedModel))
+                            Text(ModelManager.displayNameWithLanguageTag(for: modelManager.selectedModel))
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                             Image(systemName: "chevron.up.chevron.down")

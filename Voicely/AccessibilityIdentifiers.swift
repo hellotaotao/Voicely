@@ -45,9 +45,6 @@ enum AccessibilityIdentifiers {
         static let takeOverTranscriptionButton = "TakeOverTranscriptionButton"
         static let transcribeNowButton = "TranscribeNowButton"
         static let cancelTranscriptionButton = "CancelTranscriptionButton"
-        static let recordingControls = "DetailRecordingControls"
-        static let pauseRecordingButton = "DetailPauseRecordingButton"
-        static let stopRecordingButton = "DetailStopRecordingButton"
     }
 
     enum Settings {

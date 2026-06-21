@@ -12,7 +12,6 @@ import UserNotifications
 extension Notification.Name {
     static let startRecordingQuickAction = Notification.Name("VoicelyStartRecordingQuickAction")
     static let toggleRecordingPauseQuickAction = Notification.Name("VoicelyToggleRecordingPauseQuickAction")
-    static let stopRecordingQuickAction = Notification.Name("VoicelyStopRecordingQuickAction")
 }
 
 enum QuickAction {

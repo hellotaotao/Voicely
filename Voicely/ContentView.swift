@@ -23,7 +23,6 @@ struct ContentView: View {
     @State private var didSetupServices = false
     @State private var startRecordingQuickActionID = UUID()
     @State private var togglePauseQuickActionID = UUID()
-    @State private var stopRecordingQuickActionID = UUID()
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
@@ -58,9 +57,6 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleRecordingPauseQuickAction)) { _ in
             requestTogglePauseFromQuickAction()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .stopRecordingQuickAction)) { _ in
-            requestStopRecordingFromQuickAction()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -170,16 +166,23 @@ struct ContentView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .navigationDestination(for: UUID.self) { noteID in
                 if let note = voiceNotes.first(where: { $0.id == noteID }) {
-                    detailView(note, showsInlineRecordingControls: true)
+                    detailView(note)
                 } else {
                     DetailPlaceholderView()
                 }
             }
         }
         .safeAreaInset(edge: .bottom) {
-            recordingControlsBar(opensDetailInCompactStack: true)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+            // One recording bar, pinned to the stack so it floats over both the
+            // list and any pushed detail. On the list it is always available
+            // (idle → start). It only floats into a pushed detail while a
+            // recording is active (pause/stop); once you stop there it
+            // disappears, so a new recording can only be started from the list.
+            if compactNavigationPath.isEmpty || audioService.isRecording {
+                recordingControlsBar(opensDetailInCompactStack: true)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
+            }
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -311,7 +314,6 @@ struct ContentView: View {
             transcriptionService: transcriptionService,
             startRecordingQuickActionID: startRecordingQuickActionID,
             togglePauseQuickActionID: togglePauseQuickActionID,
-            stopRecordingQuickActionID: stopRecordingQuickActionID,
             onManageModels: {
                 showingSettings = true
             },
@@ -487,12 +489,11 @@ struct ContentView: View {
         .background(VoicelyTheme.groupedBackground)
     }
 
-    private func detailView(_ note: VoiceNote, showsInlineRecordingControls: Bool = false) -> some View {
+    private func detailView(_ note: VoiceNote) -> some View {
         VoiceNoteDetailView(
             note: note,
             audioService: audioService,
-            showingSettings: $showingSettings,
-            showsInlineRecordingControls: showsInlineRecordingControls
+            showingSettings: $showingSettings
         )
             .environmentObject(transcriptionService)
     }
@@ -654,10 +655,6 @@ struct ContentView: View {
 
     private func requestTogglePauseFromQuickAction() {
         togglePauseQuickActionID = UUID()
-    }
-
-    private func requestStopRecordingFromQuickAction() {
-        stopRecordingQuickActionID = UUID()
     }
 
     private func deleteNotes(offsets: IndexSet) {
@@ -894,7 +891,6 @@ struct RecordingControls: View {
     @ObservedObject var transcriptionService: TranscriptionService
     let startRecordingQuickActionID: UUID
     let togglePauseQuickActionID: UUID
-    let stopRecordingQuickActionID: UUID
     let onManageModels: () -> Void
     let onRecordingComplete: (VoiceNote) -> Void
     @State private var showingModelPicker = false
@@ -1017,9 +1013,6 @@ struct RecordingControls: View {
         }
         .onChange(of: togglePauseQuickActionID) { _, _ in
             togglePauseResumeFromQuickAction()
-        }
-        .onChange(of: stopRecordingQuickActionID) { _, _ in
-            stopRecordingFromQuickAction()
         }
         .onAppear {
             audioService.prewarmRecordingSessionIfPossible()
@@ -1320,11 +1313,6 @@ struct RecordingControls: View {
         togglePauseResume()
     }
 
-    private func stopRecordingFromQuickAction() {
-        guard audioService.isRecording else { return }
-        stopRecording()
-    }
-
     private func registerLiveActivityControls(coordinator: IncrementalTranscriptionCoordinator? = nil) {
         RecordingControlCommandCenter.shared.setTogglePauseHandler { [audioService] in
             guard audioService.isRecording else { return }
@@ -1466,10 +1454,6 @@ struct VoiceNoteDetailView: View {
     let note: VoiceNote
     @ObservedObject var audioService: AudioRecordingService
     @Binding var showingSettings: Bool
-    /// When true (iPhone full-screen push detail), the live pause/stop controls
-    /// are rendered inside this view because the library's controls are hidden.
-    /// In split layouts (iPad/Mac) the sidebar controls stay visible, so this is false.
-    var showsInlineRecordingControls = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
@@ -1638,21 +1622,6 @@ struct VoiceNoteDetailView: View {
             .frame(maxWidth: .infinity)
         }
         .background(VoicelyTheme.groupedBackground)
-        .safeAreaInset(edge: .bottom) {
-            if showsInlineRecordingControls && isRecordingInProgress {
-                DetailRecordingControlBar(
-                    audioService: audioService,
-                    onTogglePause: {
-                        NotificationCenter.default.post(name: .toggleRecordingPauseQuickAction, object: nil)
-                    },
-                    onStop: {
-                        NotificationCenter.default.post(name: .stopRecordingQuickAction, object: nil)
-                    }
-                )
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-            }
-        }
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.screen)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

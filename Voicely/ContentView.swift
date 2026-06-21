@@ -761,14 +761,6 @@ struct VoiceNoteRow: View {
         note.isTranscribing && note.duration > 0 && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
-    private var lastTranscriptionFailureMessage: String? {
-        guard let message = note.transcriptionLastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !message.isEmpty else {
-            return nil
-        }
-        return message
-    }
-
     private var previewText: String? {
         let trimmed = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
@@ -778,7 +770,8 @@ struct VoiceNoteRow: View {
         if isFinalizingTranscription { return "Finalizing transcription…" }
         if isAwaitingTranscription { return "Queued for transcription." }
         if isRemoteTranscribing { return "Transcribing on another device." }
-        if let lastTranscriptionFailureMessage { return "\(lastTranscriptionFailureMessage) Open to retry." }
+        if note.transcriptionOutcome == .noSpeech { return "No speech detected." }
+        if note.transcriptionOutcome == .failed { return "Couldn't transcribe. Open to try again." }
         return nil
     }
 
@@ -798,11 +791,11 @@ struct VoiceNoteRow: View {
         } else if isRemoteTranscribing {
             return PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
         } else if isPending {
-            let title = lastTranscriptionFailureMessage == nil ? "Transcription pending" : "Retry queued"
-            let variant: PillBadge.Variant = lastTranscriptionFailureMessage == nil ? .warning : .danger
-            return PillBadge(text: title, systemImage: "clock.arrow.circlepath", variant: variant)
-        } else if lastTranscriptionFailureMessage != nil {
-            return PillBadge(text: "Open to retry", systemImage: "wand.and.stars", variant: .danger)
+            return PillBadge(text: "Transcription pending", systemImage: "clock.arrow.circlepath", variant: .warning)
+        } else if note.transcriptionOutcome == .noSpeech {
+            return PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
+        } else if note.transcriptionOutcome == .failed {
+            return PillBadge(text: "Tap to retry", systemImage: "arrow.clockwise", variant: .warning)
         }
         return nil
     }
@@ -1554,7 +1547,8 @@ struct VoiceNoteDetailView: View {
     }
 
     private var shouldShowPrimaryTranscribeActionInBody: Bool {
-        isAwaitingTranscription || shouldShowPendingState || lastTranscriptionFailureMessage != nil
+        isAwaitingTranscription || shouldShowPendingState
+            || note.transcriptionOutcome == .noSpeech || note.transcriptionOutcome == .failed
     }
 
     private var localTranscriptionProgress: Float {
@@ -1585,14 +1579,6 @@ struct VoiceNoteDetailView: View {
                 decoderUnits: transcriptionService.modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
             )
         )
-    }
-
-    private var lastTranscriptionFailureMessage: String? {
-        guard let message = note.transcriptionLastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !message.isEmpty else {
-            return nil
-        }
-        return message
     }
 
     private var usesCompactDetailLayout: Bool {
@@ -2269,20 +2255,10 @@ struct VoiceNoteDetailView: View {
             }
         } else if shouldShowPendingState {
             VStack(alignment: .leading, spacing: 10) {
-                PillBadge(
-                    text: lastTranscriptionFailureMessage == nil ? "Waiting for transcription" : "Retry queued",
-                    systemImage: "clock.arrow.circlepath",
-                    variant: lastTranscriptionFailureMessage == nil ? .warning : .danger
-                )
-                if let lastTranscriptionFailureMessage {
-                    Text(lastTranscriptionFailureMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("This recording is waiting for an eligible device to start transcription.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                PillBadge(text: "Queued for transcription", systemImage: "clock.arrow.circlepath", variant: .warning)
+                Text("This recording is waiting for transcription to start.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Button(action: { requestTranscription() }) {
                     Label("Transcribe Now", systemImage: "wand.and.stars")
                 }
@@ -2291,14 +2267,27 @@ struct VoiceNoteDetailView: View {
                 .foregroundStyle(Color.black)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
             }
-        } else if let lastTranscriptionFailureMessage {
+        } else if note.transcriptionOutcome == .noSpeech {
             VStack(alignment: .leading, spacing: 10) {
-                PillBadge(text: "Transcription needs review", systemImage: "exclamationmark.triangle", variant: .danger)
-                Text(lastTranscriptionFailureMessage)
+                PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
+                Text("This recording is silence or background noise — nothing to transcribe.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Button(action: { requestTranscription() }) {
-                    Label("Transcribe Now", systemImage: "wand.and.stars")
+                    Label("Transcribe again", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.bordered)
+                .tint(VoicelyTheme.accent)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
+            }
+        } else if note.transcriptionOutcome == .failed {
+            VStack(alignment: .leading, spacing: 10) {
+                PillBadge(text: "Couldn't transcribe", systemImage: "arrow.clockwise", variant: .warning)
+                Text("Something went wrong this time. Tap to try again.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button(action: { requestTranscription() }) {
+                    Label("Try again", systemImage: "wand.and.stars")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(VoicelyTheme.accent)

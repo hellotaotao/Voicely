@@ -21,9 +21,38 @@ struct TranscriptionResult {
     let modelIdentifier: String?
 }
 
+/// What a single transcription attempt produced. `.text` carries Whisper's raw
+/// output (still to be finalized); every other case names *why* there is no
+/// text, so callers can react per cause instead of treating all failures alike.
+/// A string literal becomes `.text`, so existing test stubs keep working.
+enum RawTranscription: ExpressibleByStringLiteral {
+    case text(String)
+    case noSpeech
+    case modelUnavailable
+    case audioUnavailable
+    case whisperError(String?)
+    case cancelled
+
+    init(stringLiteral value: String) {
+        self = .text(value)
+    }
+}
+
+/// Outcome of a finalized transcription attempt, handed to the note layer so it
+/// can react per cause (show non-speech verbatim, wait for a model, retry a real
+/// error, ...) instead of collapsing everything into one failure.
+enum TranscriptionOutcome {
+    case transcribed(TranscriptionResult)
+    case noSpeech
+    case modelUnavailable
+    case audioUnavailable
+    case whisperError(String?)
+    case cancelled
+}
+
 @MainActor
 class TranscriptionService: ObservableObject {
-    typealias TranscribeImpl = (String, @escaping (Float) -> Void) async -> String?
+    typealias TranscribeImpl = (String, @escaping (Float) -> Void) async -> RawTranscription
 
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
@@ -34,7 +63,7 @@ class TranscriptionService: ObservableObject {
     @Published private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot = .inactive()
 
     var modelManager: ModelManager?
-    var transcribeImpl: TranscribeImpl = { _, _ in nil }
+    var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil) }
     var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
     var nowProvider: () -> Date = { Date() }
     var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
@@ -46,7 +75,7 @@ class TranscriptionService: ObservableObject {
 
     private static let ownershipMigrationDefaultsKey = "VoicelyOwnershipMigrationV1"
 
-    private var currentTranscriptionTask: Task<String?, Never>?
+    private var currentTranscriptionTask: Task<RawTranscription?, Never>?
     private var cancelRequested = false
     private var lastCancellationHandled = false
     private var progressSmoothingTask: Task<Void, Never>?
@@ -65,7 +94,8 @@ class TranscriptionService: ObservableObject {
     init(modelManager: ModelManager? = nil) {
         self.modelManager = modelManager
         self.transcribeImpl = { [weak self] filePath, progressCallback in
-            await self?.transcribeWithWhisper(
+            guard let self else { return .cancelled }
+            return await self.transcribeWithWhisper(
                 filePath: filePath,
                 progressCallback: progressCallback
             )
@@ -323,10 +353,12 @@ class TranscriptionService: ObservableObject {
         }
     }
 
-    func transcribeAudio(
+    /// Runs one transcription attempt and reports *why* there is no transcript, so
+    /// callers can react per cause instead of treating every empty result the same.
+    func transcribeAudioOutcome(
         filePath: String,
         progressCallback: @escaping (Float) -> Void = { _ in }
-    ) async -> TranscriptionResult? {
+    ) async -> TranscriptionOutcome {
         updateEngineStatus()
 
         while isTranscribing {
@@ -337,7 +369,7 @@ class TranscriptionService: ObservableObject {
         if cancelRequested {
             cancelRequested = false
             lastCancellationHandled = true
-            return nil
+            return .cancelled
         }
 
         isTranscribing = true
@@ -353,7 +385,7 @@ class TranscriptionService: ObservableObject {
         }
 
         guard isWhisperLoaded else {
-            return nil
+            return .modelUnavailable
         }
 
         await beginTranscriptionTelemetry(filePath: filePath)
@@ -363,29 +395,53 @@ class TranscriptionService: ObservableObject {
         }
         currentTranscriptionTask = task
 
-        guard let rawText = await task.value else {
-            return nil
+        guard let raw = await task.value else {
+            return .cancelled
         }
 
-        guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(rawText) else {
-            return nil
+        switch raw {
+        case .text(let rawText):
+            if cancelRequested || Task.isCancelled {
+                cancelRequested = false
+                lastCancellationHandled = true
+                return .cancelled
+            }
+            guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(rawText) else {
+                // Whisper ran but produced nothing usable. Treat it as a real error
+                // to surface for diagnosis — not as a calm "no speech".
+                return .whisperError("blank output")
+            }
+            let elapsed = Date().timeIntervalSince(startTime)
+            let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
+            return .transcribed(TranscriptionResult(
+                text: finalizedTranscript.text,
+                duration: elapsed,
+                modelIdentifier: modelIdentifier
+            ))
+        case .noSpeech:
+            return .noSpeech
+        case .modelUnavailable:
+            return .modelUnavailable
+        case .audioUnavailable:
+            return .audioUnavailable
+        case .whisperError(let diagnostic):
+            return .whisperError(diagnostic)
+        case .cancelled:
+            return .cancelled
         }
+    }
 
-        let text = finalizedTranscript.text
-
-        if cancelRequested || Task.isCancelled {
-            cancelRequested = false
-            lastCancellationHandled = true
-            return nil
+    func transcribeAudio(
+        filePath: String,
+        progressCallback: @escaping (Float) -> Void = { _ in }
+    ) async -> TranscriptionResult? {
+        if case .transcribed(let result) = await transcribeAudioOutcome(
+            filePath: filePath,
+            progressCallback: progressCallback
+        ) {
+            return result
         }
-
-        let elapsed = Date().timeIntervalSince(startTime)
-        let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
-        return TranscriptionResult(
-            text: text,
-            duration: elapsed,
-            modelIdentifier: modelIdentifier
-        )
+        return nil
     }
 
     func cancelTranscription() {
@@ -780,16 +836,16 @@ private extension TranscriptionService {
     func transcribeWithWhisper(
         filePath: String,
         progressCallback: @escaping (Float) -> Void
-    ) async -> String? {
+    ) async -> RawTranscription {
         guard let modelManager,
               let whisperKit = modelManager.getWhisperKit() else {
             print("WhisperKit not available")
             currentEngine = .notAvailable
-            return nil
+            return .modelUnavailable
         }
 
         if cancelRequested || Task.isCancelled {
-            return nil
+            return .cancelled
         }
 
         do {
@@ -798,7 +854,7 @@ private extension TranscriptionService {
 
             guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
                 print("Failed to prepare audio file for transcription: \(filePath)")
-                return nil
+                return .audioUnavailable
             }
 
 #if DEBUG
@@ -819,7 +875,7 @@ private extension TranscriptionService {
             guard containsProbableSpeech else {
                 print("Skipping transcription because no probable speech was detected in audio file: \(filePath)")
                 updateProgressOnMain(1.0)
-                return nil
+                return .noSpeech
             }
 
             whisperKit.transcriptionStateCallback = { state in
@@ -910,18 +966,18 @@ private extension TranscriptionService {
             updateProgressOnMain(1.0)
 
             if cancelRequested || Task.isCancelled {
-                return nil
+                return .cancelled
             }
 
             guard let result = transcriptionResults.first else {
-                return nil
+                return .whisperError("empty result")
             }
 
-            return LocalTranscriptFinalizer.finalizedText(result.text)
+            return .text(result.text)
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
-            return nil
+            return .whisperError("WhisperKit error: \(error.localizedDescription)")
         }
     }
 

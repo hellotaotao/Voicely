@@ -84,7 +84,7 @@ struct TranscriptionServiceTests {
         #expect(result?.text == "hello")
     }
 
-    @Test @MainActor func transcribeAudioReturnsBlankAudioForOnlyNoSpeechMarkers() async {
+    @Test @MainActor func transcribeAudioKeepsNonSpeechMarkersVerbatim() async {
         let service = makeService(deviceID: "device-a")
         service.transcribeImpl = { _, _ in
             "[Silence]\n[BLANK_AUDIO]\n(humming)"
@@ -92,7 +92,8 @@ struct TranscriptionServiceTests {
 
         let result = await service.transcribeAudio(filePath: "file.m4a")
 
-        #expect(result?.text == "[BLANK_AUDIO]")
+        // 整段非语音:如实保留 Whisper 原文,不抹成单一 [BLANK_AUDIO]。
+        #expect(result?.text == "[Silence]\n[BLANK_AUDIO]\n(humming)")
     }
 
     @Test @MainActor func transcribeAudioReturnsNilWhenModelNotLoaded() async {

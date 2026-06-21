@@ -21,7 +21,7 @@ struct VoicelyTests {
         service.transcribeImpl = { _, _ in
             for _ in 0..<10 {
                 if Task.isCancelled {
-                    return nil
+                    return .cancelled
                 }
                 try? await Task.sleep(nanoseconds: 20_000_000)
             }

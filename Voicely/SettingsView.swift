@@ -695,6 +695,8 @@ private struct ModelQuickPickerRow: View {
         if let symbol = indicator.symbolName {
             Image(systemName: symbol)
                 .foregroundStyle(iconColor)
+                // The filled dot reads heavier than the hollow-ring glyphs; shrink it ~30% to balance.
+                .scaleEffect(indicator == .downloaded ? 0.7 : 1.0)
         } else {
             // Neither downloaded nor selected: no circle, just a hidden placeholder to keep alignment
             Image(systemName: "circle")

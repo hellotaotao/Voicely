@@ -34,7 +34,7 @@ struct ModelSupportPolicyTests {
         #expect(!ModelManager.isEnglishOnly("openai_whisper-large-v3_turbo_954MB"))
     }
 
-    // MARK: - isUnsupportedModel (从模型列表移除)
+    // MARK: - isUnsupportedModel (removed from the model list)
 
     @Test func distilModelsAreUnsupported() {
         #expect(ModelManager.isUnsupportedModel("distil-whisper_distil-large-v3"))

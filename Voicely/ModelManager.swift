@@ -672,30 +672,30 @@ class ModelManager: ObservableObject {
         return tokens.joined(separator: " ")
     }
 
-    // MARK: - English-only model policy (见 todo.md)
+    // MARK: - English-only model policy (see todo.md)
 
-    /// 用户可见的 English-only 标注后缀。
+    /// User-facing suffix appended to English-only model names.
     nonisolated static let englishOnlySuffix = " (English Only)"
 
-    /// 是否为仅支持英文的模型(distil 蒸馏系列与 .en 后缀系列)。
-    /// 用 contains(".en") 而非 hasSuffix——量化变体形如 small.en_217MB。
+    /// Whether the model is English-only (the distil family and the .en suffix family).
+    /// Uses contains(".en") rather than hasSuffix — quantized variants look like small.en_217MB.
     nonisolated static func isEnglishOnly(_ model: String) -> Bool {
         let lower = model.lowercased()
         return lower.contains("distil") || lower.contains(".en")
     }
 
-    /// 是否应从模型列表中移除。
+    /// Whether the model should be hidden from the model list.
     ///
-    /// - distil:体积大却仅英文,能跑它的设备直接用 large-v3 多语言更好。
-    /// - medium.en:English-only 里最大,相对多语言英语优势不显著,性价比低。
+    /// - distil: large but English-only; a device that can run it is better served by multilingual large-v3.
+    /// - medium.en: the largest English-only model, with a negligible English edge over multilingual — poor value.
     ///
-    /// 保留的 English-only 仅剩 tiny.en / base.en / small.en,会被加上标注。
+    /// The only English-only models kept are tiny.en / base.en / small.en, which get tagged.
     nonisolated static func isUnsupportedModel(_ model: String) -> Bool {
         let lower = model.lowercased()
         return lower.contains("distil") || lower.contains("medium.en")
     }
 
-    /// 显示名;English-only 模型追加标注,供列表 UI 直接使用。
+    /// Display name with an English-only tag appended, for direct use in list UI.
     nonisolated static func displayNameWithLanguageTag(for model: String) -> String {
         let base = displayName(for: model)
         return isEnglishOnly(model) ? base + englishOnlySuffix : base

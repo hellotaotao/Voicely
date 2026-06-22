@@ -373,40 +373,7 @@ struct SettingsView: View {
                         .font(.subheadline)
                         .fixedSize()
                     Spacer(minLength: 12)
-                    Menu {
-                        Picker("", selection: $modelManager.selectedModel) {
-                            ForEach(modelManager.availableModels, id: \.self) { model in
-                                HStack {
-                                    if modelManager.isModelAvailableOffline(model) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                    }
-                                    Text(ModelManager.displayNameWithLanguageTag(for: model))
-                                }
-                                .tag(model)
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(ModelManager.displayNameWithLanguageTag(for: modelManager.selectedModel))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .imageScale(.small)
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(VoicelyTheme.accent)
-                    }
-                    .accessibilityIdentifier(AccessibilityIdentifiers.Settings.modelPicker)
-                    .onChange(of: modelManager.selectedModel) { _, newValue in
-                        let nextState = ModelManager.selectionStateAfterPickingModel(
-                            newValue,
-                            loadedModelIdentifier: modelManager.loadedModelIdentifierInMemory
-                        )
-                        if modelManager.modelState != nextState {
-                            modelManager.modelState = nextState
-                        }
-                        modelManager.errorMessage = nil
-                    }
+                    ModelQuickPicker(modelManager: modelManager)
                 }
             }
         }
@@ -633,6 +600,114 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+        }
+    }
+}
+
+// MARK: - Model Quick Picker (custom dropdown with a single-column status icon)
+
+/// Model quick-picker that replaces the system Menu in Settings.
+/// One left column conveys both download and selection state, see ModelSelectionIndicator.
+private struct ModelQuickPicker: View {
+    @ObservedObject var modelManager: ModelManager
+    @State private var isExpanded = false
+
+    var body: some View {
+        Button {
+            isExpanded = true
+        } label: {
+            HStack(spacing: 4) {
+                Text(ModelManager.displayNameWithLanguageTag(for: modelManager.selectedModel))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.up.chevron.down")
+                    .imageScale(.small)
+            }
+            .font(.subheadline)
+            .foregroundStyle(VoicelyTheme.accent)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Settings.modelPicker)
+        .popover(isPresented: $isExpanded) {
+            modelList
+                .presentationCompactAdaptation(.popover)
+        }
+        .onChange(of: modelManager.selectedModel) { _, newValue in
+            let nextState = ModelManager.selectionStateAfterPickingModel(
+                newValue,
+                loadedModelIdentifier: modelManager.loadedModelIdentifierInMemory
+            )
+            if modelManager.modelState != nextState {
+                modelManager.modelState = nextState
+            }
+            modelManager.errorMessage = nil
+        }
+    }
+
+    private var modelList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(modelManager.availableModels, id: \.self) { model in
+                    Button {
+                        if modelManager.selectedModel != model {
+                            modelManager.selectedModel = model
+                        }
+                        isExpanded = false
+                    } label: {
+                        ModelQuickPickerRow(
+                            title: ModelManager.displayNameWithLanguageTag(for: model),
+                            indicator: ModelSelectionIndicator(
+                                isDownloaded: modelManager.isModelAvailableOffline(model),
+                                isSelected: modelManager.selectedModel == model
+                            )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .frame(minWidth: 280, maxHeight: 420)
+    }
+}
+
+/// A row in the quick-picker dropdown: single-column status icon + model name.
+private struct ModelQuickPickerRow: View {
+    let title: String
+    let indicator: ModelSelectionIndicator
+
+    var body: some View {
+        HStack(spacing: 10) {
+            indicatorIcon
+                .frame(width: 22)
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var indicatorIcon: some View {
+        if let symbol = indicator.symbolName {
+            Image(systemName: symbol)
+                .foregroundStyle(iconColor)
+        } else {
+            // Neither downloaded nor selected: no circle, just a hidden placeholder to keep alignment
+            Image(systemName: "circle")
+                .hidden()
+        }
+    }
+
+    private var iconColor: Color {
+        switch indicator {
+        case .downloadedSelected: return .green
+        case .downloaded: return .blue
+        case .selectedNotDownloaded: return .orange
+        case .hidden: return .clear
         }
     }
 }

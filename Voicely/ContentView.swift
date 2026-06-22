@@ -11,6 +11,7 @@ import os
 import SwiftData
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -87,10 +88,8 @@ struct ContentView: View {
         .onOpenURL { url in
             handleIncomingURL(url)
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            handleDroppedAudioURLs(urls)
-        } isTargeted: { targeted in
-            isDropTargeted = targeted
+        .onDrop(of: [.audio], isTargeted: $isDropTargeted) { providers in
+            handleDroppedProviders(providers)
         }
         .overlay {
             if isDropTargeted {
@@ -681,6 +680,14 @@ struct ContentView: View {
 
             // Copy only to the non-synced working copy — never into the iCloud store.
             let workingCopy = try segmentProgressStore.importWorkingCopy(from: url, for: note.id)
+            // Pre-flight: if AVFoundation can't open it (unsupported codec such
+            // as OGG/Opus, or a corrupt file), fail fast with a clear message
+            // instead of creating a note that will just end up "failed".
+            guard SegmentedAudioTranscriber.readAudioInfo(workingCopy) != nil else {
+                segmentProgressStore.removeWorkingCopy(for: note.id)
+                inboundAudioImportError = "Couldn't read this audio file — its format or encoding may be unsupported."
+                return
+            }
             note.duration = await audioDuration(for: workingCopy)
 
             modelContext.insert(note)
@@ -698,23 +705,36 @@ struct ContentView: View {
     }
 
     /// Imports audio files dropped onto the window. Separate from `.onOpenURL`
-    /// (Dock icon / Finder "open with" / Share) — dropping onto a view needs its
-    /// own drop destination. Returns true when at least one supported audio file
-    /// was accepted.
-    @discardableResult
-    private func handleDroppedAudioURLs(_ urls: [URL]) -> Bool {
-        let audioURLs = Self.supportedAudioURLs(from: urls)
-        guard !audioURLs.isEmpty else { return false }
-        Task { @MainActor in
-            for url in audioURLs {
-                await importIncomingAudio(from: url)
+    /// (Dock icon / Finder "open with" / Share). Uses `loadFileRepresentation`
+    /// because dragging files from Finder provides file item-providers, which
+    /// `.dropDestination(for: URL.self)` does NOT accept (that only handles web
+    /// URLs). `loadFileRepresentation` hands us a sandbox-readable temp copy.
+    /// Returns true when at least one audio provider was accepted.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        let audioProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.audio.identifier)
+        }
+        guard !audioProviders.isEmpty else { return false }
+        for provider in audioProviders {
+            provider.loadFileRepresentation(forTypeIdentifier: UTType.audio.identifier) { tempURL, _ in
+                guard let tempURL else { return }
+                // The system temp copy is valid only inside this closure — move
+                // it somewhere stable before importing on the main actor.
+                let ext = tempURL.pathExtension.isEmpty ? "m4a" : tempURL.pathExtension
+                let stableURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("dropped_\(UUID().uuidString).\(ext)")
+                do {
+                    try FileManager.default.copyItem(at: tempURL, to: stableURL)
+                } catch {
+                    return
+                }
+                Task { @MainActor in
+                    await importIncomingAudio(from: stableURL)
+                    try? FileManager.default.removeItem(at: stableURL)
+                }
             }
         }
         return true
-    }
-
-    static func supportedAudioURLs(from urls: [URL]) -> [URL] {
-        urls.filter { CloudStorageManager.isSupportedImportedAudioURL($0) }
     }
 
     /// Runs an import transcription inside a background-task window so a

@@ -4,23 +4,21 @@ import Testing
 
 @Suite @MainActor
 struct ContentViewDropTests {
-    @Test func keepsOnlySupportedAudioURLs() {
-        let m4a = URL(fileURLWithPath: "/tmp/a.m4a")
-        let mp3 = URL(fileURLWithPath: "/tmp/b.mp3")
-        let wav = URL(fileURLWithPath: "/tmp/c.wav")
-        let txt = URL(fileURLWithPath: "/tmp/d.txt")
-        let png = URL(fileURLWithPath: "/tmp/e.png")
-
-        let result = ContentView.supportedAudioURLs(from: [m4a, txt, mp3, png, wav])
-
-        #expect(result == [m4a, mp3, wav])
+    @Test func acceptsCommonAudioExtensions() {
+        for name in ["a.m4a", "b.m4b", "c.mp3", "d.wav", "e.wave", "f.aac", "g.aif", "h.aiff", "i.caf"] {
+            #expect(
+                CloudStorageManager.isSupportedImportedAudioURL(URL(fileURLWithPath: "/tmp/\(name)")),
+                "expected \(name) to be accepted"
+            )
+        }
     }
 
-    @Test func emptyWhenNoSupportedAudio() {
-        let result = ContentView.supportedAudioURLs(from: [
-            URL(fileURLWithPath: "/tmp/x.txt"),
-            URL(fileURLWithPath: "/tmp/y.pdf")
-        ])
-        #expect(result.isEmpty)
+    @Test func rejectsNonAudio() {
+        for name in ["x.txt", "y.pdf", "z.png", "w.mov"] {
+            #expect(
+                !CloudStorageManager.isSupportedImportedAudioURL(URL(fileURLWithPath: "/tmp/\(name)")),
+                "expected \(name) to be rejected"
+            )
+        }
     }
 }

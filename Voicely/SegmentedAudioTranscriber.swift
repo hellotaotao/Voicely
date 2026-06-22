@@ -70,6 +70,11 @@ final class SegmentedAudioTranscriber {
             leaseExpiresAt: now.addingTimeInterval(transcriptionService.leaseDuration))
         note.clearTransientTranscriptionFlags()
 
+        // Surface as locally transcribing so the detail view shows a
+        // "Transcribing…" state and progress, like the in-process path.
+        transcriptionService.beginExternalTranscription(noteID: note.id)
+        defer { transcriptionService.endExternalTranscription(noteID: note.id) }
+
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
             let outcome = await transcribeSegmentOutcome(sourceURL)
             finalizeSinglePass(note: note, outcome: outcome)
@@ -133,6 +138,8 @@ final class SegmentedAudioTranscriber {
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         var producedAnyText = !pieces.isEmpty
         var segmentIndex = 0
+        var lastModelIdentifier: String?
+        var accumulatedDuration: TimeInterval = 0
 
         while start < info.totalFrames {
             if shouldStopForBackground() { return }   // sidecar already persisted; resume later
@@ -176,6 +183,8 @@ final class SegmentedAudioTranscriber {
                     pieces.append(text)
                 }
                 producedAnyText = true
+                lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
+                accumulatedDuration += result.duration
             case .noSpeech:
                 break  // silence in this slice — contributes nothing, not an error
             case .whisperError, .modelUnavailable, .audioUnavailable, .cancelled:
@@ -188,9 +197,12 @@ final class SegmentedAudioTranscriber {
                                      accumulatedText: pieces.joined(separator: "\n"),
                                      failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
+            transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
 
         note.transcription = pieces.joined(separator: "\n")
+        note.transcriptionModelIdentifier = lastModelIdentifier
+        note.lastTranscriptionDuration = accumulatedDuration
         note.completeTranscription()
         if !failedRanges.isEmpty {
             note.transcriptionOutcome = .failed

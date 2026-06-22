@@ -9,6 +9,11 @@ actor Counter {
     func incrementAndGet() -> Int { value += 1; return value }
 }
 
+actor ActiveProbe {
+    private(set) var sawActive = false
+    func record(_ active: Bool) { if active { sawActive = true } }
+}
+
 @Suite(.serialized)
 struct SegmentedAudioTranscriberTests {
     // MARK: Task 3 — short single pass
@@ -101,6 +106,53 @@ struct SegmentedAudioTranscriberTests {
         #expect(note.transcription.contains("transcription unavailable"))
         #expect(note.transcription.hasPrefix("ok"))
         #expect(note.transcription.hasSuffix("ok"))
+    }
+
+    @Test @MainActor func segmentedRunRecordsModelIdentifierAndDuration() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in
+            .transcribed(.init(text: "x", duration: 2, modelIdentifier: "openai_whisper-small"))
+        }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcriptionModelIdentifier == "openai_whisper-small")
+        #expect(note.lastTranscriptionDuration > 0)
+    }
+
+    @Test @MainActor func surfacesAsLocallyTranscribingDuringRun() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let service = TranscriptionService()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        let probe = ActiveProbe()
+        transcriber.transcribeSegmentOutcome = { _ in
+            await probe.record(service.activeNoteID != nil)
+            return .transcribed(.init(text: "x", duration: 1, modelIdentifier: "m"))
+        }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(await probe.sawActive)            // shown as transcribing while running
+        #expect(service.activeNoteID == nil)      // cleared after the run (defer)
+        #expect(service.progressByNoteID[note.id] == nil)
+    }
+
+    @Test @MainActor func externalTranscriptionMarkersSetAndClear() {
+        let service = TranscriptionService()
+        let id = UUID()
+        service.beginExternalTranscription(noteID: id)
+        #expect(service.activeNoteID == id)
+        #expect(service.progressByNoteID[id] == 0)
+        service.reportExternalProgress(0.5, for: id)
+        #expect(service.progressByNoteID[id] == 0.5)
+        service.endExternalTranscription(noteID: id)
+        #expect(service.activeNoteID == nil)
+        #expect(service.progressByNoteID[id] == nil)
     }
 
     @Test @MainActor func allNoSpeechYieldsNoSpeechOutcome() async throws {

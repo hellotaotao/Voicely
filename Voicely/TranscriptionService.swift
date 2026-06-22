@@ -287,6 +287,23 @@ class TranscriptionService: ObservableObject {
         activeNoteID == note.id
     }
 
+    /// Surfaces a note transcribed by an external coordinator
+    /// (SegmentedAudioTranscriber) as locally transcribing, so the detail view
+    /// shows the same "Transcribing…" state and progress as the in-process path.
+    func beginExternalTranscription(noteID: UUID) {
+        activeNoteID = noteID
+        progressByNoteID[noteID] = 0
+    }
+
+    func reportExternalProgress(_ progress: Float, for noteID: UUID) {
+        progressByNoteID[noteID] = min(1, max(0, progress))
+    }
+
+    func endExternalTranscription(noteID: UUID) {
+        if activeNoteID == noteID { activeNoteID = nil }
+        progressByNoteID.removeValue(forKey: noteID)
+    }
+
     func isTranscribingOnAnotherDevice(_ note: VoiceNote, now: Date? = nil) -> Bool {
         guard note.transcriptionState == .claimed else {
             return false

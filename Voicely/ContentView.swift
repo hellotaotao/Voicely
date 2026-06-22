@@ -7,11 +7,14 @@
 
 import AVFoundation
 import CoreML
+import os
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \VoiceNote.timestamp, order: .reverse) private var voiceNotes: [VoiceNote]
     @StateObject private var audioService: AudioRecordingService
     @StateObject private var modelManager: ModelManager
@@ -29,6 +32,7 @@ struct ContentView: View {
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
+    @State private var segmentProgressStore = SegmentProgressStore()
 
     init() {
         let audioService = AudioRecordingService()
@@ -81,6 +85,10 @@ struct ContentView: View {
         }
         .onOpenURL { url in
             handleIncomingURL(url)
+        }
+        .onChange(of: scenePhase) { _, newValue in
+            guard newValue == .active, !AppRuntime.isRunningTests else { return }
+            resumePendingImports()
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
@@ -610,7 +618,9 @@ struct ContentView: View {
         }
 
         let eligibleNotes = voiceNotes.filter { note in
-            !note.isTranscribing
+            // Imported notes (empty audioFilePath) are handled exclusively by
+            // SegmentedAudioTranscriber; the whole-file path can't read them.
+            !note.isTranscribing && !note.audioFilePath.isEmpty
         }
 
         guard !eligibleNotes.isEmpty else {
@@ -642,36 +652,63 @@ struct ContentView: View {
 
     private func importIncomingAudio(from url: URL) async {
         transcriptionService.setModelManager(modelManager)
+        guard CloudStorageManager.isSupportedImportedAudioURL(url) else {
+            inboundAudioImportError = "Unsupported audio file type."
+            return
+        }
 
         do {
-            let importedAudio = try cloudManager.importAudioFile(from: url)
-            let note = VoiceNote(
-                title: importedAudio.title,
-                audioFilePath: importedAudio.filePath
-            )
-            // The imported file name is a meaningful, user-facing title; keep it
-            // rather than overwriting it with an auto-derived transcript title.
+            let title = url.deletingPathExtension().lastPathComponent
+            // Imported audio is transcribed to text only: keep the file name as
+            // the title, leave audioFilePath empty (no player, no iCloud copy).
+            let note = VoiceNote(title: title.isEmpty ? "Imported Audio" : title, audioFilePath: "")
             note.titleWasManuallyEdited = true
-            note.duration = await audioDuration(for: importedAudio.fileURL)
 
-            let isModelLoaded = transcriptionService.isWhisperAvailable()
-            transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
+            // Copy only to the non-synced working copy — never into the iCloud store.
+            let workingCopy = try segmentProgressStore.importWorkingCopy(from: url, for: note.id)
+            note.duration = await audioDuration(for: workingCopy)
 
             modelContext.insert(note)
             try modelContext.save()
             selectedNoteID = note.id
 
-            if isModelLoaded {
-                await transcriptionService.processPendingTranscriptions(notes: [note])
-                return
+            if !transcriptionService.isWhisperAvailable() {
+                _ = await transcriptionService.loadWhisperModel()
             }
-
-            let didLoadModel = await transcriptionService.loadWhisperModel()
-            if didLoadModel {
-                await transcriptionService.processPendingTranscriptions(notes: [note])
-            }
+            guard transcriptionService.isWhisperAvailable() else { return }
+            await runImportTranscription { await $0.transcribe(note: note, sourceURL: workingCopy) }
         } catch {
             inboundAudioImportError = error.localizedDescription
+        }
+    }
+
+    /// Runs an import transcription inside a background-task window so a
+    /// suspended app can stop cleanly at a segment boundary (sidecar persists).
+    @MainActor
+    private func runImportTranscription(_ work: (SegmentedAudioTranscriber) async -> Void) async {
+        let transcriber = SegmentedAudioTranscriber(
+            transcriptionService: transcriptionService,
+            progressStore: segmentProgressStore
+        )
+        let expired = OSAllocatedUnfairLock(initialState: false)
+        transcriber.shouldStopForBackground = { expired.withLock { $0 } }
+        let taskID = UIApplication.shared.beginBackgroundTask {
+            expired.withLock { $0 = true }
+        }
+        await work(transcriber)
+        if taskID != .invalid { UIApplication.shared.endBackgroundTask(taskID) }
+    }
+
+    /// On returning to the foreground, resume any imported transcription that
+    /// was interrupted while a sidecar + working copy still exist.
+    private func resumePendingImports() {
+        guard !segmentProgressStore.listPendingNoteIDs().isEmpty else { return }
+        Task { @MainActor in
+            if !transcriptionService.isWhisperAvailable() {
+                _ = await transcriptionService.loadWhisperModel()
+            }
+            guard transcriptionService.isWhisperAvailable() else { return }
+            await runImportTranscription { await $0.resumePending(notes: voiceNotes) }
         }
     }
 

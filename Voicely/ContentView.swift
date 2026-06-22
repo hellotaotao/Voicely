@@ -690,6 +690,10 @@ struct ContentView: View {
             transcriptionService: transcriptionService,
             progressStore: segmentProgressStore
         )
+        #if targetEnvironment(macCatalyst)
+        // Mac Catalyst apps aren't suspended — no background assertion needed.
+        await work(transcriber)
+        #else
         let expired = OSAllocatedUnfairLock(initialState: false)
         transcriber.shouldStopForBackground = { expired.withLock { $0 } }
         let taskID = UIApplication.shared.beginBackgroundTask {
@@ -697,6 +701,7 @@ struct ContentView: View {
         }
         await work(transcriber)
         if taskID != .invalid { UIApplication.shared.endBackgroundTask(taskID) }
+        #endif
     }
 
     /// On returning to the foreground, resume any imported transcription that

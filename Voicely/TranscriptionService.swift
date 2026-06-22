@@ -463,6 +463,14 @@ class TranscriptionService: ObservableObject {
         lastCancellationHandled
     }
 
+    /// Drops a stale cancellation flag left by an unrelated, already-finished
+    /// transcription so it can't turn the next caller's first segment into a
+    /// spurious `.cancelled`. Safe only when no transcription is active.
+    func clearPendingCancellation() {
+        cancelRequested = false
+        lastCancellationHandled = false
+    }
+
     nonisolated static func estimatedAudioDuration(for filePath: String) async -> TimeInterval? {
         let url = URL(fileURLWithPath: filePath)
 

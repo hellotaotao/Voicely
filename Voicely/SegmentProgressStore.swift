@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct SegmentFailureRange: Codable, Equatable {
     var startFrame: Int64
@@ -19,6 +20,7 @@ struct SegmentedTranscriptionProgress: Codable, Equatable {
 final class SegmentProgressStore {
     let directory: URL
     private let fileManager = FileManager.default
+    private let inProgressNoteIDs = OSAllocatedUnfairLock(initialState: Set<UUID>())
 
     init(rootDirectory: URL? = nil) {
         let base = rootDirectory ?? FileManager.default
@@ -104,5 +106,20 @@ final class SegmentProgressStore {
         if let url = existingWorkingCopyURL(for: id) {
             try? fileManager.removeItem(at: url)
         }
+    }
+
+    /// Marks a note as actively transcribing. Returns false if a run is already
+    /// in progress for it, so callers can avoid starting a duplicate (e.g. an
+    /// import racing a scene-activation resume).
+    func beginTranscribing(_ id: UUID) -> Bool {
+        inProgressNoteIDs.withLock { ids in
+            guard !ids.contains(id) else { return false }
+            ids.insert(id)
+            return true
+        }
+    }
+
+    func endTranscribing(_ id: UUID) {
+        inProgressNoteIDs.withLock { _ = $0.remove(id) }
     }
 }

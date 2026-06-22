@@ -46,6 +46,13 @@ final class SegmentedAudioTranscriber {
     }
 
     func transcribe(note: VoiceNote, sourceURL: URL) async {
+        // Prevent two concurrent runs over the same note (an import racing a
+        // scene-activation resume, or repeated resumes corrupting the sidecar).
+        guard progressStore.beginTranscribing(note.id) else { return }
+        defer { progressStore.endTranscribing(note.id) }
+        // Drop a stale cancellation flag left by a prior, unrelated transcription.
+        transcriptionService.clearPendingCancellation()
+
         guard let info = Self.readAudioInfo(sourceURL) else {
             note.completeTranscription()
             note.transcriptionOutcome = .failed
@@ -144,7 +151,14 @@ final class SegmentedAudioTranscriber {
                 IncrementalTranscriptionCoordinator.extractSegment(
                     fileURL: sourceURL, from: start, to: end, segmentIndex: captured)
             }).value else {
+                // Couldn't read this slice (e.g. an unsupported container) — record
+                // it as failed instead of silently finishing as noSpeech.
+                failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
+                pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
                 start = end
+                progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
+                                         accumulatedText: pieces.joined(separator: "\n"),
+                                         failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
                 continue
             }
 

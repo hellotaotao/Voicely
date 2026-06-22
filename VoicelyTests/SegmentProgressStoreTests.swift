@@ -55,4 +55,13 @@ struct SegmentProgressStoreTests {
         store.removeWorkingCopy(for: id)
         #expect(store.existingWorkingCopyURL(for: id) == nil)
     }
+
+    @Test func beginTranscribingIsExclusivePerNote() {
+        let store = makeStore()
+        let id = UUID()
+        #expect(store.beginTranscribing(id) == true)
+        #expect(store.beginTranscribing(id) == false)   // already in progress
+        store.endTranscribing(id)
+        #expect(store.beginTranscribing(id) == true)     // freed, can start again
+    }
 }

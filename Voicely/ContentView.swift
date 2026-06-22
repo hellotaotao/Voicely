@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
     @State private var segmentProgressStore = SegmentProgressStore()
+    @State private var isDropTargeted = false
 
     init() {
         let audioService = AudioRecordingService()
@@ -85,6 +86,20 @@ struct ContentView: View {
         }
         .onOpenURL { url in
             handleIncomingURL(url)
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            handleDroppedAudioURLs(urls)
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(VoicelyTheme.accent, lineWidth: 3)
+                    .padding(6)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
         }
         .onChange(of: scenePhase) { _, newValue in
             guard newValue == .active, !AppRuntime.isRunningTests else { return }
@@ -680,6 +695,26 @@ struct ContentView: View {
         } catch {
             inboundAudioImportError = error.localizedDescription
         }
+    }
+
+    /// Imports audio files dropped onto the window. Separate from `.onOpenURL`
+    /// (Dock icon / Finder "open with" / Share) — dropping onto a view needs its
+    /// own drop destination. Returns true when at least one supported audio file
+    /// was accepted.
+    @discardableResult
+    private func handleDroppedAudioURLs(_ urls: [URL]) -> Bool {
+        let audioURLs = Self.supportedAudioURLs(from: urls)
+        guard !audioURLs.isEmpty else { return false }
+        Task { @MainActor in
+            for url in audioURLs {
+                await importIncomingAudio(from: url)
+            }
+        }
+        return true
+    }
+
+    static func supportedAudioURLs(from urls: [URL]) -> [URL] {
+        urls.filter { CloudStorageManager.isSupportedImportedAudioURL($0) }
     }
 
     /// Runs an import transcription inside a background-task window so a

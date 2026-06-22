@@ -39,4 +39,20 @@ struct SegmentProgressStoreTests {
         store.save(p, for: a); store.save(p, for: b)
         #expect(Set(store.listPendingNoteIDs()) == Set([a, b]))
     }
+
+    @Test func importWorkingCopyCopiesBytesThenRemoveDeletes() throws {
+        let store = makeStore()
+        let id = UUID()
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("src_\(UUID().uuidString).m4a")
+        try Data([1, 2, 3, 4]).write(to: source)
+
+        let copy = try store.importWorkingCopy(from: source, for: id)
+        #expect(FileManager.default.fileExists(atPath: copy.path))
+        #expect(try Data(contentsOf: copy) == Data([1, 2, 3, 4]))
+        #expect(copy.pathExtension == "m4a")
+
+        store.removeWorkingCopy(for: id)
+        #expect(store.existingWorkingCopyURL(for: id) == nil)
+    }
 }

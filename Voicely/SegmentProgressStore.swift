@@ -76,4 +76,33 @@ final class SegmentProgressStore {
             return UUID(uuidString: String(name.dropLast(5)))
         }
     }
+
+    /// Copies the shared (security-scoped) source file into the non-synced
+    /// working directory so transcription has a stable, controllable copy.
+    func importWorkingCopy(from sourceURL: URL, for id: UUID) throws -> URL {
+        let accessed = sourceURL.startAccessingSecurityScopedResource()
+        defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
+
+        createDirectoryIfNeeded()
+        let destination = workingCopyURL(for: id, fileExtension: sourceURL.pathExtension)
+        try? fileManager.removeItem(at: destination)
+
+        var coordinationError: NSError?
+        var copyError: Error?
+        NSFileCoordinator(filePresenter: nil).coordinate(
+            readingItemAt: sourceURL, options: [.withoutChanges], error: &coordinationError
+        ) { readableURL in
+            do { try fileManager.copyItem(at: readableURL, to: destination) }
+            catch { copyError = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let copyError { throw copyError }
+        return destination
+    }
+
+    func removeWorkingCopy(for id: UUID) {
+        if let url = existingWorkingCopyURL(for: id) {
+            try? fileManager.removeItem(at: url)
+        }
+    }
 }

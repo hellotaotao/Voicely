@@ -13,9 +13,10 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \VoiceNote.timestamp, order: .reverse) private var voiceNotes: [VoiceNote]
-    @StateObject private var audioService = AudioRecordingService()
-    @StateObject private var modelManager = ModelManager()
-    @StateObject private var transcriptionService = TranscriptionService()
+    @StateObject private var audioService: AudioRecordingService
+    @StateObject private var modelManager: ModelManager
+    @StateObject private var transcriptionService: TranscriptionService
+    @StateObject private var recordingSession: RecordingSession
     @ObservedObject private var cloudManager = CloudStorageManager.shared
     @EnvironmentObject private var syncMonitor: CloudKitSyncMonitor
     @State private var selectedNoteID: UUID?
@@ -28,6 +29,19 @@ struct ContentView: View {
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
+
+    init() {
+        let audioService = AudioRecordingService()
+        let modelManager = ModelManager()
+        let transcriptionService = TranscriptionService()
+        _audioService = StateObject(wrappedValue: audioService)
+        _modelManager = StateObject(wrappedValue: modelManager)
+        _transcriptionService = StateObject(wrappedValue: transcriptionService)
+        _recordingSession = StateObject(wrappedValue: RecordingSession(
+            audioService: audioService,
+            transcriptionService: transcriptionService
+        ))
+    }
 
     private var isPhoneDevice: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
@@ -51,6 +65,7 @@ struct ContentView: View {
         }
         .tint(VoicelyTheme.accent)
         .onAppear {
+            configureRecordingSession()
             syncInitialSelection()
             consumePendingStartRecordingQuickActionIfNeeded()
         }
@@ -202,7 +217,7 @@ struct ContentView: View {
             // recording is active (pause/stop); once you stop there it
             // disappears, so a new recording can only be started from the list.
             if compactNavigationPath.isEmpty || audioService.isRecording {
-                recordingControlsBar(opensDetailInCompactStack: true)
+                recordingControlsBar()
                     .padding(.horizontal, 14)
                     .padding(.bottom, 12)
             }
@@ -320,7 +335,7 @@ struct ContentView: View {
                 }
 
             if showsRecordingControls {
-                recordingControlsBar(opensDetailInCompactStack: opensDetailInCompactStack)
+                recordingControlsBar()
                     .padding(.horizontal, 14)
                     .padding(.bottom, 12)
                     .zIndex(1)
@@ -331,8 +346,9 @@ struct ContentView: View {
         .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
-    private func recordingControlsBar(opensDetailInCompactStack: Bool) -> some View {
+    private func recordingControlsBar() -> some View {
         RecordingControls(
+            session: recordingSession,
             audioService: audioService,
             transcriptionService: transcriptionService,
             startRecordingQuickActionID: startRecordingQuickActionID,
@@ -340,13 +356,6 @@ struct ContentView: View {
             recordingInterruptionID: recordingInterruptionID,
             onManageModels: {
                 showingSettings = true
-            },
-            onRecordingComplete: { note in
-                modelContext.insert(note)
-                selectedNoteID = note.id
-                if opensDetailInCompactStack {
-                    compactNavigationPath = [note.id]
-                }
             }
         )
     }
@@ -546,6 +555,17 @@ struct ContentView: View {
                 compactNavigationPath = []
             }
             return
+        }
+    }
+
+    /// Wires the recording session's note-creation callback into SwiftData
+    /// insertion and navigation selection. Bindings are captured (rather than
+    /// `self`) so the session — which owns this closure — does not retain the view.
+    private func configureRecordingSession() {
+        recordingSession.onRecordingComplete = { [modelContext, selection = $selectedNoteID, navigationPath = $compactNavigationPath] note in
+            modelContext.insert(note)
+            selection.wrappedValue = note.id
+            navigationPath.wrappedValue = [note.id]
         }
     }
 
@@ -904,33 +924,21 @@ struct VoiceNoteRow: View {
 // MARK: - Recording Controls
 
 struct RecordingControls: View {
+    @ObservedObject var session: RecordingSession
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
     let startRecordingQuickActionID: UUID
     let togglePauseQuickActionID: UUID
     let recordingInterruptionID: UUID
     let onManageModels: () -> Void
-    let onRecordingComplete: (VoiceNote) -> Void
     @State private var showingModelPicker = false
-    @State private var coordinator: IncrementalTranscriptionCoordinator? = nil
-    @State private var currentRecordingNote: VoiceNote? = nil
-    @State private var isStartingRecording = false
-    @State private var recordingStartedAt: Date?
 
     private var controlPhase: RecordingControlPhase {
-        RecordingControlState.phase(
-            isRecording: audioService.isRecording,
-            isStarting: isStartingRecording
-        )
+        session.controlPhase
     }
 
     private var canStopRecording: Bool {
-        RecordingControlState.shouldAcceptStopRequest(
-            isStarting: isStartingRecording,
-            recordingStartedAt: recordingStartedAt,
-            now: Date(),
-            recordingDuration: audioService.recordingDuration
-        )
+        session.canStopRecording
     }
 
     private var isModelLoading: Bool {
@@ -983,10 +991,6 @@ struct RecordingControls: View {
         return "Choose an offline model for new transcriptions."
     }
 
-    private var effectiveIncrementalIntervalSeconds: Int {
-        IncrementalTranscriptionTiming.defaultIntervalSeconds
-    }
-
     var body: some View {
         Group {
             switch controlPhase {
@@ -1023,17 +1027,17 @@ struct RecordingControls: View {
             Text(modelPickerMessage)
         }
         .onChange(of: startRecordingQuickActionID) { _, _ in
-            startRecordingFromQuickAction()
+            session.startRecordingFromQuickAction()
         }
         .onChange(of: togglePauseQuickActionID) { _, _ in
-            togglePauseResumeFromQuickAction()
+            session.togglePauseResumeFromQuickAction()
         }
         .onChange(of: recordingInterruptionID) { _, _ in
-            stopRecordingDueToInterruption()
+            session.stopDueToInterruption()
         }
         .onAppear {
             audioService.prewarmRecordingSessionIfPossible()
-            registerLiveActivityControls()
+            session.registerLiveActivityControls()
         }
         .onChange(of: audioService.hasPermission) { _, _ in
             audioService.prewarmRecordingSessionIfPossible()
@@ -1188,7 +1192,7 @@ struct RecordingControls: View {
                     .stroke(recordingTint.opacity(0.22), lineWidth: 1)
             )
 
-            Button(action: togglePauseResume) {
+            Button(action: { session.togglePauseResume() }) {
                 Image(systemName: audioService.isPaused ? "play.fill" : "pause.fill")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
@@ -1204,7 +1208,7 @@ struct RecordingControls: View {
     }
 
     private var recordButton: some View {
-        Button(action: startRecording) {
+        Button(action: { session.startRecording() }) {
             Image(systemName: audioService.hasPermission ? "mic.fill" : "mic.slash.fill")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Color.black)
@@ -1216,14 +1220,14 @@ struct RecordingControls: View {
                 .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
         }
         .buttonStyle(.plain)
-        .disabled(!audioService.hasPermission || isStartingRecording)
+        .disabled(!audioService.hasPermission || session.isStartingRecording)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(audioService.hasPermission ? "Record" : "Record unavailable")
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
     }
 
     private var stopButton: some View {
-        Button(action: stopRecording) {
+        Button(action: { session.stopRecording() }) {
             Image(systemName: "stop.fill")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.white)
@@ -1235,208 +1239,6 @@ struct RecordingControls: View {
         .disabled(!canStopRecording)
         .opacity(canStopRecording ? 1 : 0.55)
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.stopRecordingButton)
-    }
-
-    private func startRecording() {
-        guard !isStartingRecording,
-              !audioService.isRecording,
-              currentRecordingNote == nil else { return }
-
-        isStartingRecording = true
-
-        Task { @MainActor in
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 30_000_000)
-            guard isStartingRecording else { return }
-            beginRecordingAfterFeedback()
-        }
-    }
-
-    private func beginRecordingAfterFeedback() {
-        var didStart = false
-        defer {
-            if !didStart {
-                isStartingRecording = false
-                recordingStartedAt = nil
-            }
-        }
-
-        guard let filePath = audioService.startRecording() else { return }
-        guard let pcmURL = audioService.currentPCMFileURL else {
-            _ = audioService.stopRecording()
-            return
-        }
-
-        let note = makeRecordingNote(filePath: filePath)
-        transcriptionService.configureNewNote(note, shouldStartImmediately: true)
-        note.isTranscribing = true
-        note.transcriptionProgress = 0.0
-        currentRecordingNote = note
-        recordingStartedAt = Date()
-        isStartingRecording = false
-        didStart = true
-        onRecordingComplete(note)
-        RecordingLiveActivityController.shared.start(recordingID: note.id, title: note.title)
-
-        let coord = IncrementalTranscriptionCoordinator(
-            transcriptionService: transcriptionService,
-            recordingFileURL: pcmURL
-        )
-        coord.frameCountProvider = { [weak audioService] in
-            audioService?.currentFramePosition ?? 0
-        }
-        coord.transcriptCallback = { [note] transcript in
-            guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
-
-            note.transcription = finalizedTranscript.text
-            note.isTranscribing = true
-            note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
-                ?? transcriptionService.modelManager?.selectedModel
-            note.transcriptionLastErrorMessage = nil
-            note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
-        }
-        coordinator = coord
-        registerLiveActivityControls(coordinator: coord)
-        coord.start(intervalSeconds: effectiveIncrementalIntervalSeconds)
-    }
-
-    private func startRecordingFromQuickAction() {
-        guard !audioService.isRecording, !isStartingRecording else { return }
-
-        if !isModelLoaded && !isModelLoading {
-            Task {
-                let _ = await transcriptionService.loadWhisperModel()
-            }
-        }
-
-        startRecording()
-    }
-
-    private func togglePauseResume() {
-        Self.togglePauseResume(
-            audioService: audioService,
-            coordinator: coordinator,
-            incrementalIntervalSeconds: effectiveIncrementalIntervalSeconds
-        )
-    }
-
-    private func togglePauseResumeFromQuickAction() {
-        guard audioService.isRecording else { return }
-        togglePauseResume()
-    }
-
-    private func registerLiveActivityControls(coordinator: IncrementalTranscriptionCoordinator? = nil) {
-        RecordingControlCommandCenter.shared.setTogglePauseHandler { [audioService] in
-            guard audioService.isRecording else { return }
-            Self.togglePauseResume(
-                audioService: audioService,
-                coordinator: coordinator,
-                incrementalIntervalSeconds: effectiveIncrementalIntervalSeconds
-            )
-        }
-    }
-
-    private static func togglePauseResume(
-        audioService: AudioRecordingService,
-        coordinator: IncrementalTranscriptionCoordinator?,
-        incrementalIntervalSeconds: Int
-    ) {
-        if audioService.isPaused {
-            guard audioService.resumeRecording() else { return }
-            coordinator?.resume(intervalSeconds: incrementalIntervalSeconds)
-            RecordingLiveActivityController.shared.resume(elapsedDuration: audioService.recordingDuration)
-        } else {
-            audioService.pauseRecording()
-            coordinator?.pause()
-            RecordingLiveActivityController.shared.pause(elapsedDuration: audioService.recordingDuration)
-        }
-    }
-
-    private func stopRecording() {
-        guard RecordingControlState.shouldAcceptStopRequest(
-            isStarting: isStartingRecording,
-            recordingStartedAt: recordingStartedAt,
-            now: Date(),
-            recordingDuration: audioService.recordingDuration
-        ) else {
-            return
-        }
-
-        finalizeRecording()
-    }
-
-    /// Force-finalizes the active recording without the accidental-stop guard.
-    /// Used when the system interrupts recording (incoming call, another app
-    /// taking the audio session) — an interruption is never accidental and may
-    /// arrive within the first second of recording.
-    private func stopRecordingDueToInterruption() {
-        guard audioService.isRecording else { return }
-        finalizeRecording()
-    }
-
-    private func finalizeRecording() {
-        let capturedCoordinator = coordinator
-        let recordingNote = currentRecordingNote
-        coordinator = nil
-        registerLiveActivityControls()
-        currentRecordingNote = nil
-        isStartingRecording = false
-        recordingStartedAt = nil
-
-        let finalFrame = audioService.currentFramePosition
-        let stopResult = audioService.stopRecording()
-        RecordingLiveActivityController.shared.end(elapsedDuration: stopResult.duration)
-
-        guard let filePath = stopResult.filePath else { return }
-
-        let note: VoiceNote
-        if let recordingNote {
-            note = recordingNote
-        } else {
-            note = makeRecordingNote(filePath: filePath)
-            onRecordingComplete(note)
-        }
-
-        note.audioFilePath = filePath
-        note.duration = stopResult.duration
-        note.isTranscribing = true
-        note.pendingTranscription = false
-        note.transcriptionProgress = 0.0
-
-        Task { @MainActor in
-            let accumulatedTranscript: String
-            if let coord = capturedCoordinator {
-                accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
-            } else {
-                accumulatedTranscript = ""
-            }
-
-            let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(accumulatedTranscript)
-            let trimmedTranscript = finalizedTranscript?.text ?? ""
-
-            if !trimmedTranscript.isEmpty {
-                note.transcription = trimmedTranscript
-                note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
-                    ?? transcriptionService.modelManager?.selectedModel
-                note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
-                note.completeTranscription()
-                note.clearTransientTranscriptionFlags()
-                return
-            }
-
-            await stopResult.awaitConversionIfNeeded(forIncrementalTranscript: trimmedTranscript)
-            transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
-            if isModelLoaded {
-                await transcriptionService.processPendingTranscriptions(notes: [note])
-            }
-        }
-    }
-
-    private func makeRecordingNote(filePath: String) -> VoiceNote {
-        VoiceNote(
-            title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
-            audioFilePath: filePath
-        )
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {

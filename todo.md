@@ -1,5 +1,39 @@
 # TODO
 
+## ⬜ 待办(提出 2026-06-22) — iCloud 同步:文字内容优先,音频延后下载
+
+### 现象 / 诉求
+打开 app 后,尤其积压多天未同步时,要等很久列表才一致,怀疑被中间的大音频文件拖住。诉求:**先把 notes + 转录文字同步进来让列表先一致**(用户即可确认"东西都在"),音频文件慢慢按需下载即可。
+
+### 现状(架构)
+- notes + 转录文字:SwiftData + CloudKit `.automatic`(`VoicelyApp.swift:54-71`),这是列表出现的通道。
+- 音频文件:iCloud Documents,**已是按需下载**——`prepareFileForReading`(`CloudStorageManager.swift:459`)仅在播放/转录/benchmark 时拉取(`AudioPlayerService`、`TranscriptionService.swift:879`、`BenchmarkView.swift:289`);全量 `forceDownloadAll`(`CloudStorageManager.swift:686`)只在 `SyncStatusView.swift:42` 用户主动点击时触发。
+- 即两通道本就独立,音频不会自动全量下载;但用户体感列表仍迟迟不一致。参见记忆 [[icloud-sync-transcription]]。
+
+### 待调查 / 方向
+- 定位"列表迟迟不一致"的真实瓶颈:是 CloudKit 初次拉取 note 记录本身慢(可能正常),还是 UI/某处在等音频元数据或文件就绪才渲染?
+- 确认 note 行渲染**完全不依赖**本地音频存在(无音频应有占位,不阻塞列表)。
+- 同步状态 UI 区分"文字已同步 / 音频待下载",让用户先确信列表完整。
+- 排除任何启动即批量 `startDownloadingUbiquitousItem` 间接抢占带宽、拖慢 CloudKit 的路径。
+
+---
+
+## ✅ 已完成(2026-06-22) — Settings Benchmark 三个问题
+
+### 1. 入口整行点击热区(空白处点不动)✅
+`navRow`(`SettingsView.swift:531-544`)的 HStack 加 `.contentShape(Rectangle())`,Spacer 空白区现在也可点。
+
+### 2. "Start Benchmark" 视觉不居中(实为 icon 与按钮底色同色而隐形)✅
+真凶:`SettingsView.swift:215` 给整个 Settings NavigationStack 设了 `.tint(VoicelyTheme.accent)`,BenchmarkView 继承后,`.borderedProminent` 按钮(背景=tint=accent)里的 `timer` 图标在 Mac Catalyst 上也被染成 accent 色 → 与背景同色隐形(文字被系统反白故仍可见),视觉上偏右。改:去掉 `systemImage` 改纯 `Text("Start Benchmark")`,文字真正居中(`BenchmarkView.swift:194-201`)。Cancel/Apply 是 `.bordered` 非 prominent、背景非 accent,图标可见,未动。
+
+### 3. 选中 note 后点 "Start Benchmark" 无反应 ✅(根因已更正)
+~~原推测:canStart(isModelLoaded) 与 startBenchmark guard(whisperKit?.modelFolder) 条件不一致~~ —— **被 Mac 实测 log 证伪**:第 279 行 modelFolder guard 通过了(且 modelFolder 在 `:312` 有用,非冗余)。**真因**:选中的 note 音频未从 iCloud 同步到本机(`isAudioFileMissing` 为真——既无真实文件也无 `.icloud` 占位符),`prepareFileForReading`(`CloudStorageManager.swift:459`)在尝试下载前就返回 nil → 第 289 行 guard 瞬间静默 `return`(isRunning 一闪而过),即"点了没反应"。改:沿用 `AudioPlayerService.swift:564-573` 模式,新增 `@State startError`,失败时区分 missing/downloading 给出橙色提示(`BenchmarkView.swift`)。**注:这正是上面第一件事(iCloud 音频同步)的症状——benchmark 这里只让失败可见,根治仍需 iCloud 待办里的"文字优先、音频可见"。**
+
+### 4. 列表只显示音频可用的 note + 已就绪/待下载状态标注 ✅
+`benchmarkCandidates` 改为对每条算 `AudioAvailability`(`.ready`/`.inCloud`/`.missing`,复用 `getFileURL`+`isAudioFileMissing`+`FileManager.fileExists`),**隐藏 `.missing`**(完全没同步过来的不再出现在列表,避免盲选);保留 `.inCloud`(iCloud 有、本机未下载)。标注用 Apple 惯例(已下载不标):`.ready` **不显示任何标记**、`.inCloud` 橙色 `icloud.and.arrow.down` + "In iCloud"。选中 `.inCloud` 跑 benchmark 时 `prepareFileForReading` 自动拉取,下载阶段提示改为 "Downloading audio from iCloud…";等待中点 Cancel 不误报(`!Task.isCancelled` 守卫)。未做实时刷新(下载完图标不自动变绿,YAGNI)。经 brainstorming 与用户确认方案。
+
+---
+
 ## ✅ 已完成(2026-06-22) — English-only 模型治理:砍 distil + medium.en,其余 .en 加标注
 
 ### 实现状态

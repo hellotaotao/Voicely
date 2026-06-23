@@ -37,6 +37,15 @@ struct BenchmarkRound: Identifiable {
     var errorMessage: String?
 }
 
+// MARK: - Audio availability
+
+/// Whether a recording's audio is usable for benchmarking on this device.
+enum AudioAvailability {
+    case ready      // Downloaded locally, ready to read
+    case inCloud    // Exists in iCloud but not yet downloaded to this device
+    case missing    // Not synced to this device at all
+}
+
 // MARK: - View
 
 @MainActor
@@ -48,6 +57,8 @@ struct BenchmarkView: View {
     @State private var rounds: [BenchmarkRound] = BenchmarkView.makeRounds()
     @State private var isRunning = false
     @State private var benchmarkTask: Task<Void, Never>?
+    @State private var startError: String?
+    @State private var isPreparingAudio = false
 
     private static func makeRounds() -> [BenchmarkRound] {
         [
@@ -101,12 +112,26 @@ struct BenchmarkView: View {
     private static let minDuration: TimeInterval = 30
     private static let maxDuration: TimeInterval = 300
 
-    private var benchmarkCandidates: [VoiceNote] {
+    private func audioAvailability(for note: VoiceNote) -> AudioAvailability {
+        let manager = CloudStorageManager.shared
+        guard let url = manager.getFileURL(for: note.audioFilePath) else { return .missing }
+        if manager.isAudioFileMissing(at: url) { return .missing }
+        // A real file on disk means it's downloaded and ready; if only the
+        // ".icloud" placeholder exists, it still needs to be pulled from iCloud.
+        return FileManager.default.fileExists(atPath: url.path) ? .ready : .inCloud
+    }
+
+    // Recordings eligible for benchmarking, paired with their audio availability.
+    // Anything not yet synced to this device (.missing) is dropped so users can't
+    // pick a recording that has no audio to transcribe.
+    private var benchmarkCandidates: [(note: VoiceNote, availability: AudioAvailability)] {
         voiceNotes
             .filter { !$0.audioFilePath.isEmpty
                 && $0.duration >= Self.minDuration
                 && $0.duration <= Self.maxDuration }
             .sorted { $0.duration < $1.duration }
+            .map { (note: $0, availability: audioAvailability(for: $0)) }
+            .filter { $0.availability != .missing }
             .prefix(8)
             .map { $0 }
     }
@@ -117,6 +142,18 @@ struct BenchmarkView: View {
         return m > 0 ? "\(m)m \(s)s" : "\(s)s"
     }
 
+    // Quiet pattern (Apple's own): already-local recordings show nothing —
+    // being ready is the normal state. Only iCloud items still needing a
+    // download are tagged. `.missing` is filtered out upstream.
+    @ViewBuilder
+    private func availabilityBadge(_ availability: AudioAvailability) -> some View {
+        if availability == .inCloud {
+            Label("In iCloud", systemImage: "icloud.and.arrow.down")
+                .font(.caption)
+                .foregroundColor(.orange)
+        }
+    }
+
     private var audioPickerSection: some View {
         let candidates = benchmarkCandidates
         return Section {
@@ -125,7 +162,8 @@ struct BenchmarkView: View {
                     .foregroundColor(.secondary)
                     .font(.callout)
             } else {
-                ForEach(candidates) { note in
+                ForEach(candidates, id: \.note.id) { item in
+                    let note = item.note
                     Button {
                         selectedNote = note
                     } label: {
@@ -137,6 +175,7 @@ struct BenchmarkView: View {
                                         .fontWeight(.medium)
                                         .foregroundColor(.primary)
                                     Spacer()
+                                    availabilityBadge(item.availability)
                                     Text(durationString(note.duration))
                                         .font(.caption)
                                         .foregroundColor(.secondary)
@@ -187,18 +226,26 @@ struct BenchmarkView: View {
                     Label("Cancel", systemImage: "stop.circle")
                         .frame(maxWidth: .infinity)
                 }
-                Text("First run compiles CoreML models and may take several minutes per round.")
+                Text(isPreparingAudio
+                     ? "Downloading audio from iCloud…"
+                     : "First run compiles CoreML models and may take several minutes per round.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
                 Button {
                     startBenchmark()
                 } label: {
-                    Label("Start Benchmark", systemImage: "timer")
+                    Text("Start Benchmark")
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(!canStart)
                 .buttonStyle(.borderedProminent)
+
+                if let startError {
+                    Label(startError, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
 
                 if let fastestIdx = fastestRoundIndex {
                     Button {
@@ -278,6 +325,7 @@ struct BenchmarkView: View {
         guard let note = selectedNote,
               let modelFolder = modelManager.whisperKit?.modelFolder else { return }
 
+        startError = nil
         rounds = BenchmarkView.makeRounds()
 
         benchmarkTask = Task {
@@ -286,7 +334,19 @@ struct BenchmarkView: View {
             isRunning = true
             defer { isRunning = false }
 
-            guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: note.audioFilePath) else {
+            isPreparingAudio = true
+            let preparedURL = await CloudStorageManager.shared.prepareFileForReading(at: note.audioFilePath)
+            isPreparingAudio = false
+
+            guard let audioURL = preparedURL else {
+                if !Task.isCancelled {
+                    if let candidateURL = CloudStorageManager.shared.getFileURL(for: note.audioFilePath),
+                       CloudStorageManager.shared.isAudioFileMissing(at: candidateURL) {
+                        startError = "This recording hasn't synced from iCloud to this device yet. Open it once to download the audio, then run the benchmark again."
+                    } else {
+                        startError = "Audio is still downloading from iCloud. Try again in a moment."
+                    }
+                }
                 return
             }
             let audioPath = audioURL.path

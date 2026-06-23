@@ -540,6 +540,7 @@ struct SettingsView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
+        .contentShape(Rectangle())
     }
 
     // MARK: - Privacy notice

@@ -53,10 +53,19 @@ final class SegmentedAudioTranscriber {
         // Drop a stale cancellation flag left by a prior, unrelated transcription.
         transcriptionService.clearPendingCancellation()
 
+        // A re-transcription of an existing recording starts with a transcript;
+        // an import starts empty. Used to preserve the old text on total failure.
+        let hadExistingTranscript = LocalTranscriptFinalizer.finalizeTranscript(note.transcription) != nil
+
         guard let info = Self.readAudioInfo(sourceURL) else {
             note.completeTranscription()
-            note.transcriptionOutcome = .failed
-            note.markTranscriptionFailure("could not read imported audio")
+            if hadExistingTranscript {
+                note.transcriptionOutcome = .transcribed   // keep the previous transcript
+                note.markTranscriptionFailure("could not read audio for re-transcription; kept previous transcript")
+            } else {
+                note.transcriptionOutcome = .failed
+                note.markTranscriptionFailure("could not read imported audio")
+            }
             progressStore.removeWorkingCopy(for: note.id)
             return
         }
@@ -77,9 +86,10 @@ final class SegmentedAudioTranscriber {
 
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
             let outcome = await transcribeSegmentOutcome(sourceURL)
-            finalizeSinglePass(note: note, outcome: outcome)
+            finalizeSinglePass(note: note, outcome: outcome, hadExistingTranscript: hadExistingTranscript)
         } else {
-            await transcribeSegmented(note: note, sourceURL: sourceURL, info: info)
+            await transcribeSegmented(note: note, sourceURL: sourceURL, info: info,
+                                      hadExistingTranscript: hadExistingTranscript)
             // Backgrounded mid-run: keep the working copy + sidecar for resume.
             if note.transcriptionState != .completed { return }
         }
@@ -103,14 +113,27 @@ final class SegmentedAudioTranscriber {
 
     // MARK: - Single pass (≤30 s)
 
-    private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome) {
-        switch outcome {
-        case .transcribed(let result):
+    private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome, hadExistingTranscript: Bool) {
+        if case .transcribed(let result) = outcome {
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             note.completeTranscription()
             note.transcriptionOutcome = .transcribed
+            note.clearTransientTranscriptionFlags()
+            return
+        }
+
+        // No new text produced. If re-transcribing, keep the previous transcript.
+        if hadExistingTranscript {
+            note.completeTranscription()
+            note.transcriptionOutcome = .transcribed
+            note.markTranscriptionFailure("re-transcription produced no usable text; kept previous transcript")
+            note.clearTransientTranscriptionFlags()
+            return
+        }
+
+        switch outcome {
         case .noSpeech:
             note.transcription = ""
             note.completeTranscription()
@@ -119,7 +142,7 @@ final class SegmentedAudioTranscriber {
             note.completeTranscription()
             note.transcriptionOutcome = .failed
             note.markTranscriptionFailure(diagnostic ?? "transcription error")
-        case .modelUnavailable, .audioUnavailable, .cancelled:
+        default:   // modelUnavailable, audioUnavailable, cancelled
             note.completeTranscription()
             note.transcriptionOutcome = .failed
             note.markTranscriptionFailure("model or audio unavailable")
@@ -129,7 +152,7 @@ final class SegmentedAudioTranscriber {
 
     // MARK: - Segmented (>30 s)
 
-    private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo) async {
+    private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo, hadExistingTranscript: Bool) async {
         let noteID = note.id
         let batchFrames = Int64(Double(IncrementalTranscriptionTiming.defaultIntervalSeconds) * info.sampleRate)
         let resumed = progressStore.load(for: noteID)
@@ -198,6 +221,15 @@ final class SegmentedAudioTranscriber {
                                      failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
+        }
+
+        // Re-transcription that produced no new text: keep the previous transcript.
+        if hadExistingTranscript, !producedAnyText {
+            note.completeTranscription()
+            note.transcriptionOutcome = .transcribed
+            note.markTranscriptionFailure("re-transcription produced no usable text; kept previous transcript")
+            note.clearTransientTranscriptionFlags()
+            return
         }
 
         note.transcription = pieces.joined(separator: "\n")

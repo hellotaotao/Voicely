@@ -155,6 +155,41 @@ struct SegmentedAudioTranscriberTests {
         #expect(service.progressByNoteID[id] == nil)
     }
 
+    @Test @MainActor func reTranscribeTotalFailureKeepsOldTranscript() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in .whisperError("boom") }   // every segment fails
+        let note = VoiceNote(title: "rec", audioFilePath: "rec.m4a")
+        note.transcription = "the original transcript"
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcription == "the original transcript")   // preserved, not overwritten
+        #expect(note.transcriptionOutcome == .transcribed)         // not .failed
+        #expect(note.transcriptionLastErrorMessage != nil)         // diagnostic kept
+    }
+
+    @Test @MainActor func reTranscribePartialSuccessUsesNewResult() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)   // 3 segments
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        let calls = Counter()
+        transcriber.transcribeSegmentOutcome = { _ in
+            let n = await calls.incrementAndGet()
+            if (2...4).contains(n) { return .whisperError("boom") }   // segment 2 fails
+            return .transcribed(.init(text: "new", duration: 1, modelIdentifier: "m"))
+        }
+        let note = VoiceNote(title: "rec", audioFilePath: "rec.m4a")
+        note.transcription = "the original transcript"
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcription.hasPrefix("new"))                       // new result used
+        #expect(note.transcription.contains("transcription unavailable"))  // failed segment placeholder
+        #expect(note.transcriptionOutcome == .failed)
+    }
+
     @Test @MainActor func allNoSpeechYieldsNoSpeechOutcome() async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
         let store = SegmentedAudioTestSupport.makeStore()

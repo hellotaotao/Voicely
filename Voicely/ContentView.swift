@@ -33,7 +33,6 @@ struct ContentView: View {
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
-    @State private var segmentProgressStore = SegmentProgressStore()
     @State private var isDropTargeted = false
 
     init() {
@@ -679,12 +678,12 @@ struct ContentView: View {
             note.titleWasManuallyEdited = true
 
             // Copy only to the non-synced working copy — never into the iCloud store.
-            let workingCopy = try segmentProgressStore.importWorkingCopy(from: url, for: note.id)
+            let workingCopy = try transcriptionService.segmentProgressStore.importWorkingCopy(from: url, for: note.id)
             // Pre-flight: if AVFoundation can't open it (unsupported codec such
             // as OGG/Opus, or a corrupt file), fail fast with a clear message
             // instead of creating a note that will just end up "failed".
             guard SegmentedAudioTranscriber.readAudioInfo(workingCopy) != nil else {
-                segmentProgressStore.removeWorkingCopy(for: note.id)
+                transcriptionService.segmentProgressStore.removeWorkingCopy(for: note.id)
                 inboundAudioImportError = "Couldn't read this audio file — its format or encoding may be unsupported."
                 return
             }
@@ -743,7 +742,7 @@ struct ContentView: View {
     private func runImportTranscription(_ work: (SegmentedAudioTranscriber) async -> Void) async {
         let transcriber = SegmentedAudioTranscriber(
             transcriptionService: transcriptionService,
-            progressStore: segmentProgressStore
+            progressStore: transcriptionService.segmentProgressStore
         )
         #if targetEnvironment(macCatalyst)
         // Mac Catalyst apps aren't suspended — no background assertion needed.
@@ -762,7 +761,7 @@ struct ContentView: View {
     /// On returning to the foreground, resume any imported transcription that
     /// was interrupted while a sidecar + working copy still exist.
     private func resumePendingImports() {
-        guard !segmentProgressStore.listPendingNoteIDs().isEmpty else { return }
+        guard !transcriptionService.segmentProgressStore.listPendingNoteIDs().isEmpty else { return }
         Task { @MainActor in
             if !transcriptionService.isWhisperAvailable() {
                 _ = await transcriptionService.loadWhisperModel()

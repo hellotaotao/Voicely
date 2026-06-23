@@ -73,6 +73,10 @@ class TranscriptionService: ObservableObject {
     var heartbeatInterval: TimeInterval = 60
     var nonOriginQueueGracePeriod: TimeInterval = 5 * 60
 
+    /// Shared with the import path (ContentView) so the in-flight guard and
+    /// resume sidecars are consistent across imports and re-transcriptions.
+    let segmentProgressStore: SegmentProgressStore
+
     private static let ownershipMigrationDefaultsKey = "VoicelyOwnershipMigrationV1"
 
     private var currentTranscriptionTask: Task<RawTranscription?, Never>?
@@ -91,8 +95,10 @@ class TranscriptionService: ObservableObject {
     private var telemetryAudioDuration: TimeInterval?
     private var telemetryTimerTask: Task<Void, Never>?
 
-    init(modelManager: ModelManager? = nil) {
+    init(modelManager: ModelManager? = nil,
+         segmentProgressStore: SegmentProgressStore = SegmentProgressStore()) {
         self.modelManager = modelManager
+        self.segmentProgressStore = segmentProgressStore
         self.transcribeImpl = { [weak self] filePath, progressCallback in
             guard let self else { return .cancelled }
             return await self.transcribeWithWhisper(
@@ -285,6 +291,12 @@ class TranscriptionService: ObservableObject {
 
     func isLocallyTranscribing(_ note: VoiceNote) -> Bool {
         activeNoteID == note.id
+    }
+
+    /// Long recordings with audio are re-transcribed via SegmentedAudioTranscriber
+    /// (segmented + resumable + progress) rather than the whole-file single pass.
+    func shouldSegmentTranscription(_ note: VoiceNote) -> Bool {
+        note.duration > 30 && !note.audioFilePath.isEmpty
     }
 
     /// Surfaces a note transcribed by an external coordinator
@@ -737,6 +749,18 @@ private extension TranscriptionService {
 
     func transcribeClaimedNote(_ note: VoiceNote, attemptID: String) async {
         guard activeNoteID != note.id else {
+            return
+        }
+
+        // Long recordings go through the segmented transcriber (segmented +
+        // resumable), same as imports, instead of the whole-file single pass.
+        if shouldSegmentTranscription(note) {
+            guard let url = await CloudStorageManager.shared.prepareFileForReading(at: note.audioFilePath) else {
+                requeueNote(note, queuedAt: nowProvider())   // audio not ready — try again later
+                return
+            }
+            await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
+                .transcribe(note: note, sourceURL: url)
             return
         }
 

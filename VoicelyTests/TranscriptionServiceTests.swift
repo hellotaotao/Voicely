@@ -606,6 +606,21 @@ struct TranscriptionServiceTests {
         #expect(service.getEngineStatusMessage() == "Using WhisperKit for high-quality offline transcription")
     }
 
+    @Test @MainActor func serviceOwnsSegmentProgressStore() {
+        let service = makeService(deviceID: "d")
+        _ = service.segmentProgressStore
+    }
+
+    @Test @MainActor func shouldSegmentLongRecordingsWithAudio() {
+        let service = makeService(deviceID: "d")
+        let long = VoiceNote(title: "a", audioFilePath: "a.m4a"); long.duration = 1800
+        let short = VoiceNote(title: "b", audioFilePath: "b.m4a"); short.duration = 12
+        let noAudio = VoiceNote(title: "c", audioFilePath: ""); noAudio.duration = 1800
+        #expect(service.shouldSegmentTranscription(long))
+        #expect(!service.shouldSegmentTranscription(short))
+        #expect(!service.shouldSegmentTranscription(noAudio))
+    }
+
     @MainActor
     private func makeService(deviceID: String, now: Date = Date()) -> TranscriptionService {
         let service = TranscriptionService()

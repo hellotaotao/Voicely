@@ -195,6 +195,13 @@ struct SettingsView: View {
                         appInfoContent
                     }
 
+                    settingsSection(
+                        title: "Diagnostics",
+                        identifier: "settings.diagnosticsSection"
+                    ) {
+                        DiagnosticsContent()
+                    }
+
                     Color.clear.frame(height: 12)
                 }
                 .padding(.horizontal, 16)

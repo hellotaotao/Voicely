@@ -54,6 +54,7 @@
 		2B1822072DEB579F00550CD1 /* VoicelyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoicelyWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Version.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -138,6 +139,7 @@
 		2B1821ED2DEB579E00550CD1 = {
 			isa = PBXGroup;
 			children = (
+				CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */,
 				2B1821F82DEB579E00550CD1 /* Voicely */,
 				27DAE2FC170948BF866FF301 /* VoicelyWidgets */,
 				2B18220A2DEB579F00550CD1 /* VoicelyTests */,
@@ -387,10 +389,10 @@
 /* Begin XCBuildConfiguration section */
 		1A530520BF4945668009DCAC /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
@@ -400,7 +402,6 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.23.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -414,12 +415,12 @@
 		};
 		2B18221B2DEB579F00550CD1 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Voicely/Voicely.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -442,7 +443,6 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.23.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -458,12 +458,12 @@
 		};
 		2B18221C2DEB579F00550CD1 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Voicely/Voicely.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -486,7 +486,6 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.23.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -699,10 +698,10 @@
 		};
 		B58C5CE205944E2AA656F1FB /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VoicelyWidgets/Info.plist;
@@ -712,7 +711,6 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.23.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.Widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

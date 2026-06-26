@@ -1,0 +1,6 @@
+// Single source of truth for app + widget version numbers. Bump here only —
+// both the Voicely app and the VoicelyWidgets extension inherit these settings,
+// so the two can never drift out of sync (the App Store requires an extension's
+// version to match its host app's).
+MARKETING_VERSION = 0.23.1
+CURRENT_PROJECT_VERSION = 1

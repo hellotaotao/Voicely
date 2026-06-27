@@ -112,26 +112,62 @@ struct SegmentedAudioTranscriberTests {
 
     // MARK: Task 6 — retry, failed-range placeholder, noSpeech
 
-    @Test @MainActor func failedSegmentRetriesThenSkipsWithPlaceholder() async throws {
+    @Test @MainActor func failedSegmentBisectsAndRescuesWhenHalvesSucceed() async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)  // 3 segments
         let store = SegmentedAudioTestSupport.makeStore()
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
-        let calls = Counter()
-        transcriber.transcribeSegmentOutcome = { _ in
-            let n = await calls.incrementAndGet()
-            // Segment 2 = calls 2,3,4 (initial + 2 retries) all fail; others succeed.
-            if (2...4).contains(n) { return .whisperError("boom") }
+        transcriber.transcribeSegmentOutcome = { segmentURL in
+            // Segment 2 (extraction index 2) fails as a whole; its two bisected
+            // halves (indices 3 & 4) transcribe fine, so nothing is lost.
+            if SegmentedAudioTestSupport.extractionIndex(of: segmentURL) == 2 {
+                return .whisperError("boom")
+            }
             return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
         await transcriber.transcribe(note: note, sourceURL: url)
 
-        #expect(await calls.value == 5)               // seg1(1) + seg2(3) + seg3(1)
-        #expect(note.transcriptionOutcome == .failed)
+        #expect(note.transcriptionOutcome == .transcribed)              // fully recovered
+        #expect(!note.transcription.contains("transcription unavailable"))
+        // seg1 + two rescued halves of seg2 + seg3 = 4 pieces.
+        #expect(note.transcription == "ok\nok\nok\nok")
+    }
+
+    @Test @MainActor func partialOutcomeWhenABisectedHalfStaysFailed() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)  // 3 segments
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.minSalvageSeconds = 20   // one split only: 29s ⇒ two ~14.5s halves
+        transcriber.transcribeSegmentOutcome = { segmentURL in
+            // Segment 2 (index 2) fails; its left half (index 3) is rescued, but
+            // its right half (index 4) still fails and is ≤ minSalvage, so it stays
+            // a single placeholder — a partial success, not a failure.
+            let i = SegmentedAudioTestSupport.extractionIndex(of: segmentURL)
+            if i == 2 || i == 4 { return .whisperError("boom") }
+            return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
+        }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcriptionOutcome == .partial)
         #expect(note.transcription.contains("transcription unavailable"))
-        #expect(note.transcription.hasPrefix("ok"))
-        #expect(note.transcription.hasSuffix("ok"))
+        #expect(note.transcription.hasPrefix("ok"))   // seg1 + rescued left half
+        #expect(note.transcription.hasSuffix("ok"))   // seg3
+    }
+
+    @Test @MainActor func importWithNoUsableTextYieldsFailed() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in .whisperError("boom") }  // nothing transcribes
+        let note = VoiceNote(title: "imported", audioFilePath: "")            // no prior transcript
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcriptionOutcome == .failed)   // produced nothing usable
+        #expect(note.transcription.contains("transcription unavailable"))
     }
 
     @Test @MainActor func segmentedRunRecordsModelIdentifierAndDuration() async throws {
@@ -200,10 +236,11 @@ struct SegmentedAudioTranscriberTests {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)   // 3 segments
         let store = SegmentedAudioTestSupport.makeStore()
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
-        let calls = Counter()
-        transcriber.transcribeSegmentOutcome = { _ in
-            let n = await calls.incrementAndGet()
-            if (2...4).contains(n) { return .whisperError("boom") }   // segment 2 fails
+        transcriber.minSalvageSeconds = 20   // one split only, so a gap survives
+        transcriber.transcribeSegmentOutcome = { segmentURL in
+            // Segment 2 fails; its right half (index 4) can't be salvaged.
+            let i = SegmentedAudioTestSupport.extractionIndex(of: segmentURL)
+            if i == 2 || i == 4 { return .whisperError("boom") }
             return .transcribed(.init(text: "new", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "rec", audioFilePath: "rec.m4a")
@@ -212,8 +249,8 @@ struct SegmentedAudioTranscriberTests {
         await transcriber.transcribe(note: note, sourceURL: url)
 
         #expect(note.transcription.hasPrefix("new"))                       // new result used
-        #expect(note.transcription.contains("transcription unavailable"))  // failed segment placeholder
-        #expect(note.transcriptionOutcome == .failed)
+        #expect(note.transcription.contains("transcription unavailable"))  // surviving gap
+        #expect(note.transcriptionOutcome == .partial)
     }
 
     @Test @MainActor func allNoSpeechYieldsNoSpeechOutcome() async throws {

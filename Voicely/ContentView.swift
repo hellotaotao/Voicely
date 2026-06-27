@@ -908,12 +908,22 @@ struct VoiceNoteRow: View {
             return PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
         } else if isPending {
             return PillBadge(text: "Transcription pending", systemImage: "clock.arrow.circlepath", variant: .warning)
+        } else if note.transcriptionOutcome == .partial {
+            let n = missingSegmentCount
+            let label = n > 1 ? "\(n) gaps" : "1 gap"
+            return PillBadge(text: label, systemImage: "exclamationmark.triangle", variant: .neutral)
         } else if note.transcriptionOutcome == .noSpeech {
             return PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
         } else if note.transcriptionOutcome == .failed {
             return PillBadge(text: "Tap to retry", systemImage: "arrow.clockwise", variant: .warning)
         }
         return nil
+    }
+
+    /// Number of "transcription unavailable" placeholders left in a partial
+    /// transcript — used for a calm "N gaps" badge instead of a retry nag.
+    private var missingSegmentCount: Int {
+        note.transcription.components(separatedBy: "transcription unavailable").count - 1
     }
 
     private var durationText: String {

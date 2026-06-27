@@ -19,6 +19,7 @@ enum TranscriptionOwnershipState: String {
 /// note hasn't produced a finished attempt yet.
 enum VoiceNoteTranscriptionOutcome: String {
     case transcribed   // produced text (including verbatim non-speech like "Music")
+    case partial       // produced text, but one or more segments couldn't be transcribed
     case noSpeech      // VAD found no speech anywhere — nothing to transcribe
     case failed        // a real error we couldn't recover from (diagnostic kept internally)
 }

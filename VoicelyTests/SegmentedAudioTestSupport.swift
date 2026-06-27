@@ -17,6 +17,13 @@ enum SegmentedAudioTestSupport {
         return url
     }
 
+    /// Parses the extraction index N from a `voicely_seg_<N>.wav` segment URL, so
+    /// a mock can fail a specific slice (and, after bisection, specific halves).
+    static func extractionIndex(of url: URL) -> Int {
+        Int(url.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "voicely_seg_", with: "")) ?? -1
+    }
+
     static func makeStore() -> SegmentProgressStore {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("seg_\(UUID().uuidString)")

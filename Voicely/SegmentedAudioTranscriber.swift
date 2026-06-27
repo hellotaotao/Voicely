@@ -1,6 +1,20 @@
 import AVFoundation
 import Foundation
 
+/// Monotonic source of unique segment indices (temp-file names) within one run.
+/// A reference type so it can be shared across the recursive bisection helpers.
+private final class SegmentIndexCounter {
+    private var value = 0
+    func next() -> Int { value += 1; return value }
+}
+
+/// One outcome of salvaging a failed range: either recovered text or a sub-range
+/// that still couldn't be transcribed (kept as a placeholder).
+private enum SalvagedPiece {
+    case text(String, duration: TimeInterval, modelIdentifier: String?)
+    case failure(SegmentFailureRange)
+}
+
 /// Drives transcription of an imported, already-complete audio file.
 /// Files ≤30 s run in a single pass (no sidecar); longer files are sliced into
 /// ≤29 s neural-VAD segments with a resume sidecar written after each one.
@@ -28,6 +42,13 @@ final class SegmentedAudioTranscriber {
     /// When true, the segment loop stops at the next boundary, leaving the
     /// sidecar intact for later resume. Wired to background-time expiration.
     var shouldStopForBackground: () -> Bool = { false }
+
+    /// Minimum length (seconds) of a failed range still worth bisecting. A real
+    /// transcription error is often local, so a failed segment is split in half
+    /// and each side retried; below this length salvage costs more than the audio
+    /// it could recover, so the range is kept as a placeholder. Tests override it
+    /// to control how deep bisection goes.
+    var minSalvageSeconds: Double = 8.0
 
     /// Files longer than one WhisperKit window get sliced + a resume sidecar.
     private let singlePassFrameLimit: (Double) -> Int64 = { sampleRate in
@@ -169,7 +190,7 @@ final class SegmentedAudioTranscriber {
         var pieces: [String] = (resumed?.accumulatedText).flatMap { $0.isEmpty ? [] : [$0] } ?? []
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         var producedAnyText = !pieces.isEmpty
-        var segmentIndex = 0
+        let segmentIndex = SegmentIndexCounter()
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
 
@@ -184,14 +205,11 @@ final class SegmentedAudioTranscriber {
                 if cut > start { end = cut }
             }
 
-            segmentIndex += 1
-            let captured = segmentIndex
-            guard let segmentURL = await Task.detached(priority: .utility, operation: {
-                IncrementalTranscriptionCoordinator.extractSegment(
-                    fileURL: sourceURL, from: start, to: end, segmentIndex: captured)
-            }).value else {
+            guard let outcome = await transcribeSliceOutcome(
+                sourceURL: sourceURL, start: start, end: end, index: segmentIndex.next()) else {
                 // Couldn't read this slice (e.g. an unsupported container) — record
-                // it as failed instead of silently finishing as noSpeech.
+                // it as failed instead of silently finishing as noSpeech. A slice we
+                // can't even read won't be fixed by splitting, so don't bisect here.
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
                 pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
                 start = end
@@ -200,14 +218,6 @@ final class SegmentedAudioTranscriber {
                                          failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
                 continue
             }
-
-            var outcome = await transcribeSegmentOutcome(segmentURL)
-            var retries = 0
-            while case .whisperError = outcome, retries < 2 {
-                retries += 1
-                outcome = await transcribeSegmentOutcome(segmentURL)
-            }
-            try? FileManager.default.removeItem(at: segmentURL)
 
             switch outcome {
             case .transcribed(let result):
@@ -220,8 +230,26 @@ final class SegmentedAudioTranscriber {
             case .noSpeech:
                 break  // silence in this slice — contributes nothing, not an error
             case .whisperError, .modelUnavailable, .audioUnavailable, .cancelled:
-                failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
-                pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
+                // The segment failed as a whole. A real error is often local, so
+                // split it and salvage the parts that do transcribe; only the
+                // still-failing sub-range is kept as a (smaller) placeholder.
+                let salvaged = Self.coalesceFailures(await salvageFailedRange(
+                    sourceURL: sourceURL, start: start, end: end,
+                    minFrames: Int64(minSalvageSeconds * info.sampleRate),
+                    indexCounter: segmentIndex))
+                for piece in salvaged {
+                    switch piece {
+                    case .text(let text, let duration, let model):
+                        pieces.append(text)
+                        producedAnyText = true
+                        lastModelIdentifier = model ?? lastModelIdentifier
+                        accumulatedDuration += duration
+                    case .failure(let range):
+                        failedRanges.append(range)
+                        pieces.append(Self.placeholder(forStart: range.startFrame,
+                                                       end: range.endFrame, sampleRate: info.sampleRate))
+                    }
+                }
             }
 
             start = end
@@ -261,7 +289,10 @@ final class SegmentedAudioTranscriber {
         }
         note.completeTranscription()
         if !failedRanges.isEmpty {
-            note.transcriptionOutcome = .failed
+            // Some text plus a gap is a partial success, not a failure — don't nag
+            // the user to retry the whole thing. Only a run that produced nothing
+            // usable is a real failure.
+            note.transcriptionOutcome = producedAnyText ? .partial : .failed
             note.markTranscriptionFailure("\(failedRanges.count) segment(s) failed after retry")
         } else if !producedAnyText {
             note.transcriptionOutcome = .noSpeech
@@ -269,6 +300,103 @@ final class SegmentedAudioTranscriber {
             note.transcriptionOutcome = .transcribed
         }
         note.clearTransientTranscriptionFlags()
+    }
+
+    // MARK: - Bisection salvage
+
+    /// Extract [start, end] to a temp file and transcribe it, retrying up to twice
+    /// on a transient whisper error. Returns nil only when the slice can't even be
+    /// read; the temp file is always removed before returning.
+    private func transcribeSliceOutcome(sourceURL: URL, start: Int64, end: Int64,
+                                        index: Int) async -> TranscriptionOutcome? {
+        guard let segmentURL = await Task.detached(priority: .utility, operation: {
+            IncrementalTranscriptionCoordinator.extractSegment(
+                fileURL: sourceURL, from: start, to: end, segmentIndex: index)
+        }).value else { return nil }
+
+        var outcome = await transcribeSegmentOutcome(segmentURL)
+        var retries = 0
+        while case .whisperError = outcome, retries < 2 {
+            retries += 1
+            outcome = await transcribeSegmentOutcome(segmentURL)
+        }
+        try? FileManager.default.removeItem(at: segmentURL)
+        return outcome
+    }
+
+    /// `[start, end]` already failed to transcribe as a whole. Recover what we can
+    /// by splitting it at the frame midpoint and transcribing each half. If only
+    /// one half fails, recurse into it — the error is local and the good part is
+    /// worth keeping. If both halves fail, the error isn't local, so stop splitting
+    /// and keep a single placeholder for the whole range. Ranges shorter than
+    /// `minFrames` aren't split further (salvage would cost more than it saves).
+    private func salvageFailedRange(sourceURL: URL, start: Int64, end: Int64,
+                                    minFrames: Int64,
+                                    indexCounter: SegmentIndexCounter) async -> [SalvagedPiece] {
+        guard end - start > minFrames else {
+            return [.failure(SegmentFailureRange(startFrame: start, endFrame: end))]
+        }
+        let mid = start + (end - start) / 2
+        let left = await transcribeSliceOutcome(sourceURL: sourceURL, start: start, end: mid,
+                                                index: indexCounter.next())
+        let right = await transcribeSliceOutcome(sourceURL: sourceURL, start: mid, end: end,
+                                                 index: indexCounter.next())
+
+        // Both halves failed ⇒ the error spans the whole range; splitting further
+        // just fragments one gap into several. Keep a single placeholder.
+        if Self.isFailure(left) && Self.isFailure(right) {
+            return [.failure(SegmentFailureRange(startFrame: start, endFrame: end))]
+        }
+
+        return await resolveHalf(left, sourceURL: sourceURL, start: start, end: mid,
+                                 minFrames: minFrames, indexCounter: indexCounter)
+             + (await resolveHalf(right, sourceURL: sourceURL, start: mid, end: end,
+                                  minFrames: minFrames, indexCounter: indexCounter))
+    }
+
+    /// Turn one bisected half's outcome into pieces: text on success, nothing on
+    /// silence, and a deeper bisection on a (now-localized) failure.
+    private func resolveHalf(_ outcome: TranscriptionOutcome?, sourceURL: URL,
+                             start: Int64, end: Int64, minFrames: Int64,
+                             indexCounter: SegmentIndexCounter) async -> [SalvagedPiece] {
+        switch outcome {
+        case .transcribed(let result):
+            if let text = IncrementalTranscriptionCoordinator.sanitizedSegmentText(result.text) {
+                return [.text(text, duration: result.duration, modelIdentifier: result.modelIdentifier)]
+            }
+            return []
+        case .noSpeech:
+            return []
+        default:   // whisperError / modelUnavailable / audioUnavailable / cancelled / nil
+            return await salvageFailedRange(sourceURL: sourceURL, start: start, end: end,
+                                            minFrames: minFrames, indexCounter: indexCounter)
+        }
+    }
+
+    /// A half counts as failed when it produced neither text nor a clean noSpeech
+    /// (nil = the slice couldn't be read).
+    private static func isFailure(_ outcome: TranscriptionOutcome?) -> Bool {
+        switch outcome {
+        case .some(.transcribed), .some(.noSpeech): return false
+        default: return true
+        }
+    }
+
+    /// Merge runs of adjacent failure placeholders into one so a wholly-failed
+    /// region reads as a single gap rather than several touching ones.
+    private static func coalesceFailures(_ pieces: [SalvagedPiece]) -> [SalvagedPiece] {
+        var out: [SalvagedPiece] = []
+        for piece in pieces {
+            if case .failure(let range) = piece,
+               case .failure(let previous)? = out.last,
+               previous.endFrame == range.startFrame {
+                out[out.count - 1] = .failure(
+                    SegmentFailureRange(startFrame: previous.startFrame, endFrame: range.endFrame))
+            } else {
+                out.append(piece)
+            }
+        }
+        return out
     }
 
     /// Persists an overall telemetry snapshot for a finished run. No-op when the

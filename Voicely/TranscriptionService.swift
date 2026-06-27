@@ -1098,6 +1098,27 @@ private extension TranscriptionService {
 }
 
 extension TranscriptionService {
+    /// Builds a finished (non-active) telemetry snapshot from a completed run's
+    /// total processing time and audio duration. The segmented / single-pass
+    /// import paths drive the live telemetry timer per segment, so by the time
+    /// the whole file is done the timer has already reset — this lets those
+    /// paths persist an overall snapshot the detail view can show afterwards.
+    func finishedTelemetrySnapshot(
+        elapsedSeconds: TimeInterval,
+        audioDurationSeconds: TimeInterval
+    ) -> TranscriptionTelemetrySnapshot {
+        TranscriptionTelemetrySnapshot(
+            isActive: false,
+            modelName: currentTelemetryModelName(),
+            computeRoute: currentTelemetryComputeRoute(),
+            metrics: TranscriptionTelemetryMetrics(
+                elapsedSeconds: elapsedSeconds,
+                audioDurationSeconds: audioDurationSeconds
+            ),
+            thermalState: ProcessInfo.processInfo.thermalState
+        )
+    }
+
     func annotatedText(for result: TranscriptionResult) -> String {
         annotatedText(text: result.text, duration: result.duration)
     }

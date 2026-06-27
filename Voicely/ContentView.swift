@@ -1386,6 +1386,10 @@ struct VoiceNoteDetailView: View {
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @State private var copyConfirmVisible = false
+    /// nil → follow the automatic rule (expanded while transcribing, collapsed
+    /// once finished). Set when the user taps the header to override it; reset
+    /// to nil whenever transcription starts or stops so the auto rule resumes.
+    @State private var telemetryExpandedOverride: Bool?
     @StateObject private var audioPlayer = AudioPlayerService()
 
     private var isModelLoaded: Bool {
@@ -1457,7 +1461,13 @@ struct VoiceNoteDetailView: View {
     }
 
     private var shouldShowComputeTelemetry: Bool {
-        isTranscribingHere
+        isTranscribingHere || note.transcriptionTelemetrySampleCount > 0
+    }
+
+    /// Expanded while transcribing so metrics stream live; collapsed once done
+    /// so they stay available without taking space. A user tap overrides this.
+    private var isTelemetryExpanded: Bool {
+        telemetryExpandedOverride ?? isTranscribingHere
     }
 
     private var currentTelemetrySnapshot: TranscriptionTelemetrySnapshot {
@@ -1953,56 +1963,87 @@ struct VoiceNoteDetailView: View {
 
     private var computeTelemetryCard: some View {
         let snapshot = currentTelemetrySnapshot
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "cpu")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(VoicelyTheme.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(snapshot.computeRoute.summary)
-                        .font(.subheadline.weight(.semibold))
-                    Text(snapshot.computeRoute.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        let isLive = snapshot.isActive
+        // While transcribing, show the live timer's values; once finished the
+        // timer has reset, so fall back to the averages persisted on the note.
+        let routeSummary = isLive ? snapshot.computeRoute.summary
+            : (note.transcriptionComputeSummary.flatMap { $0.isEmpty ? nil : $0 } ?? snapshot.computeRoute.summary)
+        let routeDetail = isLive ? snapshot.computeRoute.detail
+            : (note.transcriptionComputeDetail.flatMap { $0.isEmpty ? nil : $0 } ?? snapshot.computeRoute.detail)
+        let modelName = isLive ? snapshot.modelName
+            : (note.transcriptionModelDisplayName ?? snapshot.modelName)
+        let timeRatio = isLive ? snapshot.metrics.processingTimeRatioLabel
+            : (note.averageProcessingTimeRatioLabel ?? snapshot.metrics.processingTimeRatioLabel)
+        let speed = isLive ? snapshot.metrics.speedLabel
+            : (note.averageTranscriptionSpeedLabel ?? snapshot.metrics.speedLabel)
+        let thermal = isLive ? snapshot.thermalStateLabel
+            : (note.transcriptionThermalStateLabel ?? snapshot.thermalStateLabel)
+
+        return VStack(alignment: .leading, spacing: isTelemetryExpanded ? 12 : 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    telemetryExpandedOverride = !isTelemetryExpanded
                 }
-                Spacer(minLength: 8)
-                PillBadge(
-                    text: snapshot.isActive ? "Live" : "Selected",
-                    systemImage: snapshot.isActive ? "bolt.fill" : "checkmark.circle",
-                    variant: snapshot.isActive ? .accent : .neutral
-                )
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "cpu")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(VoicelyTheme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(routeSummary)
+                            .font(.subheadline.weight(.semibold))
+                        Text(routeDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    PillBadge(
+                        text: isLive ? "Live" : "Done",
+                        systemImage: isLive ? "bolt.fill" : "checkmark.circle",
+                        variant: isLive ? .accent : .neutral
+                    )
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isTelemetryExpanded ? 0 : -90))
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Detail.computeTelemetryToggle)
 
-            HStack(spacing: 8) {
-                telemetryMetric(
-                    title: "Model",
-                    value: snapshot.modelName,
-                    systemImage: "shippingbox"
-                )
-                telemetryMetric(
-                    title: "Time ratio",
-                    value: snapshot.metrics.processingTimeRatioLabel,
-                    systemImage: "gauge.medium"
-                )
-                telemetryMetric(
-                    title: "Speed",
-                    value: snapshot.metrics.speedLabel,
-                    systemImage: "speedometer"
-                )
-            }
+            if isTelemetryExpanded {
+                HStack(spacing: 8) {
+                    telemetryMetric(
+                        title: "Model",
+                        value: modelName,
+                        systemImage: "shippingbox"
+                    )
+                    telemetryMetric(
+                        title: "Time ratio",
+                        value: timeRatio,
+                        systemImage: "gauge.medium"
+                    )
+                    telemetryMetric(
+                        title: "Speed",
+                        value: speed,
+                        systemImage: "speedometer"
+                    )
+                }
 
-            HStack(spacing: 6) {
-                Image(systemName: "thermometer.medium")
-                    .font(.caption)
-                Text("Thermal \(snapshot.thermalStateLabel)")
-                    .font(.caption)
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text("Time ratio is processing time divided by audio duration.")
-                    .font(.caption)
-                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Image(systemName: "thermometer.medium")
+                        .font(.caption)
+                    Text("Thermal \(thermal)")
+                        .font(.caption)
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Text("Time ratio is processing time divided by audio duration.")
+                        .font(.caption)
+                        .lineLimit(2)
+                }
+                .foregroundStyle(.secondary)
             }
-            .foregroundStyle(.secondary)
         }
         .padding(12)
         .background(
@@ -2015,6 +2056,11 @@ struct VoiceNoteDetailView: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.computeTelemetryCard)
+        // Drop any manual expand/collapse when transcription starts or stops so
+        // the automatic rule (expanded while live, collapsed when done) resumes.
+        .onChange(of: isTranscribingHere) { _, _ in
+            telemetryExpandedOverride = nil
+        }
     }
 
     private func telemetryMetric(title: String, value: String, systemImage: String) -> some View {
@@ -2062,6 +2108,20 @@ struct VoiceNoteDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
+
+                // Segmented / whole-file runs fill the transcript segment by
+                // segment — show what has landed so far instead of a bare
+                // progress bar until the whole file finishes.
+                if hasVisibleTranscript {
+                    Divider().opacity(0.5)
+                    Text(note.transcription)
+                        .font(.body)
+                        .lineSpacing(6)
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
+                }
             }
         } else if isRecordingPaused && !hasVisibleTranscript {
             VStack(alignment: .leading, spacing: 10) {

@@ -14,6 +14,11 @@ actor ActiveProbe {
     func record(_ active: Bool) { if active { sawActive = true } }
 }
 
+actor TranscriptCollector {
+    private(set) var values: [String] = []
+    func record(_ value: String) { values.append(value) }
+}
+
 @Suite(.serialized)
 struct SegmentedAudioTranscriberTests {
     // MARK: Task 3 — short single pass
@@ -33,6 +38,27 @@ struct SegmentedAudioTranscriberTests {
         #expect(note.transcriptionState == .completed)
         #expect(note.transcriptionOutcome == .transcribed)
         #expect(store.load(for: note.id) == nil)   // ≤30s never writes a sidecar
+    }
+
+    @Test @MainActor func segmentedRunUpdatesTranscriptIncrementally() async throws {
+        // 70 s @ 16 kHz, target 29 s ⇒ 3 segments. Each segment callback fires
+        // before that segment's text exists, so it observes the running total
+        // of the *previous* segments — proving text is surfaced incrementally
+        // rather than only after the whole file finishes.
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        let observed = TranscriptCollector()
+        transcriber.transcribeSegmentOutcome = { _ in
+            await observed.record(await MainActor.run { note.transcription })
+            return .transcribed(.init(text: "seg", duration: 1, modelIdentifier: "m"))
+        }
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(await observed.values == ["", "seg", "seg\nseg"])
+        #expect(note.transcription == "seg\nseg\nseg")
     }
 
     @Test func timestampFormatsMinutesAndHours() {

@@ -13,22 +13,28 @@
 
 ---
 
-## ⬜ 待办(提出 2026-06-23) — Re-transcribe / 整文件转录:三个问题
+## 🟡 进行中(提出 2026-06-23) — Re-transcribe / 整文件转录:三个问题
 
 > 用户观察,根因待核实,先记录不脑补。
 
-### 1. time ratio 与 speed 一直停在 "measuring"
-做 re-transcribe 时,benchmark 的 time ratio 和 speed 好像**永远显示 "measuring"**,出不来值。不知为何——感觉 live transcription(边录边转)时这两个值基本都能正常显示。待排查为何分段 / 整文件路径下这两个指标不更新。
+### 1. ✅ 已不复现 — time ratio 与 speed 一直停在 "measuring"
+做 re-transcribe 时,benchmark 的 time ratio 和 speed 好像**永远显示 "measuring"**,出不来值。
+**2026-06-27 用户反馈:此问题已不复现,不再是问题。** 不改。
 
-### 2. 分段转录应当一段一段出内容,而非等整文件转完才显示
-re-transcribe、或拖入一个文件整体转录时,目前要等**整个文件完全转完**才显示文字。但既然是按 ~20s 一段分段转录的(参见近期 `feat: re-transcribe long recordings via the segmented path`),理应可以**每转完一段就把该段文字增量显示出来**,边转边出,不必等到最后整篇才出现。
+### 2. ✅ 已修复(2026-06-27) — 分段转录应当一段一段出内容,而非等整文件转完才显示
+re-transcribe、或拖入一个文件整体转录时,过去要等**整个文件完全转完**才显示文字。
+**修复:**
+- `SegmentedAudioTranscriber.transcribeSegmented`:循环里每段完成后即 `note.transcription = pieces.joined(...)`(仅在已产出真实文本后,避免 re-transcribe 失败时丢掉旧文本)。
+- `ContentView.transcriptionBody` 的 `isLocallyTranscribing` 分支:进度条下方增量显示 `note.transcription`(此前该分支只画进度条、完全不渲染文字)。
+- 回归测试 `segmentedRunUpdatesTranscriptIncrementally`。
 
-### 3. 转录完成后 benchmark 指标整块消失
-转录过程中是有 benchmark 的(speed、time ratio 等),但一旦转录**完成**,这一整块内容就完全消失了。期望转录完成后仍**保留/展示**这些指标(至少最终结果),而不是直接清空。
+### 3. ✅ 已修复(2026-06-27) — 转录完成后 benchmark 指标整块消失
+**方案(已实现):把 performance 指标那一块做成可折叠(collapsible)。**
+- 转录**进行中**:自动**展开**,实时看指标。
+- 转录**完成**:自动**折叠**收起,指标仍在(点 header 展开)。
+- 用户手动点开/收起会覆盖自动规则;下次转录开始/结束时(`onChange(isTranscribingHere)`)重置回自动。
 
-**方案:把 performance 指标那一块做成可折叠(collapsible)。**
-- 转录**进行中**:自动**展开**,让你实时看到指标。
-- 转录**完成**:自动**折叠**收起,尽量不占空间——指标仍在,需要时点开即可,而不是直接消失。
+**配套修复:** 分段 / 单遍导入路径过去**从不持久化** telemetry(`transcribeClaimedNote` 在分段分支提前 return),完成后无指标可显示。现新增 `TranscriptionService.finishedTelemetrySnapshot`,在 `SegmentedAudioTranscriber` 完成时按"各段处理时间之和 ÷ 音频总时长"持久化整体指标;完成态 card 改用 note 上持久化的 `averageProcessingTimeRatioLabel` / `averageTranscriptionSpeedLabel` 等(live timer 此时已 reset)。
 
 ---
 

@@ -84,9 +84,15 @@ final class SegmentedAudioTranscriber {
         transcriptionService.beginExternalTranscription(noteID: note.id)
         defer { transcriptionService.endExternalTranscription(noteID: note.id) }
 
+        let audioDurationSeconds = info.sampleRate > 0
+            ? Double(info.totalFrames) / info.sampleRate
+            : 0
+
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
             let outcome = await transcribeSegmentOutcome(sourceURL)
-            finalizeSinglePass(note: note, outcome: outcome, hadExistingTranscript: hadExistingTranscript)
+            finalizeSinglePass(note: note, outcome: outcome,
+                               hadExistingTranscript: hadExistingTranscript,
+                               audioDurationSeconds: audioDurationSeconds)
         } else {
             await transcribeSegmented(note: note, sourceURL: sourceURL, info: info,
                                       hadExistingTranscript: hadExistingTranscript)
@@ -113,11 +119,14 @@ final class SegmentedAudioTranscriber {
 
     // MARK: - Single pass (≤30 s)
 
-    private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome, hadExistingTranscript: Bool) {
+    private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome,
+                                    hadExistingTranscript: Bool, audioDurationSeconds: TimeInterval) {
         if case .transcribed(let result) = outcome {
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
+            recordTelemetry(note: note, elapsedSeconds: result.duration,
+                            audioDurationSeconds: audioDurationSeconds)
             note.completeTranscription()
             note.transcriptionOutcome = .transcribed
             note.clearTransientTranscriptionFlags()
@@ -219,6 +228,13 @@ final class SegmentedAudioTranscriber {
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                      accumulatedText: pieces.joined(separator: "\n"),
                                      failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
+            // Surface text as it lands so the detail view fills in segment by
+            // segment instead of staying blank until the whole file finishes.
+            // Only once real text exists, so a re-transcription's previous
+            // transcript is preserved until the first new segment arrives.
+            if producedAnyText {
+                note.transcription = pieces.joined(separator: "\n")
+            }
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
@@ -235,6 +251,14 @@ final class SegmentedAudioTranscriber {
         note.transcription = pieces.joined(separator: "\n")
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
+        if producedAnyText {
+            // Persist an overall snapshot (sum of per-segment processing time vs
+            // full audio duration) so the detail view keeps showing metrics once
+            // transcription finishes, like the live path does.
+            let audioDuration = info.sampleRate > 0 ? Double(info.totalFrames) / info.sampleRate : 0
+            recordTelemetry(note: note, elapsedSeconds: accumulatedDuration,
+                            audioDurationSeconds: audioDuration)
+        }
         note.completeTranscription()
         if !failedRanges.isEmpty {
             note.transcriptionOutcome = .failed
@@ -245,6 +269,17 @@ final class SegmentedAudioTranscriber {
             note.transcriptionOutcome = .transcribed
         }
         note.clearTransientTranscriptionFlags()
+    }
+
+    /// Persists an overall telemetry snapshot for a finished run. No-op when the
+    /// numbers are unusable (the snapshot's own guards drop a zero ratio/speed).
+    private func recordTelemetry(note: VoiceNote, elapsedSeconds: TimeInterval,
+                                 audioDurationSeconds: TimeInterval) {
+        guard elapsedSeconds > 0, audioDurationSeconds > 0 else { return }
+        note.recordTranscriptionTelemetry(
+            transcriptionService.finishedTelemetrySnapshot(
+                elapsedSeconds: elapsedSeconds,
+                audioDurationSeconds: audioDurationSeconds))
     }
 
     // MARK: - Audio info & formatting

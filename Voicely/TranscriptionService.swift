@@ -983,7 +983,18 @@ private extension TranscriptionService {
                 task: .transcribe,
                 language: languageCode,
                 temperature: 0.0,
-                temperatureFallbackCount: 0,
+                // Anti-repetition safety net for degenerate decoding loops
+                // (e.g. "It's not? It's not? …" repeated dozens of times on
+                // noisy/cluttered speech). Two parts are both required, but
+                // DecodingOptions wants them in declaration order so they are
+                // not adjacent here:
+                //  - temperatureFallbackCount > 0 (below) lets WhisperKit
+                //    re-decode a window at higher temperature when degenerate.
+                //  - compressionRatioThreshold 2.0 (further below; default 2.4
+                //    is too lax) makes the repetition actually trip the
+                //    fallback; without lowering it most loops never reach 2.4
+                //    and fallback never fires. See WhisperKit issue #294.
+                temperatureFallbackCount: 3,
                 sampleLength: 224,
                 usePrefillPrompt: true,
                 usePrefillCache: false,
@@ -992,6 +1003,8 @@ private extension TranscriptionService {
                 withoutTimestamps: false,
                 wordTimestamps: false,
                 clipTimestamps: [0.0],
+                // Lowered from the 2.4 default — see the fallback note above.
+                compressionRatioThreshold: 2.0,
                 // Incremental segments are pre-cut to ≤29 s by our own VAD;
                 // WhisperKit must treat each input as a single window.
                 chunkingStrategy: ChunkingStrategy.none

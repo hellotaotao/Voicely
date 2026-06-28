@@ -1,25 +1,37 @@
 # TODO
 
-## ⬜ 待办(提出 2026-06-23) — 利用 timestamp:音频 ↔ 文字双向定位
+## ✅ 已完成(2026-06-28,提交 c9c3d48)— 利用 timestamp:音频 ↔ 文字双向定位
 
-> transcribe 时本来就带 timestamp,别浪费掉。
+> transcribe 时本来就带 timestamp,别浪费掉。原始诉求(类似卡拉 OK 跟读):
+> 拖动录音 → 文字滚动+高亮当前词;点词 → 录音跳到该词时间点。
 
-理想效果(类似卡拉 OK 跟读):
+### 实现(已提交 `c9c3d48`)
+- **采集**:`TranscriptionService` 打开 `wordTimestamps: true`,把 WhisperKit 的逐词时间展平成 `[WordToken]`。
+- **存储**:`Item.swift` 新增 `WordToken` + `wordTimingsData`(JSON,CloudKit 兼容用 Optional);分段路径把每片的片内时间 re-base 回全局时间(`SegmentedAudioTranscriber`,加 `start/sampleRate` 偏移)。
+- **UI**:新文件 `TappableTranscriptView.swift`(UITextView/TextKit,长录音省内存)——
+  - **音频→文字**:`currentTime` 推进时高亮当前「词单元」并自动滚入视野(卡拉 OK),手动滚动后暂停自动跟随 ~4s;高亮带 1.6s `syncLead` 补偿 Whisper 偏早的时间戳。
+  - **文字→音频**:**单击**词 → seek 到该词起点并播放;**长按**保留给系统选中/复制。
+- **验证**:VoicelyTests **153 全绿**;**拖动→文字方向已真机实测 ✓(用户:"非常好")**。
 
-- **拖动录音 → 文字跟着走**:拖动 / scrub 录音进度时,transcription 自动滚动到对应位置,并高亮当前时间点正在说的那个词。
-- **长按词 → 录音跳过去**:在 transcription 里长按某个词,录音自动跳到说那个词时的位置(播放定位)。
-
-即用每个词 / 每段的时间戳把「播放进度」和「文字位置」绑成双向同步。
+### 已知局限(step1 范围,刻意未做)
+- 续传(resume)的片段不存 word timings —— sidecar 只持久化文本不持久化时间,补回会与文本错位,故整段跳过。
+- 「文字→音频」用的是**单击**(非原诉求里的「长按」),为的是把长按让给系统选中/复制。如手感不对可再调。
 
 ---
 
-## 🟡 进行中(提出 2026-06-23) — Re-transcribe / 整文件转录:三个问题
+## ✅ 已完成(2026-06-28)— Re-transcribe / 整文件转录:三个问题
 
 > 用户观察,根因待核实,先记录不脑补。
 
-### 1. ✅ 已不复现 — time ratio 与 speed 一直停在 "measuring"
-做 re-transcribe 时,benchmark 的 time ratio 和 speed 好像**永远显示 "measuring"**,出不来值。
-**2026-06-27 用户反馈:此问题已不复现,不再是问题。** 不改。
+### 1. ✅ 已修复(2026-06-28)— time ratio / speed 只反映「每段」而非「整条录音」
+re-transcribe / 拖文件整体转录时,telemetry 卡的 time ratio 和 speed **是按每个 ~29s 切片算的**——每段 reset、数字跳,只代表当前这一段的效率、不平滑(live 边录边转则是整条、正常)。
+注:更早曾「**一直卡 Measuring**」,那个在 `2e96e7e`(分段路径开始驱动 telemetry)后已不复现;本次要解决的是「per-slice、不代表整条录音」。"Measuring" 现仅在片间空档偶尔闪现。
+
+**根因**:分段路径(re-transcribe / 导入)是**每个切片**各自调 `transcribeAudioOutcome` 驱动 telemetry(切片 ~29s、begin/finish 各一次、片间 reset),比值只反映当前切片;单遍 / live 路径开头用**整文件**调一次,故稳定、平滑。
+
+**修复(`SegmentedAudioTranscriber` + `TranscriptionService`)**:整个分段 run 开头用整文件时长调一次新增的 `beginTranscriptionTelemetry(audioDuration:)`、`defer` 收尾;切片调用改传 `transcribeAudioOutcome(..., driveTelemetry: false)`,不再各自重置 → 比值现在代表**整条录音**的转录效率(累计墙钟 ÷ 录音时长),平滑增长。新增回归测试 `segmentedRunDrivesWholeFileTelemetry`(断言分段运行期间发布的 telemetry 反映整文件时长 + active;修前失败、修后通过)。VoicelyTests **154 全绿**。**待真机最终确认。**
+
+> 注:完成态那张 "Done" 卡用的是「各段处理时间之和 ÷ 录音时长」,运行中这张 live 卡用的是「累计墙钟 ÷ 录音时长」(含切片/VAD 开销),两者会略有差异。
 
 ### 2. ✅ 已修复(2026-06-27) — 分段转录应当一段一段出内容,而非等整文件转完才显示
 re-transcribe、或拖入一个文件整体转录时,过去要等**整个文件完全转完**才显示文字。

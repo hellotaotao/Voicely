@@ -396,7 +396,8 @@ class TranscriptionService: ObservableObject {
     /// callers can react per cause instead of treating every empty result the same.
     func transcribeAudioOutcome(
         filePath: String,
-        progressCallback: @escaping (Float) -> Void = { _ in }
+        progressCallback: @escaping (Float) -> Void = { _ in },
+        driveTelemetry: Bool = true
     ) async -> TranscriptionOutcome {
         updateEngineStatus()
 
@@ -418,7 +419,9 @@ class TranscriptionService: ObservableObject {
         defer {
             isTranscribing = false
             currentTranscriptionTask = nil
-            finishTranscriptionTelemetry()
+            // The segmented path drives one whole-file telemetry session itself
+            // (driveTelemetry == false), so a per-slice call must not finish it.
+            if driveTelemetry { finishTranscriptionTelemetry() }
             resetProgressSmoothing()
             transcriptionProgress = 0.0
         }
@@ -427,7 +430,9 @@ class TranscriptionService: ObservableObject {
             return .modelUnavailable
         }
 
-        await beginTranscriptionTelemetry(filePath: filePath)
+        if driveTelemetry {
+            await beginTranscriptionTelemetry(filePath: filePath)
+        }
 
         let task = Task { [weak self] in
             await self?.transcribeImpl(filePath, progressCallback)
@@ -557,6 +562,10 @@ private extension TranscriptionService {
         finishTranscriptionTelemetry()
         telemetryStartedAt = nowProvider()
         telemetryAudioDuration = await audioDurationProvider(filePath)
+        startTelemetryTimer()
+    }
+
+    private func startTelemetryTimer() {
         refreshTranscriptionTelemetry(isActive: true)
 
         telemetryTimerTask = Task { @MainActor [weak self] in
@@ -568,19 +577,6 @@ private extension TranscriptionService {
                 self?.refreshTranscriptionTelemetry(isActive: true)
             }
         }
-    }
-
-    func finishTranscriptionTelemetry() {
-        telemetryTimerTask?.cancel()
-        telemetryTimerTask = nil
-
-        guard telemetryStartedAt != nil else {
-            return
-        }
-
-        refreshTranscriptionTelemetry(isActive: false)
-        telemetryStartedAt = nil
-        telemetryAudioDuration = nil
     }
 
     func refreshTranscriptionTelemetry(isActive: Bool) {
@@ -1124,10 +1120,10 @@ private extension TranscriptionService {
 
 extension TranscriptionService {
     /// Builds a finished (non-active) telemetry snapshot from a completed run's
-    /// total processing time and audio duration. The segmented / single-pass
-    /// import paths drive the live telemetry timer per segment, so by the time
-    /// the whole file is done the timer has already reset — this lets those
-    /// paths persist an overall snapshot the detail view can show afterwards.
+    /// total processing time and audio duration. The segmented path's live
+    /// telemetry session is finished (timer reset to inactive) when the run ends,
+    /// so this persisted snapshot is what the detail view's Done card shows
+    /// afterwards.
     func finishedTelemetrySnapshot(
         elapsedSeconds: TimeInterval,
         audioDurationSeconds: TimeInterval
@@ -1142,6 +1138,36 @@ extension TranscriptionService {
             ),
             thermalState: ProcessInfo.processInfo.thermalState
         )
+    }
+
+    /// Begin a single live telemetry session for a whole-file run whose duration
+    /// is already known (the segmented path computes it from the audio info), so
+    /// we skip re-reading the file. The segmented run owns this one session for
+    /// its whole length — its per-slice transcribe calls pass driveTelemetry:
+    /// false so they don't reset it each ~29 s slice (which made the card show
+    /// per-slice values instead of the whole recording). Pair with
+    /// `finishTranscriptionTelemetry()`.
+    func beginTranscriptionTelemetry(audioDuration: TimeInterval) {
+        finishTranscriptionTelemetry()
+        telemetryStartedAt = nowProvider()
+        telemetryAudioDuration = audioDuration > 0 ? audioDuration : nil
+        startTelemetryTimer()
+    }
+
+    /// Stop the live telemetry timer and reset to inactive. Safe to call with no
+    /// active session. Internal so the segmented transcriber can end the
+    /// whole-file session it began.
+    func finishTranscriptionTelemetry() {
+        telemetryTimerTask?.cancel()
+        telemetryTimerTask = nil
+
+        guard telemetryStartedAt != nil else {
+            return
+        }
+
+        refreshTranscriptionTelemetry(isActive: false)
+        telemetryStartedAt = nil
+        telemetryAudioDuration = nil
     }
 
     func annotatedText(for result: TranscriptionResult) -> String {

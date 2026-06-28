@@ -19,6 +19,15 @@ actor TranscriptCollector {
     func record(_ value: String) { values.append(value) }
 }
 
+actor DurationCollector {
+    private(set) var durations: [Double?] = []
+    private(set) var allActive = true
+    func record(active: Bool, duration: Double?) {
+        durations.append(duration)
+        if !active { allActive = false }
+    }
+}
+
 @Suite(.serialized)
 struct SegmentedAudioTranscriberTests {
     // MARK: Task 3 — short single pass
@@ -59,6 +68,38 @@ struct SegmentedAudioTranscriberTests {
 
         #expect(await observed.values == ["", "seg", "seg\nseg"])
         #expect(note.transcription == "seg\nseg\nseg")
+    }
+
+    @Test @MainActor func segmentedRunDrivesWholeFileTelemetry() async throws {
+        // Re-transcribe / import (the segmented path) must drive ONE telemetry
+        // session pinned to the WHOLE-FILE duration for the entire run, so the
+        // detail card shows a real, growing time-ratio/speed. Regression for the
+        // "stuck on Measuring" bug: telemetry used to be driven per ~29 s slice
+        // (reset each segment) rather than once for the whole file.
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let service = TranscriptionService()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        let observed = DurationCollector()
+        transcriber.transcribeSegmentOutcome = { _ in
+            let snapshot = await MainActor.run { service.transcriptionTelemetry }
+            await observed.record(active: snapshot.isActive,
+                                  duration: snapshot.metrics.audioDurationSeconds)
+            return .transcribed(.init(text: "seg", duration: 1, modelIdentifier: "m"))
+        }
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        // Each slice should have seen the live telemetry active and pinned to the
+        // whole-file ~70 s (not a per-slice ~29 s value, and not nil → "Measuring").
+        let durations = await observed.durations
+        #expect(!durations.isEmpty)
+        #expect(await observed.allActive)
+        for duration in durations {
+            #expect(duration != nil)
+            if let duration { #expect(abs(duration - 70) < 2) }
+        }
     }
 
     @Test func timestampFormatsMinutesAndHours() {

@@ -66,7 +66,10 @@ final class SegmentedAudioTranscriber {
         self.progressStore = progressStore
         self.nowProvider = nowProvider
         self.transcribeSegmentOutcome = { url in
-            await transcriptionService.transcribeAudioOutcome(filePath: url.path)
+            // The whole run drives one telemetry session (see transcribe); a
+            // per-slice call must not reset it, so it transcribes silently.
+            await transcriptionService.transcribeAudioOutcome(filePath: url.path,
+                                                              driveTelemetry: false)
         }
     }
 
@@ -112,6 +115,13 @@ final class SegmentedAudioTranscriber {
         let audioDurationSeconds = info.sampleRate > 0
             ? Double(info.totalFrames) / info.sampleRate
             : 0
+
+        // Drive one whole-file telemetry session for the entire run so the detail
+        // view shows a real, growing whole-recording time-ratio/speed. Per-slice
+        // transcribe calls pass driveTelemetry:false (see init) so they don't
+        // reset it each ~29 s slice (which would show only per-slice values).
+        transcriptionService.beginTranscriptionTelemetry(audioDuration: audioDurationSeconds)
+        defer { transcriptionService.finishTranscriptionTelemetry() }
 
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
             let outcome = await transcribeSegmentOutcome(sourceURL)

@@ -144,6 +144,14 @@ final class SegmentedAudioTranscriber {
                                     hadExistingTranscript: Bool, audioDurationSeconds: TimeInterval) {
         if case .transcribed(let result) = outcome {
             note.transcription = result.text
+            // Single pass transcribes the whole file, so word times are already
+            // global (relative to the recording start) — store them as-is.
+            note.wordTimings = result.words
+#if DEBUG
+            if let first = result.words.first, let last = result.words.last {
+                print("📍 stored \(result.words.count) word timings (single pass), span \(String(format: "%.2f", first.start))–\(String(format: "%.2f", last.end))s")
+            }
+#endif
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             recordTelemetry(note: note, elapsedSeconds: result.duration,
@@ -193,6 +201,12 @@ final class SegmentedAudioTranscriber {
         let segmentIndex = SegmentIndexCounter()
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
+        // Word timings accumulate across slices, each re-based to global time.
+        // The resume sidecar only persists text, not timings — so if we resumed
+        // from a prior run the pre-resume words are gone and we can't store a
+        // complete aligned timeline. Skip word storage in that case (step 1 scope).
+        var allWords: [WordToken] = []
+        let resumedMidway = (resumed?.lastFrame ?? 0) > 0
 
         while start < info.totalFrames {
             if shouldStopForBackground() { return }   // sidecar already persisted; resume later
@@ -224,6 +238,12 @@ final class SegmentedAudioTranscriber {
                 if let text = IncrementalTranscriptionCoordinator.sanitizedSegmentText(result.text) {
                     pieces.append(text)
                 }
+                // Re-base this slice's word times (0-based within the slice) to
+                // global time by adding the slice's start offset in the recording.
+                let offset = Double(start) / info.sampleRate
+                allWords.append(contentsOf: result.words.map {
+                    WordToken(word: $0.word, start: $0.start + offset, end: $0.end + offset)
+                })
                 producedAnyText = true
                 lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
                 accumulatedDuration += result.duration
@@ -277,6 +297,17 @@ final class SegmentedAudioTranscriber {
         }
 
         note.transcription = pieces.joined(separator: "\n")
+        // Only store timings when the whole file was transcribed in one run; a
+        // resumed run is missing its pre-resume words, so the timeline would be
+        // misaligned with the text (worse than having none).
+        if !resumedMidway {
+            note.wordTimings = allWords
+        }
+#if DEBUG
+        if let first = allWords.first, let last = allWords.last {
+            print("📍 stored \(allWords.count) word timings (segmented), span \(String(format: "%.2f", first.start))–\(String(format: "%.2f", last.end))s")
+        }
+#endif
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
         if producedAnyText {

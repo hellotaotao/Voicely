@@ -53,8 +53,8 @@
 		2B1821F62DEB579E00550CD1 /* Voicely.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Voicely.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822072DEB579F00550CD1 /* VoicelyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Version.xcconfig; sourceTree = "<group>"; };
 		FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoicelyWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Version.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -139,7 +139,7 @@
 		2B1821ED2DEB579E00550CD1 = {
 			isa = PBXGroup;
 			children = (
-				CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */,
+				CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */,
 				2B1821F82DEB579E00550CD1 /* Voicely */,
 				27DAE2FC170948BF866FF301 /* VoicelyWidgets */,
 				2B18220A2DEB579F00550CD1 /* VoicelyTests */,
@@ -389,7 +389,7 @@
 /* Begin XCBuildConfiguration section */
 		1A530520BF4945668009DCAC /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
@@ -415,7 +415,7 @@
 		};
 		2B18221B2DEB579F00550CD1 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -458,7 +458,7 @@
 		};
 		2B18221C2DEB579F00550CD1 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -698,7 +698,7 @@
 		};
 		B58C5CE205944E2AA656F1FB /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Version.xcconfig */;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;

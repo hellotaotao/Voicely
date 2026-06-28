@@ -313,7 +313,7 @@ struct TranscriptionServiceTests {
         var attempts = 0
         service.transcribeImpl = { _, _ in
             attempts += 1
-            return attempts == 1 ? .whisperError("transient") : .text("recovered")
+            return attempts == 1 ? .whisperError("transient") : .text("recovered", [])
         }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")

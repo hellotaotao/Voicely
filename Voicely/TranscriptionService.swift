@@ -19,6 +19,8 @@ struct TranscriptionResult {
     let text: String
     let duration: TimeInterval
     let modelIdentifier: String?
+    /// Word-level timings for this attempt (empty unless wordTimestamps was on).
+    var words: [WordToken] = []
 }
 
 /// What a single transcription attempt produced. `.text` carries Whisper's raw
@@ -26,7 +28,7 @@ struct TranscriptionResult {
 /// text, so callers can react per cause instead of treating all failures alike.
 /// A string literal becomes `.text`, so existing test stubs keep working.
 enum RawTranscription: ExpressibleByStringLiteral {
-    case text(String)
+    case text(String, [WordToken])
     case noSpeech
     case modelUnavailable
     case audioUnavailable
@@ -34,7 +36,7 @@ enum RawTranscription: ExpressibleByStringLiteral {
     case cancelled
 
     init(stringLiteral value: String) {
-        self = .text(value)
+        self = .text(value, [])
     }
 }
 
@@ -429,7 +431,7 @@ class TranscriptionService: ObservableObject {
         }
 
         switch raw {
-        case .text(let rawText):
+        case .text(let rawText, let rawWords):
             if cancelRequested || Task.isCancelled {
                 cancelRequested = false
                 lastCancellationHandled = true
@@ -445,7 +447,8 @@ class TranscriptionService: ObservableObject {
             return .transcribed(TranscriptionResult(
                 text: finalizedTranscript.text,
                 duration: elapsed,
-                modelIdentifier: modelIdentifier
+                modelIdentifier: modelIdentifier,
+                words: rawWords
             ))
         case .noSpeech:
             return .noSpeech
@@ -1001,7 +1004,7 @@ private extension TranscriptionService {
                 detectLanguage: isAutoLanguage,
                 skipSpecialTokens: true,
                 withoutTimestamps: false,
-                wordTimestamps: false,
+                wordTimestamps: true,
                 clipTimestamps: [0.0],
                 // Lowered from the 2.4 default — see the fallback note above.
                 compressionRatioThreshold: 2.0,
@@ -1019,6 +1022,7 @@ private extension TranscriptionService {
             // Whisper invokes this once per decoded token; only hop to the
             // main actor when the fraction moved enough to be visible.
             let lastReportedFraction = OSAllocatedUnfairLock<Float>(initialState: 0)
+            let whisperStart = Date()
             let transcriptionResults = try await whisperKit.transcribe(
                 audioPath: audioPath,
                 decodeOptions: decodeOptions
@@ -1051,7 +1055,18 @@ private extension TranscriptionService {
                 return .whisperError("empty result")
             }
 
-            return .text(result.text)
+            // Flatten WhisperKit's per-segment word timings (populated because
+            // wordTimestamps is on) into one segment-local timeline. Callers that
+            // slice audio (the segmented path) re-base these to global time.
+            let words: [WordToken] = transcriptionResults
+                .flatMap { $0.segments }
+                .flatMap { $0.words ?? [] }
+                .map { WordToken(word: $0.word, start: Double($0.start), end: Double($0.end)) }
+#if DEBUG
+            let whisperElapsed = Date().timeIntervalSince(whisperStart)
+            print("⏱️ WhisperKit transcribe: \(String(format: "%.2f", whisperElapsed))s, \(words.count) word timings")
+#endif
+            return .text(result.text, words)
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable

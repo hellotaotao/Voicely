@@ -1395,6 +1395,8 @@ struct VoiceNoteDetailView: View {
     @State private var showingRetranscribeConfirmation = false
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
+    /// Decoded once (not per render) so the 0.1 s playback ticks don't re-parse JSON.
+    @State private var cachedWordTimings: [WordToken] = []
     @State private var copyConfirmVisible = false
     /// nil → follow the automatic rule (expanded while transcribing, collapsed
     /// once finished). Set when the user taps the header to override it; reset
@@ -1574,6 +1576,9 @@ struct VoiceNoteDetailView: View {
             .frame(maxWidth: detailContentMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        // The transcript box scrolls internally; hide the page's own indicator so
+        // there's only one scrollbar (the transcript's) instead of a nested pair.
+        .scrollIndicators(.hidden)
         .background(VoicelyTheme.groupedBackground)
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.screen)
         .navigationBarTitleDisplayMode(.inline)
@@ -1612,12 +1617,18 @@ struct VoiceNoteDetailView: View {
             loadAudioFile()
             editedTitle = note.title
             editedTranscription = note.transcription
+            cachedWordTimings = note.wordTimings
         }
         .onChange(of: note.id) { _, _ in
             if isEditing { isEditing = false }
             loadAudioFile()
             editedTitle = note.title
             editedTranscription = note.transcription
+            cachedWordTimings = note.wordTimings
+        }
+        .onChange(of: note.transcription) { _, _ in
+            // Picks up word timings once a (re)transcription finishes while open.
+            cachedWordTimings = note.wordTimings
         }
     }
 
@@ -2212,6 +2223,29 @@ struct VoiceNoteDetailView: View {
                     .background(VoicelyTheme.surfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptEditor)
+            } else if !cachedWordTimings.isEmpty {
+                TappableTranscriptView(
+                    words: cachedWordTimings,
+                    currentTime: audioPlayer.currentTime,
+                    onWordTap: { time in
+                        audioPlayer.seek(to: time)
+                        audioPlayer.play()
+                    }
+                )
+                // Fill most of the window instead of a fixed box; the text view
+                // still scrolls internally so karaoke auto-scroll keeps working.
+                // Reserve ≈ the space above it (header, player, card chrome); tunable.
+                .containerRelativeFrame(.vertical) { height, _ in max(320, height - 480) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // A faint accent wash + hairline border marks this as the interactive
+                // transcript (ties to the accent highlight) without the heavy gray.
+                .background(VoicelyTheme.accent.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(VoicelyTheme.accent.opacity(0.22), lineWidth: 1)
+                )
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
             } else {
                 Text(note.transcription)
                     .font(.body)

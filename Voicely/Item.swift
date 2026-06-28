@@ -33,6 +33,15 @@ enum WaveformSeedGenerator {
     }
 }
 
+/// One transcribed word and its time span within the recording, in seconds.
+/// Stored (option A) as a compact JSON array on the note; the readable text
+/// still lives in `transcription`, so this carries only timing data.
+struct WordToken: Codable, Equatable {
+    let word: String
+    let start: Double
+    let end: Double
+}
+
 @Model
 final class VoiceNote {
     var id: UUID = UUID()
@@ -45,6 +54,23 @@ final class VoiceNote {
     var duration: TimeInterval = 0
     var audioFilePath: String = ""
     var transcription: String = ""
+    /// Word-level timings as a JSON-encoded `[WordToken]`. Optional for CloudKit
+    /// compatibility; nil means no timing data (e.g. notes from before this feature).
+    var wordTimingsData: Data?
+    /// Decoded view over `wordTimingsData`. Empty array when none is stored.
+    var wordTimings: [WordToken] {
+        get {
+            guard let wordTimingsData else { return [] }
+            return (try? JSONDecoder().decode([WordToken].self, from: wordTimingsData)) ?? []
+        }
+        set {
+            if newValue.isEmpty {
+                wordTimingsData = nil
+            } else {
+                wordTimingsData = try? JSONEncoder().encode(newValue)
+            }
+        }
+    }
     var transcriptionModelIdentifier: String?
     var transcriptionLastErrorMessage: String?
     var isTranscribing: Bool = false

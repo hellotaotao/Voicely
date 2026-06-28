@@ -42,6 +42,68 @@ struct WordToken: Codable, Equatable {
     let end: Double
 }
 
+extension WordToken {
+    /// Re-anchors word timings after a manual transcript edit. Unchanged head and
+    /// tail units keep their own timestamps; the edited span collapses into one
+    /// unit that inherits the timestamp of the first unit it replaced. (We already
+    /// let many words share one timestamp, so a coarse stamp here is acceptable.)
+    /// The returned units always concatenate back to exactly `editedText`.
+    static func reanchored(_ units: [WordToken], editedText: String) -> [WordToken] {
+        let oldText = units.map(\.word).joined()
+        if editedText == oldText { return units }
+        guard !units.isEmpty else {
+            return editedText.isEmpty ? [] : [WordToken(word: editedText, start: 0, end: 0)]
+        }
+
+        let oldChars = Array(oldText)
+        let newChars = Array(editedText)
+
+        // Longest common prefix, then longest common suffix that doesn't overlap it.
+        var prefix = 0
+        while prefix < oldChars.count, prefix < newChars.count,
+              oldChars[prefix] == newChars[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < oldChars.count - prefix, suffix < newChars.count - prefix,
+              oldChars[oldChars.count - 1 - suffix] == newChars[newChars.count - 1 - suffix] {
+            suffix += 1
+        }
+
+        let lengths = units.map { $0.word.count }
+
+        // Keep whole units lying entirely inside the common prefix / suffix.
+        var prefixUnits = 0, prefixChars = 0
+        while prefixUnits < units.count, prefixChars + lengths[prefixUnits] <= prefix {
+            prefixChars += lengths[prefixUnits]; prefixUnits += 1
+        }
+        var suffixUnits = 0, suffixChars = 0
+        while suffixUnits < units.count - prefixUnits,
+              suffixChars + lengths[units.count - 1 - suffixUnits] <= suffix {
+            suffixChars += lengths[units.count - 1 - suffixUnits]; suffixUnits += 1
+        }
+
+        var result = Array(units[0..<prefixUnits])
+
+        let midStart = prefixChars
+        let midEnd = newChars.count - suffixChars
+        if midEnd > midStart {
+            let midText = String(newChars[midStart..<midEnd])
+            let firstReplaced = prefixUnits
+            let lastReplaced = units.count - suffixUnits - 1
+            if firstReplaced <= lastReplaced {
+                result.append(WordToken(word: midText,
+                                        start: units[firstReplaced].start,
+                                        end: max(units[firstReplaced].start, units[lastReplaced].end)))
+            } else {
+                // Pure insertion between two kept units — borrow the boundary time.
+                let t = result.last?.end ?? units[min(prefixUnits, units.count - 1)].start
+                result.append(WordToken(word: midText, start: t, end: t))
+            }
+        }
+        result.append(contentsOf: units[(units.count - suffixUnits)...])
+        return result
+    }
+}
+
 @Model
 final class VoiceNote {
     var id: UUID = UUID()

@@ -2319,13 +2319,26 @@ struct VoiceNoteDetailView: View {
             if titleChanged, !editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.titleWasManuallyEdited = true
             }
-            note.transcription = editedTranscription
+            if cachedWordTimings.isEmpty {
+                note.transcription = editedTranscription
+            } else if editedTranscription != cachedWordTimings.map(\.word).joined() {
+                // Edited a timed transcript: keep timings — unchanged parts keep
+                // their times, the edited span inherits its position's timestamp.
+                let reanchored = WordToken.reanchored(cachedWordTimings, editedText: editedTranscription)
+                note.wordTimings = reanchored
+                cachedWordTimings = reanchored
+                note.transcription = editedTranscription
+            }
             if editedTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.transcriptionModelIdentifier = nil
             }
         } else {
             editedTitle = note.title
-            editedTranscription = note.transcription
+            // Edit the same text the tappable view shows (the word units) so the
+            // edit can keep its timings; fall back to the plain transcript otherwise.
+            editedTranscription = cachedWordTimings.isEmpty
+                ? note.transcription
+                : cachedWordTimings.map(\.word).joined()
         }
         isEditing.toggle()
     }

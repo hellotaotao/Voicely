@@ -32,7 +32,11 @@ enum RawTranscription: ExpressibleByStringLiteral {
     case noSpeech
     case modelUnavailable
     case audioUnavailable
-    case whisperError(String?)
+    /// `retryable` is true only for a thrown WhisperKit error (often a transient
+    /// ANE/Metal hiccup). A deterministic empty/blank decode is `false` — re-running
+    /// the identical window just repeats the same degenerate output; let the caller
+    /// salvage it by bisection instead.
+    case whisperError(String?, retryable: Bool)
     case cancelled
 
     init(stringLiteral value: String) {
@@ -48,7 +52,11 @@ enum TranscriptionOutcome {
     case noSpeech
     case modelUnavailable
     case audioUnavailable
-    case whisperError(String?)
+    /// `retryable` is true only for a thrown WhisperKit error (often a transient
+    /// ANE/Metal hiccup). A deterministic empty/blank decode is `false` — re-running
+    /// the identical window just repeats the same degenerate output; let the caller
+    /// salvage it by bisection instead.
+    case whisperError(String?, retryable: Bool)
     case cancelled
 }
 
@@ -65,7 +73,7 @@ class TranscriptionService: ObservableObject {
     @Published private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot = .inactive()
 
     var modelManager: ModelManager?
-    var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil) }
+    var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil, retryable: false) }
     var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
     var nowProvider: () -> Date = { Date() }
     var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
@@ -439,8 +447,9 @@ class TranscriptionService: ObservableObject {
             }
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(rawText) else {
                 // Whisper ran but produced nothing usable. Treat it as a real error
-                // to surface for diagnosis — not as a calm "no speech".
-                return .whisperError("blank output")
+                // to surface for diagnosis — not as a calm "no speech". Deterministic,
+                // so not retryable: an identical re-decode yields the same blank.
+                return .whisperError("blank output", retryable: false)
             }
             let elapsed = Date().timeIntervalSince(startTime)
             let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
@@ -456,8 +465,8 @@ class TranscriptionService: ObservableObject {
             return .modelUnavailable
         case .audioUnavailable:
             return .audioUnavailable
-        case .whisperError(let diagnostic):
-            return .whisperError(diagnostic)
+        case .whisperError(let diagnostic, let retryable):
+            return .whisperError(diagnostic, retryable: retryable)
         case .cancelled:
             return .cancelled
         }
@@ -781,7 +790,7 @@ private extension TranscriptionService {
         var outcome = await transcribeAudioOutcome(filePath: note.audioFilePath, progressCallback: onProgress)
 
         // A real Whisper error is often transient — retry once before giving up.
-        if case .whisperError = outcome, !wasTranscriptionCancelled() {
+        if case .whisperError(_, true) = outcome, !wasTranscriptionCancelled() {
             outcome = await transcribeAudioOutcome(filePath: note.audioFilePath, progressCallback: onProgress)
         }
 
@@ -827,7 +836,7 @@ private extension TranscriptionService {
             // automatically once the condition clears (e.g. modelLoadedNotification).
             requeueNote(note, queuedAt: nowProvider())
 
-        case .whisperError(let diagnostic):
+        case .whisperError(let diagnostic, _):
             // A real error survived the retry. Don't pretend it succeeded, and don't
             // dump jargon on the user — keep the real reason internally for us.
             #if DEBUG
@@ -1052,7 +1061,7 @@ private extension TranscriptionService {
             }
 
             guard let result = transcriptionResults.first else {
-                return .whisperError("empty result")
+                return .whisperError("empty result", retryable: false)
             }
 
             // Flatten WhisperKit's per-segment word timings (populated because
@@ -1070,7 +1079,8 @@ private extension TranscriptionService {
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
-            return .whisperError("WhisperKit error: \(error.localizedDescription)")
+            // A thrown error is often a transient ANE/Metal hiccup — worth one retry.
+            return .whisperError("WhisperKit error: \(error.localizedDescription)", retryable: true)
         }
     }
 

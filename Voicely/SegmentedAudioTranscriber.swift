@@ -11,7 +11,11 @@ private final class SegmentIndexCounter {
 /// One outcome of salvaging a failed range: either recovered text or a sub-range
 /// that still couldn't be transcribed (kept as a placeholder).
 private enum SalvagedPiece {
-    case text(String, duration: TimeInterval, modelIdentifier: String?)
+    /// `words` are slice-local (0-based within the salvaged sub-range); `startFrame`
+    /// is that sub-range's offset in the recording so the caller can re-base them to
+    /// global time. Without this, salvaged text would land with no word timings.
+    case text(String, words: [WordToken], startFrame: Int64,
+              duration: TimeInterval, modelIdentifier: String?)
     case failure(SegmentFailureRange)
 }
 
@@ -176,7 +180,7 @@ final class SegmentedAudioTranscriber {
             note.transcription = ""
             note.completeTranscription()
             note.transcriptionOutcome = .noSpeech
-        case .whisperError(let diagnostic):
+        case .whisperError(let diagnostic, _):
             note.completeTranscription()
             note.transcriptionOutcome = .failed
             note.markTranscriptionFailure(diagnostic ?? "transcription error")
@@ -259,8 +263,14 @@ final class SegmentedAudioTranscriber {
                     indexCounter: segmentIndex))
                 for piece in salvaged {
                     switch piece {
-                    case .text(let text, let duration, let model):
+                    case .text(let text, let words, let pieceStart, let duration, let model):
                         pieces.append(text)
+                        // Re-base the salvaged sub-range's slice-local word times to
+                        // global time so the tappable transcript stays in sync.
+                        let offset = Double(pieceStart) / info.sampleRate
+                        allWords.append(contentsOf: words.map {
+                            WordToken(word: $0.word, start: $0.start + offset, end: $0.end + offset)
+                        })
                         producedAnyText = true
                         lastModelIdentifier = model ?? lastModelIdentifier
                         accumulatedDuration += duration
@@ -347,7 +357,9 @@ final class SegmentedAudioTranscriber {
 
         var outcome = await transcribeSegmentOutcome(segmentURL)
         var retries = 0
-        while case .whisperError = outcome, retries < 2 {
+        // Only a transient (thrown) error is worth re-running the identical window;
+        // a deterministic blank/empty decode is left for bisection to salvage.
+        while case .whisperError(_, true) = outcome, retries < 2 {
             retries += 1
             outcome = await transcribeSegmentOutcome(segmentURL)
         }
@@ -393,7 +405,8 @@ final class SegmentedAudioTranscriber {
         switch outcome {
         case .transcribed(let result):
             if let text = IncrementalTranscriptionCoordinator.sanitizedSegmentText(result.text) {
-                return [.text(text, duration: result.duration, modelIdentifier: result.modelIdentifier)]
+                return [.text(text, words: result.words, startFrame: start,
+                              duration: result.duration, modelIdentifier: result.modelIdentifier)]
             }
             return []
         case .noSpeech:

@@ -81,7 +81,7 @@ struct VoicelyTests {
         #expect(keptState == .loaded)
 
         let resetState = ModelManager.selectionStateAfterPickingModel(
-            "openai_whisper-large-v3_turbo_954MB",
+            "openai_whisper-large-v3-v20240930_626MB",
             loadedModelIdentifier: "openai_whisper-small"
         )
         #expect(resetState == .unloaded)

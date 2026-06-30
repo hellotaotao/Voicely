@@ -663,7 +663,8 @@ private struct ModelQuickPicker: View {
                         isExpanded = false
                     } label: {
                         ModelQuickPickerRow(
-                            title: ModelManager.displayNameWithLanguageTag(for: model),
+                            title: ModelManager.pickerTitle(for: model),
+                            sizeLabel: ModelManager.curatedModel(for: model)?.sizeLabel,
                             indicator: ModelSelectionIndicator(
                                 isDownloaded: modelManager.isModelAvailableOffline(model),
                                 isSelected: modelManager.selectedModel == model
@@ -679,9 +680,10 @@ private struct ModelQuickPicker: View {
     }
 }
 
-/// A row in the quick-picker dropdown: single-column status icon + model name.
+/// A row in the quick-picker dropdown: status icon + model name + download size.
 private struct ModelQuickPickerRow: View {
     let title: String
+    let sizeLabel: String?
     let indicator: ModelSelectionIndicator
 
     var body: some View {
@@ -691,7 +693,13 @@ private struct ModelQuickPickerRow: View {
             Text(title)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+            if let sizeLabel {
+                Text(sizeLabel)
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
         }
         .contentShape(Rectangle())
         .padding(.horizontal, 16)

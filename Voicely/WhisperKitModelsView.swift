@@ -73,7 +73,7 @@ struct WhisperKitModelsView: View {
                 }
             }
         }
-        .navigationTitle("Device Recommendations")
+        .navigationTitle("Speech Models")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await loadRecommendations()
@@ -83,10 +83,12 @@ struct WhisperKitModelsView: View {
     private func loadRecommendations() async {
         isLoading = true
         fetchError = nil
-        deviceDefault = WhisperKit.recommendedModels().default
+        deviceDefault = ModelManager.platformDefaultModel
         let remote = await WhisperKit.recommendedRemoteModels()
-        supportedModels = remote.supported
-        disabledModels = remote.disabled
+        // Curated allow-list only, ordered high -> low performance.
+        let order = ModelManager.curatedModels.map(\.identifier)
+        supportedModels = order.filter { remote.supported.contains($0) }
+        disabledModels = order.filter { remote.disabled.contains($0) }
         isLoading = false
     }
 
@@ -116,6 +118,11 @@ private struct ModelRecommendationRow: View {
     let action: () -> Void
 
     private var title: String {
+        // Curated models use their product-facing short name (e.g. "Large v3 Turbo");
+        // fall back to the mechanical, size-stripped name for any non-curated model.
+        if let curated = ModelManager.curatedModel(for: model) {
+            return curated.isEnglishOnly ? curated.displayName + ModelManager.englishOnlySuffix : curated.displayName
+        }
         let displayName = ModelManager.displayName(for: model)
         let parts = displayName.split(separator: " ")
         let base: String
@@ -128,6 +135,12 @@ private struct ModelRecommendationRow: View {
     }
 
     private var sizeLabel: String? {
+        // Curated models carry an authoritative measured size; prefer it so this
+        // detail page matches the Settings picker. Fall back to the size suffix
+        // parsed from the identifier for any non-curated model.
+        if let curated = ModelManager.curatedModel(for: model) {
+            return curated.sizeLabel
+        }
         let displayName = ModelManager.displayName(for: model)
         guard let last = displayName.split(separator: " ").last else {
             return nil
@@ -140,14 +153,37 @@ private struct ModelRecommendationRow: View {
             .replacingOccurrences(of: "Gb", with: " GB")
     }
 
+    private var curated: ModelManager.CuratedModel? {
+        ModelManager.curatedModel(for: model)
+    }
+
+    private var tier: ModelManager.PerformanceTier? {
+        curated?.tier
+    }
+
+    private var tierLabelColor: Color {
+        switch tier {
+        case .pro, .proFast: return VoicelyTheme.accent
+        case .standard:      return .blue
+        default:             return .secondary
+        }
+    }
+
+    private var tierDots: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(index < (tier?.filledDots ?? 0) ? tierLabelColor : Color.secondary.opacity(0.25))
+                    .frame(width: 7, height: 7)
+            }
+        }
+    }
+
     private var detailText: String {
         if isDisabled {
-            return "Not recommended for this device."
+            return "Not supported on this device"
         }
-        if isAvailableOffline {
-            return "Ready for offline transcription."
-        }
-        return "Download before using for offline transcription."
+        return curated?.suitability ?? "On-device transcription"
     }
 
     private var actionTitle: String {
@@ -167,13 +203,26 @@ private struct ModelRecommendationRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.headline)
-                        .foregroundStyle(isDisabled ? .secondary : .primary)
-                    Text(detailText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 8) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundStyle(isDisabled ? .secondary : .primary)
+                        if let tier {
+                            Text(tier.label)
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(tierLabelColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(tierLabelColor.opacity(0.14), in: Capsule())
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        tierDots
+                        Text(detailText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 WrappingFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
@@ -184,7 +233,7 @@ private struct ModelRecommendationRow: View {
                         PillBadge(text: "Offline", systemImage: "iphone", variant: .accent)
                     }
                     if isDeviceDefault {
-                        PillBadge(text: "Recommended", systemImage: "sparkles", variant: .info)
+                        PillBadge(text: "Your device", systemImage: "sparkles", variant: .info)
                     }
                     if let sizeLabel {
                         PillBadge(text: sizeLabel, systemImage: "internaldrive", variant: .neutral)

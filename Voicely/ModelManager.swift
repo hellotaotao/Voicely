@@ -44,36 +44,125 @@ enum ModelState: CustomStringConvertible {
 
 @MainActor
 class ModelManager: ObservableObject {
-    private static let oldIPhoneModelThreshold = 12
-    private static let oldIPadModelThreshold = 12
+    // MARK: - Curated catalog & device defaults
+    //
+    // Performance tiers shown to users, low -> high: Lite (Base) / Standard (Small) / Pro (Turbo).
+    // Per WhisperKit's device table, large-v3 turbo needs A14+ (iPhone 12 and up) / Apple Silicon.
+    // Defaults: strong devices (A16+ iPhone / Mac) -> Pro; everything else -> Standard (Small).
+    // Lite (Base) is always selectable but is never an automatic default.
+
+    enum PerformanceTier: Int, CaseIterable {
+        case lite = 1
+        case standard = 2
+        case pro = 3
+        case proFast = 4
+
+        var label: String {
+            switch self {
+            case .lite:     return "LITE"
+            case .standard: return "STANDARD"
+            case .pro:      return "PRO"
+            case .proFast:  return "PRO FAST"
+            }
+        }
+
+        /// Filled dots in the performance indicator (max 3). Pro and Pro Fast are both
+        /// top-tier turbo builds, so both fill all three.
+        var filledDots: Int {
+            switch self {
+            case .lite:          return 1
+            case .standard:      return 2
+            case .pro, .proFast: return 3
+            }
+        }
+
+        /// Title-case name for inline text, e.g. "Standard" (vs. the uppercase badge `label`).
+        var displayName: String {
+            switch self {
+            case .lite:     return "Lite"
+            case .standard: return "Standard"
+            case .pro:      return "Pro"
+            case .proFast:  return "Pro Fast"
+            }
+        }
+    }
+
+    struct CuratedModel: Sendable {
+        let identifier: String
+        let tier: PerformanceTier
+        let isEnglishOnly: Bool
+        /// Short, product-facing name for compact UI (e.g. "Large v3 Turbo"),
+        /// distinct from the mechanical `displayName(for:)` derived from the identifier.
+        let displayName: String
+        /// Approximate download size, measured from the model's HuggingFace folder.
+        let sizeLabel: String
+        let suitability: String
+    }
+
+    nonisolated static let curatedModels: [CuratedModel] = [
+        CuratedModel(identifier: "openai_whisper-large-v3-v20240930_626MB",
+                     tier: .pro, isEnglishOnly: false, displayName: "Large v3 Turbo",
+                     sizeLabel: "626 MB",
+                     suitability: "For high-performance devices"),
+        // Same v20240930 turbo as Pro (identical TextDecoder, ~7 MB larger encoder);
+        // offered as a separate "Pro Fast" option per product decision.
+        CuratedModel(identifier: "openai_whisper-large-v3-v20240930_turbo_632MB",
+                     tier: .proFast, isEnglishOnly: false, displayName: "Large v3 Turbo",
+                     sizeLabel: "646 MB",
+                     suitability: "For high-performance devices"),
+        CuratedModel(identifier: "openai_whisper-small",
+                     tier: .standard, isEnglishOnly: false, displayName: "Small",
+                     sizeLabel: "486 MB",
+                     suitability: "Recommended for most devices"),
+        CuratedModel(identifier: "openai_whisper-base",
+                     tier: .lite, isEnglishOnly: false, displayName: "Base",
+                     sizeLabel: "147 MB",
+                     suitability: "For older devices or saving space"),
+        CuratedModel(identifier: "openai_whisper-small.en_217MB",
+                     tier: .standard, isEnglishOnly: true, displayName: "Small",
+                     sizeLabel: "218 MB",
+                     suitability: "English audio only / smaller download"),
+    ]
+
+    nonisolated static var curatedIdentifiers: Set<String> {
+        Set(curatedModels.map(\.identifier))
+    }
+
+    nonisolated static func curatedModel(for identifier: String) -> CuratedModel? {
+        curatedModels.first { $0.identifier == identifier }
+    }
+
+    private static let standardDefaultIdentifier = "openai_whisper-small"
+    private static let proDefaultIdentifier = "openai_whisper-large-v3-v20240930_626MB"
 
     static var platformDefaultModel: String {
 #if targetEnvironment(macCatalyst)
-        return "openai_whisper-large-v3_turbo_954MB"
+        return proDefaultIdentifier
 #else
-        let deviceIdentifier = WhisperKit.deviceName()
-
-        if isOldAndWeakIOSDevice(deviceIdentifier) {
-            return "openai_whisper-base"
-        }
-
-        return "openai_whisper-small"
+        return prefersProModelByDefault(deviceIdentifier: WhisperKit.deviceName(), isMac: false)
+            ? proDefaultIdentifier
+            : standardDefaultIdentifier
 #endif
     }
 
-    private static func isOldAndWeakIOSDevice(_ deviceIdentifier: String) -> Bool {
+    nonisolated static func prefersProModelByDefault(deviceIdentifier: String, isMac: Bool) -> Bool {
+        if isMac {
+            return true
+        }
         if let iPhoneGeneration = numericGeneration(from: deviceIdentifier, prefix: "iPhone") {
-            return iPhoneGeneration <= oldIPhoneModelThreshold
+            return iPhoneGeneration >= 15
         }
-
-        if let iPadGeneration = numericGeneration(from: deviceIdentifier, prefix: "iPad") {
-            return iPadGeneration <= oldIPadModelThreshold
-        }
-
+        // iPad identifiers don't cleanly separate A-series from M-series (e.g. iPad14,x
+        // spans both the A15 iPad mini 6 and the M2 iPad Pro), so default every iPad to
+        // Standard and let strong iPad users pick Pro manually.
         return false
     }
 
-    private static func numericGeneration(from deviceIdentifier: String, prefix: String) -> Int? {
+    static func isRecommendedForCurrentDevice(_ model: String) -> Bool {
+        model == platformDefaultModel
+    }
+
+    nonisolated private static func numericGeneration(from deviceIdentifier: String, prefix: String) -> Int? {
         guard deviceIdentifier.hasPrefix(prefix) else {
             return nil
         }
@@ -152,20 +241,30 @@ class ModelManager: ObservableObject {
 
         if includeRemote {
             let remoteModelSupport = await WhisperKit.recommendedRemoteModels()
-            for model in remoteModelSupport.supported {
-                addModel(model)
-            }
-            disabledModels = remoteModelSupport.disabled
-            print("recommendedRemoteModels: \(remoteModelSupport.supported)")
+            // recommendedRemoteModels only gates *availability*: a curated model is
+            // hidden only when WhisperKit explicitly disables it for this device. It is
+            // NOT the visibility source — WhisperKit may recommend a different variant
+            // name than the one we ship (e.g. it lists `small.en` while we curate the
+            // smaller `small.en_217MB`), which previously hid that model entirely.
+            disabledModels = remoteModelSupport.disabled.filter { Self.curatedIdentifiers.contains($0) }
         } else {
             disabledModels = []
         }
 
-        for model in localModels {
+        // Surface the full curated catalog this device can run, in picker order:
+        // multilingual tiers ascending (Lite → Standard → Pro), English-only last.
+        let displayOrder = Self.curatedModels.sorted { lhs, rhs in
+            if lhs.isEnglishOnly != rhs.isEnglishOnly { return !lhs.isEnglishOnly }
+            return lhs.tier.rawValue < rhs.tier.rawValue
+        }
+        for model in displayOrder.map(\.identifier) where !disabledModels.contains(model) {
             addModel(model)
         }
 
-        // Keep selected model visible even if it is outside current recommendation set.
+        // Keep any locally downloaded curated model and the active selection visible.
+        for model in localModels where Self.curatedIdentifiers.contains(model) {
+            addModel(model)
+        }
         addModel(selectedModel)
 
         availableModels = orderedModels
@@ -511,8 +610,9 @@ class ModelManager: ObservableObject {
     }
     
     private func shouldIncludeModel(_ model: String) -> Bool {
-        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && !Self.isUnsupportedModel(trimmed)
+        // Empty guard only. The curated allow-list is enforced at the call sites in
+        // fetchModels; local/selected entries are always allowed through.
+        !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     nonisolated static func preferredLocalModelSource(
@@ -684,21 +784,21 @@ class ModelManager: ObservableObject {
         return lower.contains("distil") || lower.contains(".en")
     }
 
-    /// Whether the model should be hidden from the model list.
-    ///
-    /// - distil: large but English-only; a device that can run it is better served by multilingual large-v3.
-    /// - medium.en: the largest English-only model, with a negligible English edge over multilingual — poor value.
-    ///
-    /// The only English-only models kept are tiny.en / base.en / small.en, which get tagged.
-    nonisolated static func isUnsupportedModel(_ model: String) -> Bool {
-        let lower = model.lowercased()
-        return lower.contains("distil") || lower.contains("medium.en")
-    }
-
     /// Display name with an English-only tag appended, for direct use in list UI.
     nonisolated static func displayNameWithLanguageTag(for model: String) -> String {
         let base = displayName(for: model)
         return isEnglishOnly(model) ? base + englishOnlySuffix : base
+    }
+
+    /// Compact picker label: the performance tier with the model's short name in
+    /// parens, e.g. "Standard (Small)" or "Standard (Small, English)". Non-curated
+    /// models (e.g. a legacy selection) fall back to the plain tagged display name.
+    nonisolated static func pickerTitle(for model: String) -> String {
+        guard let curated = curatedModel(for: model) else {
+            return displayNameWithLanguageTag(for: model)
+        }
+        let name = curated.isEnglishOnly ? "\(curated.displayName), English" : curated.displayName
+        return "\(curated.tier.displayName) (\(name))"
     }
 }
 

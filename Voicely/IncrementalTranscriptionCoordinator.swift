@@ -64,8 +64,15 @@ final class IncrementalTranscriptionCoordinator {
     /// All transcribed text accumulated so far. Updated after each segment completes.
     private(set) var accumulatedTranscript: String = ""
 
+    /// Word-level timings accumulated so far, re-based to global recording time.
+    private(set) var accumulatedWords: [WordToken] = []
+
     /// Overridable for testing. When non-nil, used instead of TranscriptionService.
     var transcribeOverride: (@Sendable (String) async -> String?)? = nil
+
+    /// Test-only companion to `transcribeOverride`, supplying slice-local word
+    /// timings for the same segment so tests can exercise word accumulation.
+    var segmentWordsOverride: (@Sendable (String) async -> [WordToken])? = nil
 
     /// Closure that returns the current number of frames written to the recording file.
     var frameCountProvider: () -> AVAudioFramePosition = { 0 }
@@ -239,10 +246,15 @@ final class IncrementalTranscriptionCoordinator {
         // neural VAD gate before invoking Whisper, so checking twice would
         // just double the inference cost per segment.
         let textResult: String?
+        var segmentWords: [WordToken] = []
         if let override = transcribeOverride {
             textResult = await override(segmentURL.path)
+            segmentWords = await segmentWordsOverride?(segmentURL.path) ?? []
+        } else if let result = await transcriptionService.transcribeAudio(filePath: segmentURL.path) {
+            textResult = result.text
+            segmentWords = result.words
         } else {
-            textResult = await transcriptionService.transcribeAudio(filePath: segmentURL.path)?.text
+            textResult = nil
         }
 
         if let text = Self.sanitizedSegmentText(textResult) {
@@ -251,6 +263,12 @@ final class IncrementalTranscriptionCoordinator {
             } else {
                 accumulatedTranscript += "\n" + text
             }
+            // Re-base this slice's word times (0-based within the slice) to global
+            // recording time before accumulating, mirroring the import path.
+            let offset = recordingSampleRate > 0 ? Double(startFrame) / recordingSampleRate : 0
+            accumulatedWords.append(contentsOf: segmentWords.map {
+                WordToken(word: $0.word, start: $0.start + offset, end: $0.end + offset)
+            })
             transcriptCallback?(accumulatedTranscript)
         }
     }

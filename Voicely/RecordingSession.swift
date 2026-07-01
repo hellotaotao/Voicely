@@ -269,6 +269,8 @@ final class RecordingSession: ObservableObject {
 
             if !trimmedTranscript.isEmpty {
                 note.transcription = trimmedTranscript
+                // Live recordings now carry word timings too — no Re-transcribe needed.
+                note.wordTimings = capturedCoordinator?.accumulatedWords ?? []
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
                 note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)

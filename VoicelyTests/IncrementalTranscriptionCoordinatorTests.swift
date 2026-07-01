@@ -550,6 +550,35 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(coordinator.accumulatedTranscript == "first\nsecond")
     }
 
+    @Test @MainActor func accumulatedWordsRebaseSegmentsToGlobalTime() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 70)
+        let service = TranscriptionService()
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: service,
+            recordingFileURL: pcmURL
+        )
+        coordinator.transcribeOverride = { @Sendable _ in "word" }
+        // Each slice reports 0-based local word times; the accumulator adds each
+        // segment's start offset so stored times are global. The first segment
+        // starts at frame 0 (offset 0); the second starts a full segment later.
+        coordinator.segmentWordsOverride = { @Sendable _ in
+            [WordToken(word: "word", start: 0.0, end: 0.5)]
+        }
+
+        await coordinator.transcribeSegment(upToFrame: 480_000)
+        await coordinator.transcribeSegment(upToFrame: 960_000)
+
+        #expect(coordinator.accumulatedWords.count == 2)
+        #expect(coordinator.accumulatedWords[0].start == 0.0)
+        #expect(coordinator.accumulatedWords[0].end == 0.5)
+        // Second segment begins at least minimumCutSeconds (15 s) in, so its
+        // 0-based word is re-based to a global time well past the first slice.
+        #expect(coordinator.accumulatedWords[1].start > 14.0)
+        #expect(coordinator.accumulatedWords[1].end == coordinator.accumulatedWords[1].start + 0.5)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
     @Test @MainActor func noAudioPlaceholderDoesNotPolluteAccumulatedTranscript() async throws {
         let pcmURL = try makeSilentCAF(seconds: 30)
         let service = TranscriptionService()

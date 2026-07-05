@@ -156,9 +156,10 @@ static func isEnglishOnly(_ model: String) -> Bool {
 ### 目标 3:ContentView 跟踪 `wordTimingsData` 变化
 - 加 `.onChange(of: note.wordTimingsData)` 刷新 `cachedWordTimings`——重转可能只改时间戳不改文本(如尾部静音),靠文本变化触发刷新会漏。
 
-### 另:已拍板未实施 — 队列门收编(方案 A)
-- `transcribeClaimedNote` 的 ≤30s 私有转录分支**不存词**(实时空转录后排队/跨设备接管的短录音中招);
-- 决定:删掉该私有分支,认领后一律交 `SegmentedAudioTranscriber`(其单遍分支本就处理 ≤30s 且存词)→ 全 App 只剩「文件转录 + 实时转录」两套实现,窟窿自然消失。
+### ✅ 已完成(2026-07-05,提交 05a0706)— 队列门收编(方案 A)
+- 删掉 `transcribeClaimedNote` 的 ≤30s 私有转录分支,认领后一律交 `SegmentedAudioTranscriber` → 全 App 只剩「文件转录 + 实时转录」两套实现,短排队录音不存词的窟窿消失。
+- 旧队列语义已搬进 transcriber:单遍对 retryable 错误重试一次;瞬时失败(model/audio unavailable、取消)经 `onTransientSinglePassFailure` 交还队列(导入保持 fail 默认);stale attempt 防护(应用结果前校验 attemptID);空产出清旧元数据。
+- `transcribeAudioOutcome` 计时改用 `nowProvider`(telemetry 可确定);队列测试改用真实微型 CAF。169 测试全绿 ×2。
 
 ---
 

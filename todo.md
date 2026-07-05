@@ -135,3 +135,37 @@ static func isEnglishOnly(_ model: String) -> Bool {
 2. 列表 UI 渲染处给 `.en` 追加 `(English Only)`,**不要改 `displayName(for:)` 本体**(它被设置页 / note 标签 / 紧凑 UI 复用,且 `WhisperKitModelsView.swift:119` 会按空格拆 displayName 分行,直接加括号会污染所有 UI 并破坏分行)。涉及 `SettingsView` 的模型 `ForEach` 与 `WhisperKitModelsView`。
 3. **边界**:老用户若已选中/下载了 distil 或 medium.en,过滤后 `addModel(selectedModel)`(`ModelManager.swift:169`)会因 `shouldIncludeModel` 失败而不纳入,触发 `ModelManager.swift:418` 的自动切换。需确认该降级路径平滑(自动切回平台默认或列表第一个),必要时给迁移提示。
 4. 单元测试(`VoicelyTests/`,Swift Testing):覆盖 distil 全系列、medium.en 被移除;tiny/base/small.en(含 `_217MB`)保留且 `isEnglishOnly == true`;`large-v3_turbo`、`medium` 等多语言不被移除且 `isEnglishOnly == false`。
+
+---
+
+## 📦 已 stash 的 WIP 留档(2026-07-05)— 词时间戳收尾三件事
+
+> 为排查「Mac 录不进声音」问题,当时的未提交代码已 `git stash`(见 `git stash list`,标记 `wip-word-timings-resume`)。
+> 排查完后决定:apply 回来,还是按下面目标重新实现(当时评估:170 测试全绿、逻辑完整,但未真机验证)。
+
+### 目标 1:续传(resume)保留词时间戳
+- sidecar(`SegmentProgressStore.SegmentedTranscriptionProgress`)加 `accumulatedWords: [WordToken]?`(optional,兼容旧 sidecar);
+- `SegmentedAudioTranscriber.transcribeSegmented` 每段保存后写入 sidecar、resume 时接回 `allWords`;
+- 旧格式 sidecar(resume 过 frame 0 但没存词)→ `note.wordTimings = []` 清空回退,不存错位时间线;
+- 配套测试:`resumedRunKeepsPersistedWordTimings` / `legacyResumeWithoutSavedWordsClearsStaleTimings`。
+
+### 目标 2:force Re-transcribe 先清残留 sidecar(bug 修复)
+- `requestTranscription(force:)` 里 `segmentProgressStore.delete + removeWorkingCopy`;
+- 修「重转完成后看起来回退到旧转录」:切模型打断转录留下 stale sidecar,重转时误续传旧进度所致。
+
+### 目标 3:ContentView 跟踪 `wordTimingsData` 变化
+- 加 `.onChange(of: note.wordTimingsData)` 刷新 `cachedWordTimings`——重转可能只改时间戳不改文本(如尾部静音),靠文本变化触发刷新会漏。
+
+### 另:已拍板未实施 — 队列门收编(方案 A)
+- `transcribeClaimedNote` 的 ≤30s 私有转录分支**不存词**(实时空转录后排队/跨设备接管的短录音中招);
+- 决定:删掉该私有分支,认领后一律交 `SegmentedAudioTranscriber`(其单遍分支本就处理 ≤30s 且存词)→ 全 App 只剩「文件转录 + 实时转录」两套实现,窟窿自然消失。
+
+---
+
+## 🎤 环境事故存档(2026-07-05)— Mac 录音全零:DJI MIC MINI × Catalyst 不合
+
+- **症状**:Voicely(任意版本,含 TestFlight 旧版)在 Mac 上录音全是零;同一只 DJI 在 QuickTime / 语音备忘录 / 系统听写全部正常;iPhone 真机正常。
+- **已排除**:代码(干净 HEAD 与旧发行版同症)、TCC 权限(granted)、audio-input entitlement(构建产物里在)、AVAudioEngine 与 AVCaptureSession 两条栈、听写工具(Wispr Flow / SayType 退出无效)、第三方 HAL 驱动(隔离无效)、coreaudiod 重启、整机重启。
+- **定位**:Catalyst 音频会话代理层对 DJI 每次确定性构建出同一个幽灵对象(ID 164),`CADefaultDeviceAggregate ... reconfig pending` 弃跑 I/O;**换 AirPods 立即恢复正常** → macOS 26.5 Catalyst 会话层 × DJI MIC MINI USB 接收器的特异性不合(苹果层面,非本项目可修)。
+- **应对**:Mac 上录音换非 DJI 输入;可试偏方——「音频 MIDI 设置 → 新建聚合设备包住 DJI → 设为默认输入」(未验证)。
+- **代码留产**:Catalyst 录音改走 AVCaptureSession(QuickTime 同栈);2s 静音看门狗(全零自动重绑/报警);`🎙️` 路由与电平诊断日志。

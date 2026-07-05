@@ -177,6 +177,44 @@ struct SegmentedAudioTranscriberTests {
         #expect(zip(starts, starts.dropFirst()).allSatisfy { $0 < $1 })   // re-based, increasing
     }
 
+    /// End-to-end acceptance for "an interrupted run keeps its word timings":
+    /// run 1 is backgrounded after the first segment (the production loop must
+    /// write that segment's words into the sidecar itself), run 2 resumes from
+    /// the sidecar and finishes with one complete, increasing timeline.
+    @Test @MainActor func interruptedRunPersistsWordsAndResumesToCompleteTimeline() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let note = VoiceNote(title: "interrupted", audioFilePath: "")
+
+        var completedSegments = 0
+        let segmentStub: (URL) async -> TranscriptionOutcome = { _ in
+            completedSegments += 1
+            return .transcribed(.init(text: "seg\(completedSegments)", duration: 1, modelIdentifier: "m",
+                                      words: [WordToken(word: "seg\(completedSegments)", start: 0.0, end: 0.5)]))
+        }
+
+        // Run 1: killed/backgrounded right after the first segment lands.
+        let first = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        first.transcribeSegmentOutcome = segmentStub
+        first.shouldStopForBackground = { completedSegments >= 1 }
+        await first.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcriptionState != .completed)
+        #expect(store.load(for: note.id)?.accumulatedWords?.isEmpty == false)
+
+        // Run 2 (app relaunch): a fresh transcriber resumes and finishes.
+        let second = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        second.transcribeSegmentOutcome = segmentStub
+        await second.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcriptionState == .completed)
+        #expect(note.transcription.contains("seg1"))          // pre-interrupt text kept
+        let fullStarts = note.wordTimings.map(\.start)
+        #expect(note.wordTimings.first?.start == 0.0)         // timeline starts at the top
+        #expect(zip(fullStarts, fullStarts.dropFirst()).allSatisfy { $0 < $1 })
+        #expect((note.wordTimings.last?.start ?? 0) > 20.0)   // resumed part re-based past the cut
+    }
+
     @Test @MainActor func legacyResumeWithoutSavedWordsClearsStaleTimings() async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
         let store = SegmentedAudioTestSupport.makeStore()

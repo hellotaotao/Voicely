@@ -317,6 +317,37 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionLastErrorMessage == "blank output")
     }
 
+    /// End-to-end acceptance for "force re-transcribe starts over": a stale
+    /// resume sidecar (left by a run interrupted under an old model) must not
+    /// leak its progress into an explicit re-transcription.
+    @Test @MainActor func forceRetranscribeIgnoresStaleResumeSidecar() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.transcribeImpl = { _, _ in
+            .text("fresh", [WordToken(word: "fresh", start: 0.0, end: 0.5)])
+        }
+
+        let note = VoiceNote(title: "Old", audioFilePath: makeTestAudioPath(seconds: 40))
+        note.transcriptionOriginDeviceID = "phone"
+        note.transcription = "old stale text"
+        note.completeTranscription()
+
+        service.segmentProgressStore.save(
+            .init(lastFrame: Int64(29 * 16_000), totalFrames: Int64(40 * 16_000),
+                  accumulatedText: "old stale text", failedRanges: [], updatedAt: now,
+                  accumulatedWords: [WordToken(word: "stale", start: 0.0, end: 0.5)]),
+            for: note.id)
+
+        let didStart = await service.requestTranscription(for: note, force: true)
+
+        #expect(didStart == true)
+        #expect(note.transcriptionState == .completed)
+        #expect(!note.transcription.contains("old stale"))       // no resumed leftovers
+        #expect(note.transcription.contains("fresh"))
+        #expect(note.wordTimings.allSatisfy { $0.word == "fresh" })
+        #expect(note.wordTimings.first?.start == 0.0)             // ran from frame 0
+    }
+
     @Test @MainActor func realErrorRecoversOnAutomaticRetry() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)

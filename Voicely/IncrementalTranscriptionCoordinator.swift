@@ -385,8 +385,11 @@ final class IncrementalTranscriptionCoordinator {
 
             try sourceFile.read(into: buffer, frameCount: frameCount)
 
+            // Nonce keeps concurrent extractions (a live recording running next
+            // to a re-transcribe, or parallel tests) from clobbering each other's
+            // temp files — segment indices restart at 1 in every run.
             let segmentURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("voicely_seg_\(segmentIndex).wav")
+                .appendingPathComponent("voicely_seg_\(segmentIndex)_\(UUID().uuidString.prefix(8)).wav")
 
             let segmentFile = try AVAudioFile(
                 forWriting: segmentURL,

@@ -47,6 +47,12 @@ final class SegmentedAudioTranscriber {
     /// sidecar intact for later resume. Wired to background-time expiration.
     var shouldStopForBackground: () -> Bool = { false }
 
+    /// Queue-claimed notes hand transient single-pass failures (model or audio
+    /// unavailable, cancellation) back to the queue instead of finishing as
+    /// failed — the queue retries them automatically once the condition clears.
+    /// Imports have no queue identity, so nil keeps the finish-as-failed default.
+    var onTransientSinglePassFailure: ((VoiceNote) -> Void)?
+
     /// Minimum length (seconds) of a failed range still worth bisecting. A real
     /// transcription error is often local, so a failed segment is split in half
     /// and each side retried; below this length salvage costs more than the audio
@@ -98,11 +104,14 @@ final class SegmentedAudioTranscriber {
             return
         }
 
-        // Claim for this device before doing any work.
+        // Claim for this device before doing any work. The attempt ID is checked
+        // again before results are applied: another device can re-claim the note
+        // while we transcribe, and a stale attempt must not overwrite its work.
         let now = nowProvider()
+        let attemptID = UUID().uuidString
         note.claimTranscription(
             ownerDeviceID: transcriptionService.deviceIDProvider(),
-            attemptID: UUID().uuidString,
+            attemptID: attemptID,
             queuedAt: note.transcriptionQueuedAt ?? now,
             leaseExpiresAt: now.addingTimeInterval(transcriptionService.leaseDuration))
         note.clearTransientTranscriptionFlags()
@@ -124,13 +133,19 @@ final class SegmentedAudioTranscriber {
         defer { transcriptionService.finishTranscriptionTelemetry() }
 
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
-            let outcome = await transcribeSegmentOutcome(sourceURL)
+            var outcome = await transcribeSegmentOutcome(sourceURL)
+            // A real Whisper error is often transient — retry once before giving up.
+            if case .whisperError(_, true) = outcome, !transcriptionService.wasTranscriptionCancelled() {
+                outcome = await transcribeSegmentOutcome(sourceURL)
+            }
             finalizeSinglePass(note: note, outcome: outcome,
                                hadExistingTranscript: hadExistingTranscript,
-                               audioDurationSeconds: audioDurationSeconds)
+                               audioDurationSeconds: audioDurationSeconds,
+                               attemptID: attemptID)
         } else {
             await transcribeSegmented(note: note, sourceURL: sourceURL, info: info,
-                                      hadExistingTranscript: hadExistingTranscript)
+                                      hadExistingTranscript: hadExistingTranscript,
+                                      attemptID: attemptID)
             // Backgrounded mid-run: keep the working copy + sidecar for resume.
             if note.transcriptionState != .completed { return }
         }
@@ -155,7 +170,16 @@ final class SegmentedAudioTranscriber {
     // MARK: - Single pass (≤30 s)
 
     private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome,
-                                    hadExistingTranscript: Bool, audioDurationSeconds: TimeInterval) {
+                                    hadExistingTranscript: Bool, audioDurationSeconds: TimeInterval,
+                                    attemptID: String) {
+        // Another device may have re-claimed the note while we transcribed (every
+        // claim rewrites the attempt ID). A stale attempt must not overwrite the
+        // current owner's work — abandon silently.
+        guard note.transcriptionAttemptID == attemptID,
+              note.transcriptionState == .claimed else {
+            return
+        }
+
         if case .transcribed(let result) = outcome {
             note.transcription = result.text
             // Single pass transcribes the whole file, so word times are already
@@ -176,6 +200,19 @@ final class SegmentedAudioTranscriber {
             return
         }
 
+        // Transient conditions first: nothing is wrong with the audio — the model
+        // isn't loaded yet, the file isn't downloaded, or the run was cancelled.
+        // A queue-claimed note goes back to the queue to run again later.
+        switch outcome {
+        case .modelUnavailable, .audioUnavailable, .cancelled:
+            if let onTransientSinglePassFailure {
+                onTransientSinglePassFailure(note)
+                return
+            }
+        default:
+            break
+        }
+
         // No new text produced. If re-transcribing, keep the previous transcript.
         if hadExistingTranscript {
             note.completeTranscription()
@@ -185,9 +222,15 @@ final class SegmentedAudioTranscriber {
             return
         }
 
+        // A fresh attempt that produced nothing must not keep metadata from a
+        // previous run (duration, model badge, telemetry summary).
+        note.transcription = ""
+        note.lastTranscriptionDuration = 0
+        note.transcriptionModelIdentifier = nil
+        note.clearTranscriptionTelemetrySummary()
+
         switch outcome {
         case .noSpeech:
-            note.transcription = ""
             note.completeTranscription()
             note.transcriptionOutcome = .noSpeech
         case .whisperError(let diagnostic, _):
@@ -204,7 +247,8 @@ final class SegmentedAudioTranscriber {
 
     // MARK: - Segmented (>30 s)
 
-    private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo, hadExistingTranscript: Bool) async {
+    private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo,
+                                     hadExistingTranscript: Bool, attemptID: String) async {
         let noteID = note.id
         let batchFrames = Int64(Double(IncrementalTranscriptionTiming.defaultIntervalSeconds) * info.sampleRate)
         let resumed = progressStore.load(for: noteID)
@@ -303,16 +347,25 @@ final class SegmentedAudioTranscriber {
             // segment instead of staying blank until the whole file finishes.
             // Only once real text exists, so a re-transcription's previous
             // transcript is preserved until the first new segment arrives.
-            if producedAnyText {
+            let stillOwnsNote = note.transcriptionAttemptID == attemptID
+                && note.transcriptionState == .claimed
+            if producedAnyText, stillOwnsNote {
                 note.transcription = pieces.joined(separator: "\n")
             }
-            note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
+            if stillOwnsNote {
+                note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
+            }
             transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
 
 #if DEBUG
         print("🏁 segmented done: producedAnyText=\(producedAnyText) pieces=\(pieces.count) failedRanges=\(failedRanges.count) words=\(allWords.count) lastModel=\(lastModelIdentifier ?? "nil") hadExisting=\(hadExistingTranscript) keptPrevious=\(hadExistingTranscript && !producedAnyText)")
 #endif
+        // Another device re-claimed the note mid-run — abandon our result.
+        guard note.transcriptionAttemptID == attemptID,
+              note.transcriptionState == .claimed else {
+            return
+        }
         // Re-transcription that produced no new text: keep the previous transcript.
         if hadExistingTranscript, !producedAnyText {
             note.completeTranscription()

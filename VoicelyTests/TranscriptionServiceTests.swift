@@ -57,6 +57,13 @@ struct TranscriptionServiceTests {
         }
     }
 
+    /// Real (tiny, silent) audio file on disk: every claimed note now routes
+    /// through SegmentedAudioTranscriber, which reads the audio for real before
+    /// the (stubbed) transcription runs.
+    private func makeTestAudioPath(seconds: Double = 2) -> String {
+        ((try? SegmentedAudioTestSupport.makeSilentCAF(seconds: seconds))?.path) ?? "unreadable.m4a"
+    }
+
     @Test @MainActor func transcribeAudioReturnsResultWhenModelLoaded() async {
         let service = makeService(deviceID: "device-a")
         service.transcribeImpl = { _, progress in
@@ -122,7 +129,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "origin", now: now)
         service.transcribeImpl = { _, _ in "Transcribed text" }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "origin"
         note.queueTranscription(at: now)
 
@@ -139,7 +146,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "desktop", now: now)
         service.transcribeImpl = { _, _ in "Should not run" }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
 
@@ -158,7 +165,7 @@ struct TranscriptionServiceTests {
         )
         service.transcribeImpl = { _, _ in "Desktop result" }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: queuedAt)
 
@@ -173,7 +180,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "desktop", now: now)
         service.transcribeImpl = { _, _ in "Should not run" }
 
-        let note = VoiceNote(title: "Claimed", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.claimTranscription(
             ownerDeviceID: "phone",
@@ -194,7 +201,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "desktop", now: now)
         service.transcribeImpl = { _, _ in "Desktop takeover" }
 
-        let note = VoiceNote(title: "Claimed", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.claimTranscription(
             ownerDeviceID: "phone",
@@ -214,7 +221,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "desktop", now: now)
         service.transcribeImpl = { _, _ in "Manual takeover" }
 
-        let note = VoiceNote(title: "Claimed", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.claimTranscription(
             ownerDeviceID: "phone",
@@ -242,7 +249,7 @@ struct TranscriptionServiceTests {
         service.nowProvider = { now }
         service.transcribeImpl = { _, _ in "Queued result" }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
 
@@ -264,7 +271,7 @@ struct TranscriptionServiceTests {
             return "Telemetry result"
         }
 
-        let note = VoiceNote(title: "Telemetry", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Telemetry", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
 
@@ -272,9 +279,11 @@ struct TranscriptionServiceTests {
 
         #expect(didStart == true)
         #expect(note.transcription == "Telemetry result")
+        // The unified path measures against the real file (2 s) with the injected
+        // clock: 5 s of work on 2 s of audio → 250 % ratio, 0.4× speed.
         #expect(note.transcriptionTelemetrySampleCount == 1)
-        #expect(note.averageProcessingTimeRatioLabel == "25% avg")
-        #expect(note.averageTranscriptionSpeedLabel == "4.0× avg")
+        #expect(note.averageProcessingTimeRatioLabel == "250% avg")
+        #expect(note.averageTranscriptionSpeedLabel == "0.4× avg")
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
@@ -287,7 +296,7 @@ struct TranscriptionServiceTests {
             return "   \n"  // Whisper ran but produced nothing usable → a real error
         }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.lastTranscriptionDuration = 21.7
         note.transcriptionModelIdentifier = "openai_whisper-large-v3-turbo"
@@ -317,7 +326,7 @@ struct TranscriptionServiceTests {
             return attempts == 1 ? .whisperError("transient", retryable: true) : .text("recovered", [])
         }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
 
@@ -336,7 +345,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "phone", now: now)
         service.transcribeImpl = { _, _ in .noSpeech }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
 
@@ -357,7 +366,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "phone", now: now)
         service.transcribeImpl = { _, _ in .modelUnavailable }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
 
@@ -377,7 +386,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "phone", now: now)
         service.transcribeImpl = { _, _ in "[BLANK_AUDIO]" }
 
-        let note = VoiceNote(title: "Blank", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Blank", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.transcription = "[BLANK_AUDIO]"
         note.queueTranscription(at: now)
@@ -401,7 +410,7 @@ struct TranscriptionServiceTests {
             return "stale result"
         }
 
-        let note = VoiceNote(title: "Claimed", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.claimTranscription(
             ownerDeviceID: "phone",
@@ -444,7 +453,7 @@ struct TranscriptionServiceTests {
             return "should not finish"
         }
 
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
 
@@ -473,19 +482,20 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         let gate = TranscriptionGate()
+        let firstPath = makeTestAudioPath()
         service.transcribeImpl = { filePath, _ in
-            if filePath == "first.m4a" {
+            if filePath == firstPath {
                 await gate.wait()
                 return "first result"
             }
             return "second result"
         }
 
-        let firstNote = VoiceNote(title: "First", audioFilePath: "first.m4a")
+        let firstNote = VoiceNote(title: "First", audioFilePath: firstPath)
         firstNote.transcriptionOriginDeviceID = "phone"
         firstNote.queueTranscription(at: now)
 
-        let secondNote = VoiceNote(title: "Second", audioFilePath: "second.m4a")
+        let secondNote = VoiceNote(title: "Second", audioFilePath: makeTestAudioPath())
         secondNote.transcriptionOriginDeviceID = "phone"
         secondNote.queueTranscription(at: now)
 
@@ -516,7 +526,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "phone", now: now)
         service.transcribeImpl = { _, _ in "Recovered result" }
 
-        let note = VoiceNote(title: "Claimed", audioFilePath: "file.m4a")
+        let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.claimTranscription(
             ownerDeviceID: "phone",
@@ -535,7 +545,7 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
 
-        let note = VoiceNote(title: "Interrupted", audioFilePath: "recording.m4a")
+        let note = VoiceNote(title: "Interrupted", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
         note.transcription = "Partial live transcript"
         note.claimTranscription(
@@ -563,11 +573,11 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
 
-        let queuedNote = VoiceNote(title: "Legacy queued", audioFilePath: "file.m4a")
+        let queuedNote = VoiceNote(title: "Legacy queued", audioFilePath: makeTestAudioPath())
         queuedNote.pendingTranscription = true
         queuedNote.isTranscribing = true
 
-        let completedNote = VoiceNote(title: "Legacy complete", audioFilePath: "file.m4a")
+        let completedNote = VoiceNote(title: "Legacy complete", audioFilePath: makeTestAudioPath())
         completedNote.transcription = "done"
 
         service.migrateLegacyOwnershipIfNeeded(notes: [queuedNote, completedNote])
@@ -610,16 +620,6 @@ struct TranscriptionServiceTests {
     @Test @MainActor func serviceOwnsSegmentProgressStore() {
         let service = makeService(deviceID: "d")
         _ = service.segmentProgressStore
-    }
-
-    @Test @MainActor func shouldSegmentLongRecordingsWithAudio() {
-        let service = makeService(deviceID: "d")
-        let long = VoiceNote(title: "a", audioFilePath: "a.m4a"); long.duration = 1800
-        let short = VoiceNote(title: "b", audioFilePath: "b.m4a"); short.duration = 12
-        let noAudio = VoiceNote(title: "c", audioFilePath: ""); noAudio.duration = 1800
-        #expect(service.shouldSegmentTranscription(long))
-        #expect(!service.shouldSegmentTranscription(short))
-        #expect(!service.shouldSegmentTranscription(noAudio))
     }
 
     @MainActor

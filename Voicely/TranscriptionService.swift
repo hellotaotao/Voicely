@@ -313,12 +313,6 @@ class TranscriptionService: ObservableObject {
         activeNoteID == note.id
     }
 
-    /// Long recordings with audio are re-transcribed via SegmentedAudioTranscriber
-    /// (segmented + resumable + progress) rather than the whole-file single pass.
-    func shouldSegmentTranscription(_ note: VoiceNote) -> Bool {
-        note.duration > 30 && !note.audioFilePath.isEmpty
-    }
-
     /// Surfaces a note transcribed by an external coordinator
     /// (SegmentedAudioTranscriber) as locally transcribing, so the detail view
     /// shows the same "Transcribing…" state and progress as the in-process path.
@@ -425,7 +419,7 @@ class TranscriptionService: ObservableObject {
         isTranscribing = true
         transcriptionProgress = 0.0
         resetProgressSmoothing()
-        let startTime = Date()
+        let startTime = nowProvider()
         defer {
             isTranscribing = false
             currentTranscriptionTask = nil
@@ -466,7 +460,7 @@ class TranscriptionService: ObservableObject {
                 // so not retryable: an identical re-decode yields the same blank.
                 return .whisperError("blank output", retryable: false)
             }
-            let elapsed = Date().timeIntervalSince(startTime)
+            let elapsed = nowProvider().timeIntervalSince(startTime)
             let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
             return .transcribed(TranscriptionResult(
                 text: finalizedTranscript.text,
@@ -770,95 +764,21 @@ private extension TranscriptionService {
             return
         }
 
-        // Long recordings go through the segmented transcriber (segmented +
-        // resumable), same as imports, instead of the whole-file single pass.
-        if shouldSegmentTranscription(note) {
-            guard let url = await CloudStorageManager.shared.prepareFileForReading(at: note.audioFilePath) else {
-                requeueNote(note, queuedAt: nowProvider())   // audio not ready — try again later
-                return
-            }
-            await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
-                .transcribe(note: note, sourceURL: url)
+        // Every claimed note runs through the shared file transcriber (single
+        // pass ≤30 s, segmented + resumable above), which also stores word
+        // timings. The queue decides *when and who* transcribes; only the
+        // transcriber knows *how*.
+        guard let url = await CloudStorageManager.shared.prepareFileForReading(at: note.audioFilePath) else {
+            requeueNote(note, queuedAt: nowProvider())   // audio not ready — try again later
             return
         }
-
-        beginLocalTranscription(for: note, attemptID: attemptID)
-        startLeaseHeartbeat(for: note, attemptID: attemptID)
-        let noteID = note.id
-        let hadExistingTranscript = LocalTranscriptFinalizer.finalizeTranscript(note.transcription) != nil
-
-        let onProgress: (Float) -> Void = { [weak self] value in
-            Task { @MainActor in
-                self?.progressByNoteID[noteID] = value
-            }
+        let transcriber = SegmentedAudioTranscriber(transcriptionService: self,
+                                                    progressStore: segmentProgressStore)
+        transcriber.onTransientSinglePassFailure = { [weak self] note in
+            guard let self else { return }
+            self.requeueNote(note, queuedAt: self.nowProvider())
         }
-
-        var outcome = await transcribeAudioOutcome(filePath: note.audioFilePath, progressCallback: onProgress)
-
-        // A real Whisper error is often transient — retry once before giving up.
-        if case .whisperError(_, true) = outcome, !wasTranscriptionCancelled() {
-            outcome = await transcribeAudioOutcome(filePath: note.audioFilePath, progressCallback: onProgress)
-        }
-
-        stopLeaseHeartbeat()
-        endLocalTranscription(for: noteID)
-
-        guard note.transcriptionOwnerDeviceID == currentDeviceID,
-              note.transcriptionAttemptID == attemptID,
-              note.transcriptionState == .claimed else {
-            return
-        }
-
-        if wasTranscriptionCancelled() {
-            requeueNote(note, queuedAt: nowProvider())
-            return
-        }
-
-        switch outcome {
-        case .transcribed(let result):
-            note.transcription = result.text
-            note.lastTranscriptionDuration = result.duration
-            note.transcriptionModelIdentifier = result.modelIdentifier
-            note.recordTranscriptionTelemetry(transcriptionTelemetry)
-            note.completeTranscription()
-            note.transcriptionOutcome = .transcribed
-            note.clearTransientTranscriptionFlags()
-
-        case .noSpeech:
-            // The whole clip had no speech — finish calmly. This is not an error.
-            if !hadExistingTranscript {
-                note.transcription = ""
-                note.lastTranscriptionDuration = 0
-                note.transcriptionModelIdentifier = nil
-                note.clearTranscriptionTelemetrySummary()
-            }
-            note.completeTranscription()
-            note.transcriptionOutcome = hadExistingTranscript ? .transcribed : .noSpeech
-            note.clearTransientTranscriptionFlags()
-
-        case .modelUnavailable, .audioUnavailable, .cancelled:
-            // Nothing to blame the user for: the model isn't loaded yet, the audio
-            // isn't downloaded yet, or it was cancelled. Requeue and let it run again
-            // automatically once the condition clears (e.g. modelLoadedNotification).
-            requeueNote(note, queuedAt: nowProvider())
-
-        case .whisperError(let diagnostic, _):
-            // A real error survived the retry. Don't pretend it succeeded, and don't
-            // dump jargon on the user — keep the real reason internally for us.
-            #if DEBUG
-            print("❌ [TranscriptionService] note \(noteID) failed after retry: \(diagnostic ?? "unknown error")")
-            #endif
-            if !hadExistingTranscript {
-                note.transcription = ""
-                note.lastTranscriptionDuration = 0
-                note.transcriptionModelIdentifier = nil
-                note.clearTranscriptionTelemetrySummary()
-            }
-            note.completeTranscription()
-            note.transcriptionOutcome = hadExistingTranscript ? .transcribed : .failed
-            note.markTranscriptionFailure(diagnostic ?? "transcription error")
-            note.clearTransientTranscriptionFlags()
-        }
+        await transcriber.transcribe(note: note, sourceURL: url)
     }
 
     func beginLocalTranscription(for note: VoiceNote, attemptID: String) {

@@ -215,12 +215,13 @@ final class SegmentedAudioTranscriber {
         let segmentIndex = SegmentIndexCounter()
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
-        // Word timings accumulate across slices, each re-based to global time.
-        // The resume sidecar only persists text, not timings — so if we resumed
-        // from a prior run the pre-resume words are gone and we can't store a
-        // complete aligned timeline. Skip word storage in that case (step 1 scope).
-        var allWords: [WordToken] = []
-        let resumedMidway = (resumed?.lastFrame ?? 0) > 0
+        // Word timings accumulate across slices, each re-based to global time, and
+        // are persisted in the sidecar so a resumed run keeps a complete, aligned
+        // timeline instead of dropping its pre-resume words. A legacy sidecar
+        // (resumed past frame 0 with no saved words) can't be completed.
+        var allWords: [WordToken] = resumed?.accumulatedWords ?? []
+        let wordTimelineComplete = (resumed?.lastFrame ?? 0) == 0
+            || resumed?.accumulatedWords != nil
 
         while start < info.totalFrames {
             if shouldStopForBackground() { return }   // sidecar already persisted; resume later
@@ -243,7 +244,8 @@ final class SegmentedAudioTranscriber {
                 start = end
                 progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                          accumulatedText: pieces.joined(separator: "\n"),
-                                         failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
+                                         failedRanges: failedRanges, updatedAt: nowProvider(),
+                                         accumulatedWords: allWords), for: noteID)
                 continue
             }
 
@@ -295,7 +297,8 @@ final class SegmentedAudioTranscriber {
             start = end
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                      accumulatedText: pieces.joined(separator: "\n"),
-                                     failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
+                                     failedRanges: failedRanges, updatedAt: nowProvider(),
+                                     accumulatedWords: allWords), for: noteID)
             // Surface text as it lands so the detail view fills in segment by
             // segment instead of staying blank until the whole file finishes.
             // Only once real text exists, so a re-transcription's previous
@@ -307,6 +310,9 @@ final class SegmentedAudioTranscriber {
             transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
 
+#if DEBUG
+        print("🏁 segmented done: producedAnyText=\(producedAnyText) pieces=\(pieces.count) failedRanges=\(failedRanges.count) words=\(allWords.count) lastModel=\(lastModelIdentifier ?? "nil") hadExisting=\(hadExistingTranscript) keptPrevious=\(hadExistingTranscript && !producedAnyText)")
+#endif
         // Re-transcription that produced no new text: keep the previous transcript.
         if hadExistingTranscript, !producedAnyText {
             note.completeTranscription()
@@ -317,15 +323,14 @@ final class SegmentedAudioTranscriber {
         }
 
         note.transcription = pieces.joined(separator: "\n")
-        // Only store timings when the whole file was transcribed in one run; a
-        // resumed run is missing its pre-resume words, so the timeline would be
-        // misaligned with the text (worse than having none).
-        if !resumedMidway {
-            note.wordTimings = allWords
-        }
+        // Store the aligned global-time word timeline. A legacy sidecar resumed
+        // without saved words can't be completed, so clear timings there and let
+        // the detail view fall back to the freshly written text instead of
+        // re-rendering the previous run's (now stale) timings.
+        note.wordTimings = wordTimelineComplete ? allWords : []
 #if DEBUG
         if let first = allWords.first, let last = allWords.last {
-            print("📍 stored \(allWords.count) word timings (segmented), span \(String(format: "%.2f", first.start))–\(String(format: "%.2f", last.end))s")
+            print("📍 stored \(allWords.count) word timings (segmented), span \(String(format: "%.2f", first.start))–\(String(format: "%.2f", last.end))s, complete=\(wordTimelineComplete)")
         }
 #endif
         note.transcriptionModelIdentifier = lastModelIdentifier

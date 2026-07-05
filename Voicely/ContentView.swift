@@ -1630,6 +1630,12 @@ struct VoiceNoteDetailView: View {
             // Picks up word timings once a (re)transcription finishes while open.
             cachedWordTimings = note.wordTimings
         }
+        .onChange(of: note.wordTimingsData) { _, _ in
+            // A re-transcription can rewrite the timings without changing the
+            // final text (e.g. trailing silence), so track the timings directly
+            // instead of relying on a text change to refresh the cache.
+            cachedWordTimings = note.wordTimings
+        }
     }
 
     private var headerBlock: some View {

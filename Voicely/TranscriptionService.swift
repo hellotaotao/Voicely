@@ -277,6 +277,16 @@ class TranscriptionService: ObservableObject {
             return false
         }
 
+        if force {
+            // An explicit re-transcribe means "start over": drop any leftover
+            // resume sidecar + working copy so the run starts fresh instead of
+            // continuing a stale partial (often left by a run the user interrupted
+            // by switching models). A resumed run keeps the previous word timings,
+            // which is what made a finished re-transcribe look like it reverted.
+            segmentProgressStore.delete(for: note.id)
+            segmentProgressStore.removeWorkingCopy(for: note.id)
+        }
+
         let queuedAt = note.transcriptionQueuedAt ?? nowProvider()
         note.claimTranscription(
             ownerDeviceID: currentDeviceID,
@@ -1069,7 +1079,7 @@ private extension TranscriptionService {
                 .map { WordToken(word: $0.word, start: Double($0.start), end: Double($0.end)) }
 #if DEBUG
             let whisperElapsed = Date().timeIntervalSince(whisperStart)
-            print("⏱️ WhisperKit transcribe: \(String(format: "%.2f", whisperElapsed))s, \(words.count) word timings")
+            print("⏱️ WhisperKit transcribe: \(String(format: "%.2f", whisperElapsed))s, \(words.count) word timings, textLen=\(result.text.count)")
 #endif
             return .text(result.text, words)
         } catch {

@@ -12,6 +12,10 @@ struct SegmentedTranscriptionProgress: Codable, Equatable {
     var accumulatedText: String
     var failedRanges: [SegmentFailureRange]
     var updatedAt: Date
+    /// Global-time word timings accumulated so far. Optional so sidecars written
+    /// before this field decode cleanly (nil ⇒ a legacy run with no saved words,
+    /// whose pre-resume timeline can't be reconstructed on resume).
+    var accumulatedWords: [WordToken]? = nil
 }
 
 /// Durable on-disk state for in-flight imported-audio transcriptions:

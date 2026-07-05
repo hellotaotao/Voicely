@@ -151,6 +151,56 @@ struct SegmentedAudioTranscriberTests {
         #expect(note.transcription == "first\nmore\nmore")
     }
 
+    @Test @MainActor func resumedRunKeepsPersistedWordTimings() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        // Segment 1 already finished, with its word saved in the sidecar.
+        store.save(.init(lastFrame: Int64(29 * 16_000), totalFrames: Int64(70 * 16_000),
+                         accumulatedText: "first", failedRanges: [], updatedAt: Date(),
+                         accumulatedWords: [WordToken(word: "first", start: 0.0, end: 0.5)]),
+                   for: note.id)
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in
+            .transcribed(.init(text: "more", duration: 1, modelIdentifier: "m",
+                               words: [WordToken(word: "more", start: 0.0, end: 0.5)]))
+        }
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        // Pre-resume word + the two remaining segments = a complete timeline. The
+        // old resume path dropped its pre-resume words and stored nothing, which
+        // left a finished re-transcribe showing the previous run's transcript.
+        #expect(note.wordTimings.count == 3)
+        #expect(note.wordTimings.first?.word == "first")
+        let starts = note.wordTimings.map(\.start)
+        #expect(zip(starts, starts.dropFirst()).allSatisfy { $0 < $1 })   // re-based, increasing
+    }
+
+    @Test @MainActor func legacyResumeWithoutSavedWordsClearsStaleTimings() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        note.wordTimings = [WordToken(word: "stale", start: 0.0, end: 0.5)]   // a previous run's timings
+        // A sidecar written before words were persisted (accumulatedWords == nil).
+        store.save(.init(lastFrame: Int64(29 * 16_000), totalFrames: Int64(70 * 16_000),
+                         accumulatedText: "first", failedRanges: [], updatedAt: Date()),
+                   for: note.id)
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in
+            .transcribed(.init(text: "more", duration: 1, modelIdentifier: "m",
+                               words: [WordToken(word: "more", start: 0.0, end: 0.5)]))
+        }
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        // A legacy sidecar can't rebuild a complete timeline, so the stale
+        // previous-run timings are cleared (the view falls back to the new text)
+        // rather than left to mask the re-transcribed result.
+        #expect(note.wordTimings.isEmpty)
+        #expect(note.transcription == "first\nmore\nmore")
+    }
+
     // MARK: Task 6 — retry, failed-range placeholder, noSpeech
 
     @Test @MainActor func failedSegmentBisectsAndRescuesWhenHalvesSucceed() async throws {

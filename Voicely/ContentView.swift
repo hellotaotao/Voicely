@@ -1267,6 +1267,30 @@ struct RecordingControls: View {
     }
 
     private var recordingLayout: some View {
+        VStack(spacing: 8) {
+            if audioService.inputAppearsSilent {
+                HStack(spacing: 8) {
+                    Image(systemName: "mic.slash.circle.fill")
+                        .foregroundStyle(.orange)
+                    Text("No microphone signal — check the input device")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.orange)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.orange.opacity(0.12))
+                )
+                .accessibilityIdentifier(AccessibilityIdentifiers.Library.silentInputWarning)
+            }
+
+            recordingControlsRow
+        }
+    }
+
+    private var recordingControlsRow: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
                 Circle()

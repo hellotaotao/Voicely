@@ -168,4 +168,4 @@ static func isEnglishOnly(_ model: String) -> Bool {
 - **已排除**:代码(干净 HEAD 与旧发行版同症)、TCC 权限(granted)、audio-input entitlement(构建产物里在)、AVAudioEngine 与 AVCaptureSession 两条栈、听写工具(Wispr Flow / SayType 退出无效)、第三方 HAL 驱动(隔离无效)、coreaudiod 重启、整机重启。
 - **定位**:Catalyst 音频会话代理层对 DJI 每次确定性构建出同一个幽灵对象(ID 164),`CADefaultDeviceAggregate ... reconfig pending` 弃跑 I/O;**换 AirPods 立即恢复正常** → macOS 26.5 Catalyst 会话层 × DJI MIC MINI USB 接收器的特异性不合(苹果层面,非本项目可修)。
 - **应对**:Mac 上录音换非 DJI 输入;可试偏方——「音频 MIDI 设置 → 新建聚合设备包住 DJI → 设为默认输入」(未验证)。
-- **代码留产**:Catalyst 录音改走 AVCaptureSession(QuickTime 同栈);2s 静音看门狗(全零自动重绑/报警);`🎙️` 路由与电平诊断日志。
+- **代码留产**:2s 静音看门狗(全零自动重绑引擎)+ 录音条「No microphone signal」橙色横幅(3s 精确零触发)+ `🎙️` 路由与电平诊断日志。曾试改走 AVCaptureSession(2923e29),经讨论撤回:证据不支持两栈优劣(DJI 双栈皆挂、引擎有多月历史验证),代码统一优先,恢复单一 AVAudioEngine 通路。

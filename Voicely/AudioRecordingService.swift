@@ -46,6 +46,9 @@ class AudioRecordingService: ObservableObject {
     @Published var recordingDuration: TimeInterval = 0
     @Published var hasPermission = false
     @Published private(set) var isPreparingRecordingSession = false
+    /// True while a recording is capturing only exact-zero samples (dead input) —
+    /// shown to the user so a silent mic is visible immediately, not after the fact.
+    @Published private(set) var inputAppearsSilent = false
 
     // MARK: New: exposes PCM file URL and live frame position
 
@@ -74,19 +77,14 @@ class AudioRecordingService: ObservableObject {
         /// floor). Stays false when the input is a dead/ghost device that
         /// delivers perfectly zeroed buffers — the silence watchdog keys off it.
         var hasSeenSignal = false
+        /// Frame position of the most recent buffer with real signal. A live mic
+        /// always carries noise floor, so a growing gap of exact zeros means the
+        /// input died (or never lived) — drives the user-facing warning banner.
+        var lastSignalFrame: AVAudioFramePosition = 0
     }
     private let sharedState = OSAllocatedUnfairLock<SharedState>(initialState: SharedState())
 
     private var engine: AVAudioEngine?
-    #if targetEnvironment(macCatalyst)
-    // Capture-stack recording (the path QuickTime uses). On Macs where the
-    // session's default aggregate device wedges ("Abandoning I/O cycle because
-    // reconfig pending"), AVAudioEngine taps deliver pure zeros no matter how
-    // the engine is rebuilt; AVCaptureSession talks to the device directly.
-    private var captureSession: AVCaptureSession?
-    private var captureBridge: CaptureAudioBridge?
-    private let captureQueue = DispatchQueue(label: "voicely.audio.capture")
-    #endif
     private nonisolated(unsafe) var audioFile: AVAudioFile?
     private nonisolated(unsafe) var converter: AVAudioConverter?
     private var recordingTimer: Timer?
@@ -197,11 +195,6 @@ class AudioRecordingService: ObservableObject {
     // MARK: Recording Session Prewarm
 
     func prewarmRecordingSessionIfPossible() {
-        #if targetEnvironment(macCatalyst)
-        // The Mac records via AVCaptureSession (see startCaptureSessionRecording),
-        // which needs no session/engine prewarm — recording simply starts cold.
-        return
-        #endif
         guard RecordingSessionPrewarmState.shouldStartPrewarm(
             hasPermission: hasPermission,
             isRecording: isRecording,
@@ -250,7 +243,6 @@ class AudioRecordingService: ObservableObject {
         prewarmTask = nil
         isPreparingRecordingSession = false
 
-        #if !targetEnvironment(macCatalyst)
         do {
             try prepareRecordingSessionForCapture()
             isRecordingSessionPrewarmed = false
@@ -258,7 +250,6 @@ class AudioRecordingService: ObservableObject {
             debugLog("❌ [AudioRecordingService] Audio session setup failed: \(error)")
             return nil
         }
-        #endif
 
         let m4aURL = CloudStorageManager.shared.generateAudioFilename()
         let pcmURL = FileManager.default.temporaryDirectory
@@ -284,20 +275,15 @@ class AudioRecordingService: ObservableObject {
         currentPCMFileURL = pcmURL
         activeTargetFormat = targetFormat
         didAttemptSilenceRecovery = false
+        inputAppearsSilent = false
         sharedState.withLock { state in
             state.framePosition = 0
             state.latestLevel = 0
             state.isWritingSuspended = false
             state.hasSeenSignal = false
+            state.lastSignalFrame = 0
         }
 
-        #if targetEnvironment(macCatalyst)
-        guard startCaptureSessionRecording(targetFormat: targetFormat) else {
-            audioFile = nil
-            currentPCMFileURL = nil
-            return nil
-        }
-        #else
         let newEngine = AVAudioEngine()
         engine = newEngine
         let inputNode = newEngine.inputNode
@@ -324,7 +310,6 @@ class AudioRecordingService: ObservableObject {
             currentPCMFileURL = nil
             return nil
         }
-        #endif
 
         isRecording = true
         isPaused = false
@@ -346,15 +331,6 @@ class AudioRecordingService: ObservableObject {
             return RecordingStopResult(filePath: nil, duration: 0)
         }
 
-        #if targetEnvironment(macCatalyst)
-        if let session = captureSession {
-            // Sync on the delegate queue: after this no sample-buffer callback
-            // can still be in flight, so closing the file below is safe.
-            captureQueue.sync { session.stopRunning() }
-            captureSession = nil
-            captureBridge = nil
-        }
-        #endif
         if let eng = engine {
             eng.inputNode.removeTap(onBus: 0)
             eng.stop()
@@ -368,6 +344,7 @@ class AudioRecordingService: ObservableObject {
 
         isRecording = false
         isPaused = false
+        inputAppearsSilent = false
 
         let duration = recordingDuration
         let m4aFilename = pendingM4AURL?.lastPathComponent
@@ -412,11 +389,7 @@ class AudioRecordingService: ObservableObject {
     // MARK: Pause / Resume
 
     func pauseRecording() {
-        var hasLiveIO = engine != nil
-        #if targetEnvironment(macCatalyst)
-        hasLiveIO = hasLiveIO || captureSession != nil
-        #endif
-        guard isRecording, !isPaused, hasLiveIO else { return }
+        guard isRecording, !isPaused, engine != nil else { return }
         // Keep the engine (and mic IO) running and only suspend file writes:
         // iOS refuses to restart input IO from the background, so stopping IO
         // here would make resume impossible from the lock screen Live Activity.
@@ -428,18 +401,7 @@ class AudioRecordingService: ObservableObject {
 
     @discardableResult
     func resumeRecording() -> Bool {
-        guard isRecording, isPaused else { return false }
-        #if targetEnvironment(macCatalyst)
-        if captureSession != nil {
-            // Capture session keeps running through pause (writes suspended only).
-            sharedState.withLock { $0.isWritingSuspended = false }
-            isPaused = false
-            startUITimer()
-            debugLog("▶️ [AudioRecordingService] Resumed")
-            return true
-        }
-        #endif
-        guard let eng = engine else { return false }
+        guard isRecording, isPaused, let eng = engine else { return false }
         if !eng.isRunning {
             // Engine actually stopped (e.g. after an interruption) — needs a
             // real IO restart, which only works in the foreground.
@@ -481,12 +443,8 @@ class AudioRecordingService: ObservableObject {
         try audioSession.setCategory(.record, mode: .default)
         try audioSession.setActive(true)
         #elseif targetEnvironment(macCatalyst)
-        // .record, not .playAndRecord: playAndRecord folds the default OUTPUT
-        // device into the same CoreAudio aggregate as the input; a stuck
-        // output-side reconfiguration then starves input IO ("Abandoning I/O
-        // cycle because reconfig pending" → all-zero buffers). Input-only keeps
-        // the aggregate clear of the output/virtual devices entirely.
-        try audioSession.setCategory(.record, mode: .default)
+        try audioSession.setCategory(.playAndRecord, mode: .default,
+                                     options: [.defaultToSpeaker, .allowBluetoothHFP])
         try audioSession.setActive(true)
         #endif
     }
@@ -574,6 +532,7 @@ class AudioRecordingService: ObservableObject {
             state.latestLevel = rms
             if rms > 0.000001 {
                 state.hasSeenSignal = true
+                state.lastSignalFrame = state.framePosition
             }
         }
     }
@@ -604,6 +563,16 @@ class AudioRecordingService: ObservableObject {
             didAttemptSilenceRecovery = true
             recoverFromSilentInput()
         }
+
+        // User-facing banner: 3 s of exact zeros means the input is dead (a live
+        // mic always has noise floor), whether it never delivered or died mid-way.
+        let silentNow = sharedState.withLock { state in
+            state.framePosition - state.lastSignalFrame >= 48_000   // 3 s @ 16 kHz
+        }
+        let showWarning = isRecording && !isPaused && silentNow
+        if inputAppearsSilent != showWarning {
+            inputAppearsSilent = showWarning
+        }
 #if DEBUG
         // Once per second: is the tap delivering real signal (level > 0) or
         // silence? level stuck at exactly 0 while speaking = dead input route.
@@ -623,12 +592,6 @@ class AudioRecordingService: ObservableObject {
     /// engine against the *current* device (explicitly preferring the real USB
     /// input over any virtual one) and keep appending to the same PCM file.
     private func recoverFromSilentInput() {
-        #if targetEnvironment(macCatalyst)
-        if captureSession != nil {
-            debugLog("⚠️ [AudioRecordingService] Capture path delivering silence — check the input device")
-            return
-        }
-        #endif
         guard isRecording, let targetFormat = activeTargetFormat else { return }
         debugLog("🔄 [AudioRecordingService] 2 s of pure silence — rebinding audio engine to current input")
 
@@ -674,76 +637,6 @@ class AudioRecordingService: ObservableObject {
         }
     }
 
-    #if targetEnvironment(macCatalyst)
-    // MARK: AVCaptureSession recording (Mac)
-
-    private func startCaptureSessionRecording(targetFormat: AVAudioFormat) -> Bool {
-        guard let device = AVCaptureDevice.default(for: .audio) else {
-            debugLog("❌ [AudioRecordingService] No default audio capture device")
-            return false
-        }
-
-        let session = AVCaptureSession()
-        session.beginConfiguration()
-        do {
-            let input = try AVCaptureDeviceInput(device: device)
-            guard session.canAddInput(input) else {
-                debugLog("❌ [AudioRecordingService] Cannot add capture input")
-                return false
-            }
-            session.addInput(input)
-        } catch {
-            debugLog("❌ [AudioRecordingService] Capture input failed: \(error)")
-            return false
-        }
-
-        let output = AVCaptureAudioDataOutput()
-        let bridge = CaptureAudioBridge { [weak self] sampleBuffer in
-            self?.handleCaptureSampleBuffer(sampleBuffer, outputFormat: targetFormat)
-        }
-        output.setSampleBufferDelegate(bridge, queue: captureQueue)
-        guard session.canAddOutput(output) else {
-            debugLog("❌ [AudioRecordingService] Cannot add capture output")
-            return false
-        }
-        session.addOutput(output)
-        session.commitConfiguration()
-
-        captureBridge = bridge
-        captureSession = session
-        // startRunning blocks until IO is up — keep it off the main thread.
-        captureQueue.async { session.startRunning() }
-        debugLog("🎥 [AudioRecordingService] Capture recording from: \(device.localizedName)")
-        return true
-    }
-
-    /// Runs on `captureQueue`. Converts each CMSampleBuffer to PCM and feeds the
-    /// same convert-and-write pipeline the engine tap uses.
-    private nonisolated func handleCaptureSampleBuffer(
-        _ sampleBuffer: CMSampleBuffer,
-        outputFormat: AVAudioFormat
-    ) {
-        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
-        let inputFormat = AVAudioFormat(cmAudioFormatDescription: formatDesc)
-        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
-        guard numSamples > 0,
-              let pcm = AVAudioPCMBuffer(pcmFormat: inputFormat,
-                                         frameCapacity: AVAudioFrameCount(numSamples)) else { return }
-        pcm.frameLength = AVAudioFrameCount(numSamples)
-        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            sampleBuffer, at: 0, frameCount: Int32(numSamples),
-            into: pcm.mutableAudioBufferList)
-        guard status == noErr else { return }
-
-        // Lazily built from the first buffer's real format; captureQueue is
-        // serial, and stopRecording drains it before clearing the converter.
-        if converter == nil {
-            converter = AVAudioConverter(from: inputFormat, to: outputFormat)
-        }
-        processTapBuffer(pcm, inputFormat: inputFormat, outputFormat: outputFormat)
-    }
-    #endif
-
     // MARK: PCM (CAF) → M4A conversion
 
     private func convertCAFToM4A(from cafURL: URL, to m4aURL: URL) async throws {
@@ -764,22 +657,3 @@ class AudioRecordingService: ObservableObject {
         }
     }
 }
-
-#if targetEnvironment(macCatalyst)
-/// Forwards AVCaptureAudioDataOutput sample buffers to a closure. A separate
-/// NSObject because the delegate protocol requires one and the service is a
-/// MainActor ObservableObject.
-private final class CaptureAudioBridge: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
-    private let onSampleBuffer: (CMSampleBuffer) -> Void
-
-    init(onSampleBuffer: @escaping (CMSampleBuffer) -> Void) {
-        self.onSampleBuffer = onSampleBuffer
-    }
-
-    func captureOutput(_ output: AVCaptureOutput,
-                       didOutput sampleBuffer: CMSampleBuffer,
-                       from connection: AVCaptureConnection) {
-        onSampleBuffer(sampleBuffer)
-    }
-}
-#endif

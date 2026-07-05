@@ -24,6 +24,7 @@ enum AccessibilityIdentifiers {
         static let pauseRecordingButton = "PauseRecordingButton"
         static let stopRecordingButton = "StopRecordingButton"
         static let detailPlaceholder = "DetailPlaceholder"
+        static let silentInputWarning = "SilentInputWarning"
     }
 
     enum Detail {

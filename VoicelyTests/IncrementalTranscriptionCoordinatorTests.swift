@@ -78,6 +78,19 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
     }
 
+    actor WordTokenSequence {
+        private var batches: [[WordToken]]
+
+        init(_ batches: [[WordToken]]) {
+            self.batches = batches
+        }
+
+        func next() -> [WordToken] {
+            guard !batches.isEmpty else { return [] }
+            return batches.removeFirst()
+        }
+    }
+
     struct FakeNeuralVAD: NeuralVoiceActivityDetecting {
         let frameProbabilities: [(startFrame: Int, endFrame: Int, speechProbability: Double)]
 
@@ -430,12 +443,31 @@ struct IncrementalTranscriptionCoordinatorTests {
             transcriptionService: service,
             recordingFileURL: pcmURL
         )
+        let sequence = TranscriptSequence(["hello", "world"])
+        coordinator.transcribeOverride = { @Sendable _ in await sequence.next() }
+
+        await coordinator.transcribeSegment(upToFrame: 480_000)
+        await coordinator.transcribeSegment(upToFrame: 960_000)
+
+        #expect(coordinator.accumulatedTranscript == "hello\nworld")
+    }
+
+    @Test @MainActor func adjacentIdenticalSegmentsAreDeduplicated() async throws {
+        // A decode loop that repeats the previous segment verbatim (a classic
+        // whisper hallucination) is collapsed — words and text together.
+        let pcmURL = try makeSilentCAF(seconds: 70)
+        let service = TranscriptionService()
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: service,
+            recordingFileURL: pcmURL
+        )
         coordinator.transcribeOverride = { @Sendable _ in "hello" }
 
         await coordinator.transcribeSegment(upToFrame: 480_000)
         await coordinator.transcribeSegment(upToFrame: 960_000)
 
-        #expect(coordinator.accumulatedTranscript == "hello\nhello")
+        #expect(coordinator.accumulatedTranscript == "hello")
+        #expect(coordinator.accumulatedWords.count == 1)
     }
 
     @Test @MainActor func stopWaitsForInFlightSegmentAndPendingFinalSegment() async throws {
@@ -481,14 +513,15 @@ struct IncrementalTranscriptionCoordinatorTests {
             transcriptionService: service,
             recordingFileURL: pcmURL
         )
-        coordinator.transcribeOverride = { @Sendable _ in "hello" }
+        let sequence = TranscriptSequence(["hello", "tail"])
+        coordinator.transcribeOverride = { @Sendable _ in await sequence.next() }
 
         // First segment cuts at one full batch (~29 s), leaving a tail
         // shorter than a batch when the recording stops at 40 s.
         await coordinator.transcribeSegment(upToFrame: 480_000)
         let transcript = await coordinator.stop(currentFrame: 640_000)
 
-        #expect(transcript == "hello\nhello")
+        #expect(transcript == "hello\ntail")
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -539,8 +572,8 @@ struct IncrementalTranscriptionCoordinatorTests {
         coordinator.transcribeOverride = { @Sendable _ in
             await sequence.next()
         }
-        coordinator.transcriptCallback = { transcript in
-            updates.append(transcript)
+        coordinator.transcriptCallback = { assembled in
+            updates.append(assembled.text)
         }
 
         await coordinator.transcribeSegment(upToFrame: 480_000)
@@ -561,9 +594,12 @@ struct IncrementalTranscriptionCoordinatorTests {
         // Each slice reports 0-based local word times; the accumulator adds each
         // segment's start offset so stored times are global. The first segment
         // starts at frame 0 (offset 0); the second starts a full segment later.
-        coordinator.segmentWordsOverride = { @Sendable _ in
-            [WordToken(word: "word", start: 0.0, end: 0.5)]
-        }
+        // Distinct word texts keep the adjacent-duplicate filter out of the way.
+        let wordSequence = WordTokenSequence([
+            [WordToken(word: "alpha", start: 0.0, end: 0.5)],
+            [WordToken(word: "beta", start: 0.0, end: 0.5)]
+        ])
+        coordinator.segmentWordsOverride = { @Sendable _ in await wordSequence.next() }
 
         await coordinator.transcribeSegment(upToFrame: 480_000)
         await coordinator.transcribeSegment(upToFrame: 960_000)

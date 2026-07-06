@@ -121,6 +121,51 @@ struct RecordingSessionTests {
         #expect(note?.audioFilePath == "recording.m4a")
     }
 
+    /// The live path finalize writes the assembled transcript and its word
+    /// timeline in one stroke — the stored text is exactly the joined words.
+    @Test func finalizeWritesTranscriptAndWordTimelineInLockstep() async throws {
+        let (session, audio, collector) = makeSession()
+
+        // A real (silent) PCM file so the coordinator's final flush can extract
+        // a segment; the transcription itself is stubbed below.
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                   channels: 1, interleaved: false)!
+        let frames: AVAudioFrameCount = 80_000   // 5 s
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+        let pcmURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voicely_session_\(UUID().uuidString).caf")
+        let file = try AVAudioFile(forWriting: pcmURL, settings: format.settings)
+        try file.write(from: buffer)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        audio.currentPCMFileURL = pcmURL
+
+        session.coordinatorFactory = { url in
+            let coordinator = IncrementalTranscriptionCoordinator(
+                transcriptionService: TranscriptionService(), recordingFileURL: url)
+            coordinator.transcribeOverride = { @Sendable _ in "hello world" }
+            coordinator.segmentWordsOverride = { @Sendable _ in
+                [WordToken(word: " hello", start: 0.0, end: 0.5),
+                 WordToken(word: " world", start: 0.5, end: 1.0)]
+            }
+            return coordinator
+        }
+
+        session.startRecording()
+        await waitUntil { session.currentRecordingNote != nil }
+        let note = collector.notes.first
+
+        audio.recordingDuration = 5
+        audio.currentFramePosition = AVAudioFramePosition(frames)
+        session.stopRecording()
+        await waitUntil { note?.transcription.isEmpty == false }
+
+        #expect(note?.transcription == "hello world")
+        #expect(note?.wordTimings.map(\.word).joined() == note?.transcription)
+        #expect(note?.wordTimings.count == 2)
+        #expect(note?.transcriptionState == .completed)
+    }
+
     /// The accidental-stop guard still applies: an immediate stop on a fresh
     /// recording is ignored, leaving the session recording.
     @Test func immediateStopIsIgnoredOnFreshRecording() async {

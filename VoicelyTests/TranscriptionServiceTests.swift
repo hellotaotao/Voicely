@@ -324,7 +324,7 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         service.transcribeImpl = { _, _ in
-            .text("fresh", [WordToken(word: "fresh", start: 0.0, end: 0.5)])
+            .text([TranscriptPiece(words: [WordToken(word: "fresh", start: 0.0, end: 0.5)])])
         }
 
         let note = VoiceNote(title: "Old", audioFilePath: makeTestAudioPath(seconds: 40))
@@ -354,7 +354,7 @@ struct TranscriptionServiceTests {
         var attempts = 0
         service.transcribeImpl = { _, _ in
             attempts += 1
-            return attempts == 1 ? .whisperError("transient", retryable: true) : .text("recovered", [])
+            return attempts == 1 ? .whisperError("transient", retryable: true) : "recovered"
         }
 
         let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())

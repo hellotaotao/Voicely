@@ -61,11 +61,24 @@ final class IncrementalTranscriptionCoordinator {
 
     // MARK: Public state
 
+    /// Raw pieces accumulated so far, re-based to global recording time. The
+    /// assembled view below applies filtering across the whole recording.
+    private(set) var accumulatedPieces: [TranscriptPiece] = []
+
+    /// Cross-segment assembled transcript. Nil while nothing usable has landed;
+    /// the all-non-speech fallback is suppressed so a noise-only recording stays
+    /// silent in the live view and finishes through the queue path as before.
+    var assembledTranscript: AssembledTranscript? {
+        guard let assembled = TranscriptAssembler.assemble(accumulatedPieces),
+              !assembled.isNonSpeechFallback else { return nil }
+        return assembled
+    }
+
     /// All transcribed text accumulated so far. Updated after each segment completes.
-    private(set) var accumulatedTranscript: String = ""
+    var accumulatedTranscript: String { assembledTranscript?.text ?? "" }
 
     /// Word-level timings accumulated so far, re-based to global recording time.
-    private(set) var accumulatedWords: [WordToken] = []
+    var accumulatedWords: [WordToken] { assembledTranscript?.words ?? [] }
 
     /// Overridable for testing. When non-nil, used instead of TranscriptionService.
     var transcribeOverride: (@Sendable (String) async -> String?)? = nil
@@ -78,7 +91,7 @@ final class IncrementalTranscriptionCoordinator {
     var frameCountProvider: () -> AVAudioFramePosition = { 0 }
 
     /// Optional transcript relay after a segment appends to the accumulated transcript.
-    var transcriptCallback: ((String) -> Void)? = nil
+    var transcriptCallback: ((AssembledTranscript) -> Void)? = nil
 
     // MARK: Private
 
@@ -245,31 +258,32 @@ final class IncrementalTranscriptionCoordinator {
         // No separate speech preflight here: transcribeAudio runs the same
         // neural VAD gate before invoking Whisper, so checking twice would
         // just double the inference cost per segment.
-        let textResult: String?
-        var segmentWords: [WordToken] = []
+        var slicePieces: [TranscriptPiece] = []
         if let override = transcribeOverride {
-            textResult = await override(segmentURL.path)
-            segmentWords = await segmentWordsOverride?(segmentURL.path) ?? []
+            let text = await override(segmentURL.path)
+            let segmentWords = await segmentWordsOverride?(segmentURL.path) ?? []
+            if !segmentWords.isEmpty {
+                slicePieces = [TranscriptPiece(words: segmentWords)]
+            } else if let text {
+                let sliceSeconds = recordingSampleRate > 0
+                    ? Double(endFrame - startFrame) / recordingSampleRate : 0
+                slicePieces = TranscriptPiece.pieces(fromText: text, start: 0, end: sliceSeconds)
+            }
         } else if let result = await transcriptionService.transcribeAudio(filePath: segmentURL.path) {
-            textResult = result.text
-            segmentWords = result.words
-        } else {
-            textResult = nil
+            slicePieces = result.effectivePieces
         }
 
-        if let text = Self.sanitizedSegmentText(textResult) {
-            if accumulatedTranscript.isEmpty {
-                accumulatedTranscript = text
-            } else {
-                accumulatedTranscript += "\n" + text
-            }
+        // The slice joins the pool only when it carries real speech — its text
+        // and word timings enter (or stay out) together. Cross-segment dedup and
+        // boundary merging happen in the assembled view, not by string surgery.
+        if TranscriptAssembler.assemble(slicePieces)?.isNonSpeechFallback == false {
             // Re-base this slice's word times (0-based within the slice) to global
             // recording time before accumulating, mirroring the import path.
             let offset = recordingSampleRate > 0 ? Double(startFrame) / recordingSampleRate : 0
-            accumulatedWords.append(contentsOf: segmentWords.map {
-                WordToken(word: $0.word, start: $0.start + offset, end: $0.end + offset)
-            })
-            transcriptCallback?(accumulatedTranscript)
+            accumulatedPieces.append(contentsOf: slicePieces.map { $0.rebased(by: offset) })
+            if let assembled = assembledTranscript {
+                transcriptCallback?(assembled)
+            }
         }
     }
 

@@ -133,6 +133,17 @@ final class VoiceNote {
             }
         }
     }
+    /// Single write path for transcript content. `transcription` is a derived
+    /// cache of the word timeline — whenever words exist, the text must be
+    /// exactly their concatenation, so every producer goes through here instead
+    /// of writing the two fields independently.
+    func setTranscript(text: String, words: [WordToken]) {
+        assert(words.isEmpty || text == words.map(\.word).joined(),
+               "transcript text out of lockstep with word timeline")
+        transcription = text
+        wordTimings = words
+    }
+
     var transcriptionModelIdentifier: String?
     var transcriptionLastErrorMessage: String?
     var isTranscribing: Bool = false

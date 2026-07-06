@@ -2355,9 +2355,8 @@ struct VoiceNoteDetailView: View {
                 // Edited a timed transcript: keep timings — unchanged parts keep
                 // their times, the edited span inherits its position's timestamp.
                 let reanchored = WordToken.reanchored(cachedWordTimings, editedText: editedTranscription)
-                note.wordTimings = reanchored
+                note.setTranscript(text: editedTranscription, words: reanchored)
                 cachedWordTimings = reanchored
-                note.transcription = editedTranscription
             }
             if editedTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.transcriptionModelIdentifier = nil

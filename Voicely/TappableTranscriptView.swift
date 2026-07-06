@@ -49,7 +49,7 @@ struct TappableTranscriptView: UIViewRepresentable {
         // One entry per *unit* (a run of words sharing a timestamp), not per word.
         private var unitRanges: [NSRange] = []
         private var unitStarts: [Double] = []
-        private var builtSignature = ""
+        private var builtWords: [WordToken] = []
         private var highlightedIndex = -1
         /// After a tap we light the tapped unit immediately and hold it here until
         /// playback actually reaches it, so the sync-lead can't snap it backward.
@@ -67,13 +67,14 @@ struct TappableTranscriptView: UIViewRepresentable {
         init(onWordTap: @escaping (Double) -> Void) { self.onWordTap = onWordTap }
 
         /// Rebuilds the text only when the word set changes; otherwise just moves
-        /// the highlight. Called ~10×/s while playing, so the hot path is cheap.
+        /// the highlight. Called ~10×/s while playing, so the hot path is cheap:
+        /// the array comparison hits the identical-storage fast path when SwiftUI
+        /// hands over the same cached array, and pays O(n) once per real change.
         func apply(words: [WordToken], currentTime: Double) {
             guard let textView else { return }
-            let signature = "\(words.count)|\(words.first?.start ?? 0)|\(words.last?.end ?? 0)"
-            if signature != builtSignature {
+            if words != builtWords {
                 rebuild(words: words, in: textView)
-                builtSignature = signature
+                builtWords = words
                 highlightedIndex = -1
                 postTapFloorIndex = -1
             }

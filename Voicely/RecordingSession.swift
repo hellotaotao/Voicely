@@ -167,11 +167,11 @@ final class RecordingSession: ObservableObject {
         coord.frameCountProvider = { [weak audioService] in
             audioService?.currentFramePosition ?? 0
         }
-        coord.transcriptCallback = { [weak self, note] transcript in
+        coord.transcriptCallback = { [weak self, note] assembled in
             guard let self else { return }
-            guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
-
-            note.transcription = finalizedTranscript.text
+            // The coordinator already assembled (filtered) the transcript across
+            // segments — text and word timings land together, in lockstep.
+            note.setTranscript(text: assembled.text, words: assembled.words)
             note.isTranscribing = true
             note.transcriptionModelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
                 ?? self.transcriptionService.modelManager?.selectedModel
@@ -257,20 +257,16 @@ final class RecordingSession: ObservableObject {
         note.transcriptionProgress = 0.0
 
         Task { @MainActor in
-            let accumulatedTranscript: String
+            var assembled: AssembledTranscript?
             if let coord = capturedCoordinator {
-                accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
-            } else {
-                accumulatedTranscript = ""
+                _ = await coord.stop(currentFrame: finalFrame)
+                assembled = coord.assembledTranscript
             }
 
-            let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(accumulatedTranscript)
-            let trimmedTranscript = finalizedTranscript?.text ?? ""
-
-            if !trimmedTranscript.isEmpty {
-                note.transcription = trimmedTranscript
-                // Live recordings now carry word timings too — no Re-transcribe needed.
-                note.wordTimings = capturedCoordinator?.accumulatedWords ?? []
+            if let assembled {
+                // Live recordings carry word timings too — text and timeline are
+                // one write, already filtered across segments by the assembler.
+                note.setTranscript(text: assembled.text, words: assembled.words)
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
                 note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
@@ -279,7 +275,7 @@ final class RecordingSession: ObservableObject {
                 return
             }
 
-            await stopResult.awaitConversionIfNeeded(forIncrementalTranscript: trimmedTranscript)
+            await stopResult.awaitConversionIfNeeded(forIncrementalTranscript: "")
             transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
             if isModelLoaded {
                 await transcriptionService.processPendingTranscriptions(notes: [note])

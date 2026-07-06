@@ -20,15 +20,28 @@ struct TranscriptionResult {
     let duration: TimeInterval
     let modelIdentifier: String?
     /// Word-level timings for this attempt (empty unless wordTimestamps was on).
+    /// Always in lockstep with `text`: joined word texts reproduce it exactly.
     var words: [WordToken] = []
+    /// Raw, unfiltered whisper-segment pieces (slice-local times). Accumulating
+    /// callers collect these across slices and assemble once at the outer level,
+    /// so cross-slice dedup/merge decisions see segment granularity.
+    var pieces: [TranscriptPiece] = []
+
+    /// Pieces for accumulation; synthesizes from text/words for hand-built
+    /// results (test stubs) that don't carry pieces.
+    var effectivePieces: [TranscriptPiece] {
+        if !pieces.isEmpty { return pieces }
+        if !words.isEmpty { return [TranscriptPiece(words: words)] }
+        return TranscriptPiece.pieces(fromText: text, start: 0, end: 0)
+    }
 }
 
 /// What a single transcription attempt produced. `.text` carries Whisper's raw
-/// output (still to be finalized); every other case names *why* there is no
-/// text, so callers can react per cause instead of treating all failures alike.
-/// A string literal becomes `.text`, so existing test stubs keep working.
+/// per-segment pieces (still to be assembled/filtered); every other case names
+/// *why* there is no text, so callers can react per cause instead of treating
+/// all failures alike. A string literal becomes `.text`, so test stubs stay terse.
 enum RawTranscription: ExpressibleByStringLiteral {
-    case text(String, [WordToken])
+    case text([TranscriptPiece])
     case noSpeech
     case modelUnavailable
     case audioUnavailable
@@ -40,7 +53,7 @@ enum RawTranscription: ExpressibleByStringLiteral {
     case cancelled
 
     init(stringLiteral value: String) {
-        self = .text(value, [])
+        self = .text(TranscriptPiece.pieces(fromText: value, start: 0, end: 0))
     }
 }
 
@@ -148,7 +161,7 @@ class TranscriptionService: ObservableObject {
     func configureNewNote(_ note: VoiceNote, shouldStartImmediately: Bool) {
         let now = nowProvider()
         note.transcriptionOriginDeviceID = currentDeviceID
-        note.transcription = ""
+        note.setTranscript(text: "", words: [])
         note.lastTranscriptionDuration = 0
         note.transcriptionModelIdentifier = nil
         note.clearTransientTranscriptionFlags()
@@ -448,13 +461,13 @@ class TranscriptionService: ObservableObject {
         }
 
         switch raw {
-        case .text(let rawText, let rawWords):
+        case .text(let rawPieces):
             if cancelRequested || Task.isCancelled {
                 cancelRequested = false
                 lastCancellationHandled = true
                 return .cancelled
             }
-            guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(rawText) else {
+            guard let assembled = TranscriptAssembler.assemble(rawPieces) else {
                 // Whisper ran but produced nothing usable. Treat it as a real error
                 // to surface for diagnosis — not as a calm "no speech". Deterministic,
                 // so not retryable: an identical re-decode yields the same blank.
@@ -463,10 +476,11 @@ class TranscriptionService: ObservableObject {
             let elapsed = nowProvider().timeIntervalSince(startTime)
             let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
             return .transcribed(TranscriptionResult(
-                text: finalizedTranscript.text,
+                text: assembled.text,
                 duration: elapsed,
                 modelIdentifier: modelIdentifier,
-                words: rawWords
+                words: assembled.words,
+                pieces: rawPieces
             ))
         case .noSpeech:
             return .noSpeech
@@ -986,28 +1000,48 @@ private extension TranscriptionService {
                 return .cancelled
             }
 
-            guard let result = transcriptionResults.first else {
+            guard !transcriptionResults.isEmpty else {
                 return .whisperError("empty result", retryable: false)
             }
 
-            // Flatten WhisperKit's per-segment word timings (populated because
-            // wordTimestamps is on) into one segment-local timeline. Callers that
-            // slice audio (the segmented path) re-base these to global time.
-            let words: [WordToken] = transcriptionResults
+            // Keep WhisperKit's segment grouping: each segment becomes one piece
+            // pairing its text with its word timings (slice-local times; slicing
+            // callers re-base to global time). The grouping is the evidence the
+            // assembler's dedup/non-speech decisions run on — flattening it here
+            // would make text and words impossible to filter in lockstep.
+            let pieces: [TranscriptPiece] = transcriptionResults
                 .flatMap { $0.segments }
-                .flatMap { $0.words ?? [] }
-                .map { WordToken(word: $0.word, start: Double($0.start), end: Double($0.end)) }
+                .map { segment in
+                    let words = (segment.words ?? []).map {
+                        WordToken(word: $0.word, start: Double($0.start), end: Double($0.end))
+                    }
+                    if !words.isEmpty { return TranscriptPiece(words: words) }
+                    // Wordless segment (rare with wordTimestamps on): synthesize a
+                    // token from the segment text so timings still cover the span.
+                    return TranscriptPiece(
+                        text: Self.strippedSpecialTokens(segment.text),
+                        start: Double(segment.start),
+                        end: Double(segment.end))
+                }
+                .filter { !$0.words.isEmpty }
 #if DEBUG
             let whisperElapsed = Date().timeIntervalSince(whisperStart)
-            print("⏱️ WhisperKit transcribe: \(String(format: "%.2f", whisperElapsed))s, \(words.count) word timings, textLen=\(result.text.count)")
+            let wordCount = pieces.reduce(0) { $0 + $1.words.count }
+            print("⏱️ WhisperKit transcribe: \(String(format: "%.2f", whisperElapsed))s, \(pieces.count) segments, \(wordCount) word timings")
 #endif
-            return .text(result.text, words)
+            return .text(pieces)
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
             // A thrown error is often a transient ANE/Metal hiccup — worth one retry.
             return .whisperError("WhisperKit error: \(error.localizedDescription)", retryable: true)
         }
+    }
+
+    /// Removes whisper special-token markers (`<|nospeech|>`, `<|0.00|>`, …)
+    /// from a segment's text before it is synthesized into a display token.
+    nonisolated static func strippedSpecialTokens(_ text: String) -> String {
+        text.replacingOccurrences(of: "<\\|[^|]*\\|>", with: "", options: .regularExpression)
     }
 
     func resetProgressSmoothing() {

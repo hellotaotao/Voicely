@@ -59,15 +59,17 @@ struct SegmentedAudioTranscriberTests {
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
         let note = VoiceNote(title: "imported", audioFilePath: "")
         let observed = TranscriptCollector()
+        let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
             await observed.record(await MainActor.run { note.transcription })
-            return .transcribed(.init(text: "seg", duration: 1, modelIdentifier: "m"))
+            let n = await calls.incrementAndGet()
+            return .transcribed(.init(text: "seg\(n)", duration: 1, modelIdentifier: "m"))
         }
 
         await transcriber.transcribe(note: note, sourceURL: url)
 
-        #expect(await observed.values == ["", "seg", "seg\nseg"])
-        #expect(note.transcription == "seg\nseg\nseg")
+        #expect(await observed.values == ["", "seg1", "seg1\nseg2"])
+        #expect(note.transcription == "seg1\nseg2\nseg3")
     }
 
     @Test @MainActor func segmentedRunDrivesWholeFileTelemetry() async throws {
@@ -116,16 +118,37 @@ struct SegmentedAudioTranscriberTests {
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
         let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
-            await calls.increment()
-            return .transcribed(.init(text: "seg", duration: 1, modelIdentifier: "m"))
+            let n = await calls.incrementAndGet()
+            return .transcribed(.init(text: "seg\(n)", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
         await transcriber.transcribe(note: note, sourceURL: url)
 
         #expect(await calls.value == 3)
-        #expect(note.transcription == "seg\nseg\nseg")
+        #expect(note.transcription == "seg1\nseg2\nseg3")
         #expect(note.transcriptionOutcome == .transcribed)
+    }
+
+    @Test @MainActor func adjacentIdenticalSlicesAreDeduplicatedWithTheirWords() async throws {
+        // A cross-window decode loop repeating the previous slice verbatim (the
+        // classic whisper hallucination) collapses to one piece — text and word
+        // timings together, so the tappable transcript matches the plain text.
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in
+            .transcribed(.init(text: "same words", duration: 1, modelIdentifier: "m",
+                               words: [WordToken(word: " same", start: 0.0, end: 0.4),
+                                       WordToken(word: " words", start: 0.4, end: 0.8)]))
+        }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcription == "same words")
+        #expect(note.wordTimings.count == 2)
+        #expect(note.transcription == note.wordTimings.map(\.word).joined())
     }
 
     // MARK: Task 5 — resume from sidecar
@@ -141,14 +164,14 @@ struct SegmentedAudioTranscriberTests {
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
         let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
-            await calls.increment()
-            return .transcribed(.init(text: "more", duration: 1, modelIdentifier: "m"))
+            let n = await calls.incrementAndGet()
+            return .transcribed(.init(text: "more\(n)", duration: 1, modelIdentifier: "m"))
         }
 
         await transcriber.transcribe(note: note, sourceURL: url)
 
         #expect(await calls.value == 2)               // only the remaining 2 segments
-        #expect(note.transcription == "first\nmore\nmore")
+        #expect(note.transcription == "first\nmore1\nmore2")
     }
 
     @Test @MainActor func resumedRunKeepsPersistedWordTimings() async throws {
@@ -161,9 +184,11 @@ struct SegmentedAudioTranscriberTests {
                          accumulatedWords: [WordToken(word: "first", start: 0.0, end: 0.5)]),
                    for: note.id)
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
-            .transcribed(.init(text: "more", duration: 1, modelIdentifier: "m",
-                               words: [WordToken(word: "more", start: 0.0, end: 0.5)]))
+            let n = await calls.incrementAndGet()
+            return .transcribed(.init(text: "more\(n)", duration: 1, modelIdentifier: "m",
+                                      words: [WordToken(word: "more\(n)", start: 0.0, end: 0.5)]))
         }
 
         await transcriber.transcribe(note: note, sourceURL: url)
@@ -172,7 +197,8 @@ struct SegmentedAudioTranscriberTests {
         // old resume path dropped its pre-resume words and stored nothing, which
         // left a finished re-transcribe showing the previous run's transcript.
         #expect(note.wordTimings.count == 3)
-        #expect(note.wordTimings.first?.word == "first")
+        // The first token carries the piece separator ("first\n") by design.
+        #expect(note.wordTimings.first?.word.hasPrefix("first") == true)
         let starts = note.wordTimings.map(\.start)
         #expect(zip(starts, starts.dropFirst()).allSatisfy { $0 < $1 })   // re-based, increasing
     }
@@ -225,9 +251,11 @@ struct SegmentedAudioTranscriberTests {
                          accumulatedText: "first", failedRanges: [], updatedAt: Date()),
                    for: note.id)
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
-            .transcribed(.init(text: "more", duration: 1, modelIdentifier: "m",
-                               words: [WordToken(word: "more", start: 0.0, end: 0.5)]))
+            let n = await calls.incrementAndGet()
+            return .transcribed(.init(text: "more\(n)", duration: 1, modelIdentifier: "m",
+                                      words: [WordToken(word: "more\(n)", start: 0.0, end: 0.5)]))
         }
 
         await transcriber.transcribe(note: note, sourceURL: url)
@@ -236,7 +264,7 @@ struct SegmentedAudioTranscriberTests {
         // previous-run timings are cleared (the view falls back to the new text)
         // rather than left to mask the re-transcribed result.
         #expect(note.wordTimings.isEmpty)
-        #expect(note.transcription == "first\nmore\nmore")
+        #expect(note.transcription == "first\nmore1\nmore2")
     }
 
     // MARK: Task 6 — retry, failed-range placeholder, noSpeech
@@ -248,10 +276,11 @@ struct SegmentedAudioTranscriberTests {
         transcriber.transcribeSegmentOutcome = { segmentURL in
             // Segment 2 (extraction index 2) fails as a whole; its two bisected
             // halves (indices 3 & 4) transcribe fine, so nothing is lost.
-            if SegmentedAudioTestSupport.extractionIndex(of: segmentURL) == 2 {
+            let i = SegmentedAudioTestSupport.extractionIndex(of: segmentURL)
+            if i == 2 {
                 return .whisperError("boom", retryable: false)
             }
-            return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
+            return .transcribed(.init(text: "ok\(i)", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
@@ -259,8 +288,8 @@ struct SegmentedAudioTranscriberTests {
 
         #expect(note.transcriptionOutcome == .transcribed)              // fully recovered
         #expect(!note.transcription.contains("transcription unavailable"))
-        // seg1 + two rescued halves of seg2 + seg3 = 4 pieces.
-        #expect(note.transcription == "ok\nok\nok\nok")
+        // seg1 + two rescued halves of seg2 (indices 3 & 4) + seg3 (index 5).
+        #expect(note.transcription == "ok1\nok3\nok4\nok5")
     }
 
     @Test @MainActor func rescuedHalvesContributeRebasedWordTimings() async throws {
@@ -270,11 +299,12 @@ struct SegmentedAudioTranscriberTests {
         // Every transcribed slice carries one word at slice-local 0.0–0.5; the
         // transcriber must re-base each to the slice's offset in the recording.
         transcriber.transcribeSegmentOutcome = { segmentURL in
-            if SegmentedAudioTestSupport.extractionIndex(of: segmentURL) == 2 {
+            let i = SegmentedAudioTestSupport.extractionIndex(of: segmentURL)
+            if i == 2 {
                 return .whisperError("boom", retryable: false)   // seg2 fails ⇒ bisected into halves 3 & 4
             }
-            return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m",
-                                      words: [WordToken(word: "ok", start: 0.0, end: 0.5)]))
+            return .transcribed(.init(text: "ok\(i)", duration: 1, modelIdentifier: "m",
+                                      words: [WordToken(word: "ok\(i)", start: 0.0, end: 0.5)]))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
@@ -296,11 +326,12 @@ struct SegmentedAudioTranscriberTests {
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
         let seg2Calls = Counter()
         transcriber.transcribeSegmentOutcome = { segmentURL in
-            if SegmentedAudioTestSupport.extractionIndex(of: segmentURL) == 2 {
+            let i = SegmentedAudioTestSupport.extractionIndex(of: segmentURL)
+            if i == 2 {
                 await seg2Calls.increment()
                 return .whisperError("blank", retryable: false)   // deterministic
             }
-            return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
+            return .transcribed(.init(text: "ok\(i)", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
@@ -309,7 +340,7 @@ struct SegmentedAudioTranscriberTests {
         // A deterministic failure must NOT re-run the identical window — it goes
         // straight to bisection. (The old loop ran it 3× before bisecting.)
         #expect(await seg2Calls.value == 1)
-        #expect(note.transcription == "ok\nok\nok\nok")   // halves still salvaged
+        #expect(note.transcription == "ok1\nok3\nok4\nok5")   // halves still salvaged
         #expect(note.transcriptionOutcome == .transcribed)
     }
 
@@ -319,11 +350,12 @@ struct SegmentedAudioTranscriberTests {
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
         let seg2Calls = Counter()
         transcriber.transcribeSegmentOutcome = { segmentURL in
-            if SegmentedAudioTestSupport.extractionIndex(of: segmentURL) == 2 {
+            let i = SegmentedAudioTestSupport.extractionIndex(of: segmentURL)
+            if i == 2 {
                 await seg2Calls.increment()
                 return .whisperError("transient", retryable: true)   // worth retrying
             }
-            return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
+            return .transcribed(.init(text: "ok\(i)", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
@@ -332,7 +364,7 @@ struct SegmentedAudioTranscriberTests {
         // A transient error re-runs the same window twice (3 total) before falling
         // back to bisection, which then salvages the halves.
         #expect(await seg2Calls.value == 3)
-        #expect(note.transcription == "ok\nok\nok\nok")
+        #expect(note.transcription == "ok1\nok3\nok4\nok5")
         #expect(note.transcriptionOutcome == .transcribed)
     }
 
@@ -347,7 +379,7 @@ struct SegmentedAudioTranscriberTests {
             // a single placeholder — a partial success, not a failure.
             let i = SegmentedAudioTestSupport.extractionIndex(of: segmentURL)
             if i == 2 || i == 4 { return .whisperError("boom", retryable: false) }
-            return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
+            return .transcribed(.init(text: "ok\(i)", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
@@ -355,8 +387,8 @@ struct SegmentedAudioTranscriberTests {
 
         #expect(note.transcriptionOutcome == .partial)
         #expect(note.transcription.contains("transcription unavailable"))
-        #expect(note.transcription.hasPrefix("ok"))   // seg1 + rescued left half
-        #expect(note.transcription.hasSuffix("ok"))   // seg3
+        #expect(note.transcription.hasPrefix("ok1"))   // seg1 + rescued left half
+        #expect(note.transcription.hasSuffix("ok5"))   // seg3
     }
 
     @Test @MainActor func importWithNoUsableTextYieldsFailed() async throws {

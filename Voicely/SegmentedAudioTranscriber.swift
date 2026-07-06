@@ -8,13 +8,13 @@ private final class SegmentIndexCounter {
     func next() -> Int { value += 1; return value }
 }
 
-/// One outcome of salvaging a failed range: either recovered text or a sub-range
+/// One outcome of salvaging a failed range: either recovered pieces or a sub-range
 /// that still couldn't be transcribed (kept as a placeholder).
 private enum SalvagedPiece {
-    /// `words` are slice-local (0-based within the salvaged sub-range); `startFrame`
+    /// `pieces` are slice-local (0-based within the salvaged sub-range); `startFrame`
     /// is that sub-range's offset in the recording so the caller can re-base them to
-    /// global time. Without this, salvaged text would land with no word timings.
-    case text(String, words: [WordToken], startFrame: Int64,
+    /// global time.
+    case text([TranscriptPiece], startFrame: Int64,
               duration: TimeInterval, modelIdentifier: String?)
     case failure(SegmentFailureRange)
 }
@@ -181,10 +181,9 @@ final class SegmentedAudioTranscriber {
         }
 
         if case .transcribed(let result) = outcome {
-            note.transcription = result.text
             // Single pass transcribes the whole file, so word times are already
             // global (relative to the recording start) — store them as-is.
-            note.wordTimings = result.words
+            note.setTranscript(text: result.text, words: result.words)
 #if DEBUG
             if let first = result.words.first, let last = result.words.last {
                 print("📍 stored \(result.words.count) word timings (single pass), span \(String(format: "%.2f", first.start))–\(String(format: "%.2f", last.end))s")
@@ -223,8 +222,9 @@ final class SegmentedAudioTranscriber {
         }
 
         // A fresh attempt that produced nothing must not keep metadata from a
-        // previous run (duration, model badge, telemetry summary).
-        note.transcription = ""
+        // previous run (duration, model badge, telemetry summary) — nor its
+        // word timeline, which would otherwise keep rendering the stale text.
+        note.setTranscript(text: "", words: [])
         note.lastTranscriptionDuration = 0
         note.transcriptionModelIdentifier = nil
         note.clearTranscriptionTelemetrySummary()
@@ -253,19 +253,39 @@ final class SegmentedAudioTranscriber {
         let batchFrames = Int64(Double(IncrementalTranscriptionTiming.defaultIntervalSeconds) * info.sampleRate)
         let resumed = progressStore.load(for: noteID)
         var start: Int64 = resumed?.lastFrame ?? 0
-        var pieces: [String] = (resumed?.accumulatedText).flatMap { $0.isEmpty ? [] : [$0] } ?? []
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
-        var producedAnyText = !pieces.isEmpty
         let segmentIndex = SegmentIndexCounter()
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
-        // Word timings accumulate across slices, each re-based to global time, and
-        // are persisted in the sidecar so a resumed run keeps a complete, aligned
-        // timeline instead of dropping its pre-resume words. A legacy sidecar
-        // (resumed past frame 0 with no saved words) can't be completed.
-        var allWords: [WordToken] = resumed?.accumulatedWords ?? []
+        // Pieces accumulate across slices, each re-based to global time; the
+        // assembled (text, words) pair is persisted in the sidecar so a resumed
+        // run reopens as one opening piece. A legacy sidecar (resumed past frame
+        // 0 with no saved words) can't complete a word timeline.
+        var accumulated: [TranscriptPiece] = []
         let wordTimelineComplete = (resumed?.lastFrame ?? 0) == 0
             || resumed?.accumulatedWords != nil
+        if let savedWords = resumed?.accumulatedWords, !savedWords.isEmpty {
+            accumulated = [TranscriptPiece(words: savedWords)]
+        } else if let savedText = resumed?.accumulatedText, !savedText.isEmpty {
+            accumulated = TranscriptPiece.pieces(fromText: savedText, start: 0,
+                                                 end: Double(start) / info.sampleRate)
+        }
+        var producedAnyText = !accumulated.isEmpty
+        // Reassembles the accumulated pieces; nil when nothing usable yet.
+        // The all-non-speech fallback stays out of segmented results (matching
+        // the previous per-slice gate): a pure-noise file finishes as noSpeech.
+        func assembleUsable() -> AssembledTranscript? {
+            guard let assembled = TranscriptAssembler.assemble(accumulated),
+                  !assembled.isNonSpeechFallback else { return nil }
+            return assembled
+        }
+        func saveSidecar() {
+            let assembled = assembleUsable()
+            progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
+                                     accumulatedText: assembled?.text ?? "",
+                                     failedRanges: failedRanges, updatedAt: nowProvider(),
+                                     accumulatedWords: assembled?.words ?? []), for: noteID)
+        }
 
         while start < info.totalFrames {
             if shouldStopForBackground() { return }   // sidecar already persisted; resume later
@@ -284,29 +304,25 @@ final class SegmentedAudioTranscriber {
                 // it as failed instead of silently finishing as noSpeech. A slice we
                 // can't even read won't be fixed by splitting, so don't bisect here.
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
-                pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
+                accumulated.append(Self.placeholderPiece(forStart: start, end: end,
+                                                         sampleRate: info.sampleRate))
                 start = end
-                progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
-                                         accumulatedText: pieces.joined(separator: "\n"),
-                                         failedRanges: failedRanges, updatedAt: nowProvider(),
-                                         accumulatedWords: allWords), for: noteID)
+                saveSidecar()
                 continue
             }
 
             switch outcome {
             case .transcribed(let result):
-                if let text = IncrementalTranscriptionCoordinator.sanitizedSegmentText(result.text) {
-                    pieces.append(text)
+                // The slice's pieces join the pool only when the slice carries
+                // real speech — text and words enter (or stay out) together.
+                let slicePieces = result.effectivePieces
+                if TranscriptAssembler.assemble(slicePieces)?.isNonSpeechFallback == false {
+                    let offset = Double(start) / info.sampleRate
+                    accumulated.append(contentsOf: slicePieces.map { $0.rebased(by: offset) })
+                    producedAnyText = true
+                    lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
+                    accumulatedDuration += result.duration
                 }
-                // Re-base this slice's word times (0-based within the slice) to
-                // global time by adding the slice's start offset in the recording.
-                let offset = Double(start) / info.sampleRate
-                allWords.append(contentsOf: result.words.map {
-                    WordToken(word: $0.word, start: $0.start + offset, end: $0.end + offset)
-                })
-                producedAnyText = true
-                lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
-                accumulatedDuration += result.duration
             case .noSpeech:
                 break  // silence in this slice — contributes nothing, not an error
             case .whisperError, .modelUnavailable, .audioUnavailable, .cancelled:
@@ -319,38 +335,34 @@ final class SegmentedAudioTranscriber {
                     indexCounter: segmentIndex))
                 for piece in salvaged {
                     switch piece {
-                    case .text(let text, let words, let pieceStart, let duration, let model):
-                        pieces.append(text)
-                        // Re-base the salvaged sub-range's slice-local word times to
+                    case .text(let slicePieces, let pieceStart, let duration, let model):
+                        // Re-base the salvaged sub-range's slice-local times to
                         // global time so the tappable transcript stays in sync.
                         let offset = Double(pieceStart) / info.sampleRate
-                        allWords.append(contentsOf: words.map {
-                            WordToken(word: $0.word, start: $0.start + offset, end: $0.end + offset)
-                        })
+                        accumulated.append(contentsOf: slicePieces.map { $0.rebased(by: offset) })
                         producedAnyText = true
                         lastModelIdentifier = model ?? lastModelIdentifier
                         accumulatedDuration += duration
                     case .failure(let range):
                         failedRanges.append(range)
-                        pieces.append(Self.placeholder(forStart: range.startFrame,
-                                                       end: range.endFrame, sampleRate: info.sampleRate))
+                        accumulated.append(Self.placeholderPiece(forStart: range.startFrame,
+                                                                 end: range.endFrame,
+                                                                 sampleRate: info.sampleRate))
                     }
                 }
             }
 
             start = end
-            progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
-                                     accumulatedText: pieces.joined(separator: "\n"),
-                                     failedRanges: failedRanges, updatedAt: nowProvider(),
-                                     accumulatedWords: allWords), for: noteID)
+            saveSidecar()
             // Surface text as it lands so the detail view fills in segment by
             // segment instead of staying blank until the whole file finishes.
             // Only once real text exists, so a re-transcription's previous
             // transcript is preserved until the first new segment arrives.
             let stillOwnsNote = note.transcriptionAttemptID == attemptID
                 && note.transcriptionState == .claimed
-            if producedAnyText, stillOwnsNote {
-                note.transcription = pieces.joined(separator: "\n")
+            if stillOwnsNote, producedAnyText, let assembled = assembleUsable() {
+                note.setTranscript(text: assembled.text,
+                                   words: wordTimelineComplete ? assembled.words : [])
             }
             if stillOwnsNote {
                 note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
@@ -358,8 +370,9 @@ final class SegmentedAudioTranscriber {
             transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
 
+        let assembled = assembleUsable()
 #if DEBUG
-        print("🏁 segmented done: producedAnyText=\(producedAnyText) pieces=\(pieces.count) failedRanges=\(failedRanges.count) words=\(allWords.count) lastModel=\(lastModelIdentifier ?? "nil") hadExisting=\(hadExistingTranscript) keptPrevious=\(hadExistingTranscript && !producedAnyText)")
+        print("🏁 segmented done: producedAnyText=\(producedAnyText) pieces=\(accumulated.count) failedRanges=\(failedRanges.count) words=\(assembled?.words.count ?? 0) lastModel=\(lastModelIdentifier ?? "nil") hadExisting=\(hadExistingTranscript) keptPrevious=\(hadExistingTranscript && !producedAnyText)")
 #endif
         // Another device re-claimed the note mid-run — abandon our result.
         guard note.transcriptionAttemptID == attemptID,
@@ -375,15 +388,16 @@ final class SegmentedAudioTranscriber {
             return
         }
 
-        note.transcription = pieces.joined(separator: "\n")
-        // Store the aligned global-time word timeline. A legacy sidecar resumed
-        // without saved words can't be completed, so clear timings there and let
-        // the detail view fall back to the freshly written text instead of
-        // re-rendering the previous run's (now stale) timings.
-        note.wordTimings = wordTimelineComplete ? allWords : []
+        // Store the assembled transcript with its aligned global-time word
+        // timeline. A legacy sidecar resumed without saved words can't complete
+        // the timeline, so clear timings there and let the detail view fall back
+        // to the freshly written text instead of re-rendering the previous run's
+        // (now stale) timings.
+        note.setTranscript(text: assembled?.text ?? "",
+                           words: wordTimelineComplete ? (assembled?.words ?? []) : [])
 #if DEBUG
-        if let first = allWords.first, let last = allWords.last {
-            print("📍 stored \(allWords.count) word timings (segmented), span \(String(format: "%.2f", first.start))–\(String(format: "%.2f", last.end))s, complete=\(wordTimelineComplete)")
+        if let first = assembled?.words.first, let last = assembled?.words.last {
+            print("📍 stored \(assembled?.words.count ?? 0) word timings (segmented), span \(String(format: "%.2f", first.start))–\(String(format: "%.2f", last.end))s, complete=\(wordTimelineComplete)")
         }
 #endif
         note.transcriptionModelIdentifier = lastModelIdentifier
@@ -472,8 +486,9 @@ final class SegmentedAudioTranscriber {
                              indexCounter: SegmentIndexCounter) async -> [SalvagedPiece] {
         switch outcome {
         case .transcribed(let result):
-            if let text = IncrementalTranscriptionCoordinator.sanitizedSegmentText(result.text) {
-                return [.text(text, words: result.words, startFrame: start,
+            let slicePieces = result.effectivePieces
+            if TranscriptAssembler.assemble(slicePieces)?.isNonSpeechFallback == false {
+                return [.text(slicePieces, startFrame: start,
                               duration: result.duration, modelIdentifier: result.modelIdentifier)]
             }
             return []
@@ -543,5 +558,14 @@ final class SegmentedAudioTranscriber {
         let from = formatTimestamp(Double(start) / sampleRate)
         let to = formatTimestamp(Double(end) / sampleRate)
         return "[\(from)–\(to) transcription unavailable]"
+    }
+
+    /// A failed range as a transcript piece: the placeholder text becomes a
+    /// single token spanning the gap, so it renders (and taps) like any word.
+    nonisolated static func placeholderPiece(forStart start: Int64, end: Int64,
+                                             sampleRate: Double) -> TranscriptPiece {
+        TranscriptPiece(text: placeholder(forStart: start, end: end, sampleRate: sampleRate),
+                        start: Double(start) / sampleRate,
+                        end: Double(end) / sampleRate)
     }
 }

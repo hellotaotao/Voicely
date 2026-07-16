@@ -293,10 +293,22 @@ class AudioRecordingService: ObservableObject {
         logInputRouteDiagnostics(inputFormat: inputFormat)
 #endif
 
-        converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        // AVAudioConverter's implicit channel-count reduction (stereo USB mic →
+        // mono) silently produces all-zero output on Mac Catalyst, while mono
+        // inputs (iPhone mic, AirPods) work — the root cause of the "DJI
+        // records silence on Mac" bug. Mix down to mono ourselves and let the
+        // converter do pure sample-rate conversion.
+        let monoInputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: inputFormat.sampleRate,
+            channels: 1,
+            interleaved: false
+        )!
+        converter = AVAudioConverter(from: monoInputFormat, to: targetFormat)
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.processTapBuffer(buffer, inputFormat: inputFormat, outputFormat: targetFormat)
+            guard let mono = Self.mixedDownToMono(buffer, format: monoInputFormat) else { return }
+            self?.processTapBuffer(mono, inputFormat: monoInputFormat, outputFormat: targetFormat)
         }
         newEngine.prepare()
 
@@ -537,6 +549,33 @@ class AudioRecordingService: ObservableObject {
         }
     }
 
+    /// Averages all channels of a Float32 deinterleaved buffer into a new mono
+    /// buffer at the same sample rate.
+    private nonisolated static func mixedDownToMono(
+        _ buffer: AVAudioPCMBuffer,
+        format: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        guard let src = buffer.floatChannelData,
+              buffer.frameLength > 0,
+              let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength),
+              let dst = mono.floatChannelData?[0]
+        else { return nil }
+
+        let frames = vDSP_Length(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        if channels == 1 {
+            memcpy(dst, src[0], Int(buffer.frameLength) * MemoryLayout<Float>.size)
+        } else {
+            var scale = Float(1) / Float(channels)
+            vDSP_vsmul(src[0], 1, &scale, dst, 1, frames)
+            for ch in 1..<channels {
+                vDSP_vsma(src[ch], 1, &scale, dst, 1, dst, 1, frames)
+            }
+        }
+        mono.frameLength = buffer.frameLength
+        return mono
+    }
+
     private nonisolated func computeRMS(_ buffer: AVAudioPCMBuffer) -> Float {
         guard let data = buffer.floatChannelData?[0] else { return 0 }
         let count = vDSP_Length(buffer.frameLength)
@@ -624,9 +663,17 @@ class AudioRecordingService: ObservableObject {
 #if DEBUG
         logInputRouteDiagnostics(inputFormat: inputFormat)
 #endif
-        converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        // Same manual mono mixdown as startRecording — see the comment there.
+        let monoInputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: inputFormat.sampleRate,
+            channels: 1,
+            interleaved: false
+        )!
+        converter = AVAudioConverter(from: monoInputFormat, to: targetFormat)
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.processTapBuffer(buffer, inputFormat: inputFormat, outputFormat: targetFormat)
+            guard let mono = Self.mixedDownToMono(buffer, format: monoInputFormat) else { return }
+            self?.processTapBuffer(mono, inputFormat: monoInputFormat, outputFormat: targetFormat)
         }
         newEngine.prepare()
         do {

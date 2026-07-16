@@ -73,10 +73,6 @@ class AudioRecordingService: ObservableObject {
         var framePosition: AVAudioFramePosition = 0
         var latestLevel: Float = 0
         var isWritingSuspended = false
-        /// True once any tap buffer carried real signal (RMS above the noise
-        /// floor). Stays false when the input is a dead/ghost device that
-        /// delivers perfectly zeroed buffers — the silence watchdog keys off it.
-        var hasSeenSignal = false
         /// Frame position of the most recent buffer with real signal. A live mic
         /// always carries noise floor, so a growing gap of exact zeros means the
         /// input died (or never lived) — drives the user-facing warning banner.
@@ -92,7 +88,6 @@ class AudioRecordingService: ObservableObject {
     private var prewarmTask: Task<Void, Never>?
     private var isRecordingSessionPrewarmed = false
     private var activeTargetFormat: AVAudioFormat?
-    private var didAttemptSilenceRecovery = false
 
     #if !os(macOS) || targetEnvironment(macCatalyst)
     private var audioSession = AVAudioSession.sharedInstance()
@@ -274,13 +269,11 @@ class AudioRecordingService: ObservableObject {
 
         currentPCMFileURL = pcmURL
         activeTargetFormat = targetFormat
-        didAttemptSilenceRecovery = false
         inputAppearsSilent = false
         sharedState.withLock { state in
             state.framePosition = 0
             state.latestLevel = 0
             state.isWritingSuspended = false
-            state.hasSeenSignal = false
             state.lastSignalFrame = 0
         }
 
@@ -543,7 +536,6 @@ class AudioRecordingService: ObservableObject {
             state.framePosition += wroteFrames
             state.latestLevel = rms
             if rms > 0.000001 {
-                state.hasSeenSignal = true
                 state.lastSignalFrame = state.framePosition
             }
         }
@@ -593,16 +585,6 @@ class AudioRecordingService: ObservableObject {
         let framePosition = sharedState.withLock { $0.framePosition }
         recordingDuration = Double(framePosition) / 16000.0
 
-        // Silence watchdog: buffers flowing but every sample zero for 2 s means
-        // the engine is bound to a dead input (ghost CoreAudio device). Rebind
-        // once — tear the engine down and rebuild against the current device.
-        if isRecording, !isPaused, !didAttemptSilenceRecovery,
-           recordingDuration >= 2.0,
-           sharedState.withLock({ !$0.hasSeenSignal }) {
-            didAttemptSilenceRecovery = true
-            recoverFromSilentInput()
-        }
-
         // User-facing banner: 3 s of exact zeros means the input is dead (a live
         // mic always has noise floor), whether it never delivered or died mid-way.
         let silentNow = sharedState.withLock { state in
@@ -626,63 +608,6 @@ class AudioRecordingService: ObservableObject {
 #if DEBUG
     private var diagnosticTickCount = 0
 #endif
-
-    /// Rebinds capture after the watchdog saw 2 s of pure zeros: rebuild the
-    /// engine against the *current* device (explicitly preferring the real USB
-    /// input over any virtual one) and keep appending to the same PCM file.
-    private func recoverFromSilentInput() {
-        guard isRecording, let targetFormat = activeTargetFormat else { return }
-        debugLog("🔄 [AudioRecordingService] 2 s of pure silence — rebinding audio engine to current input")
-
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-
-        #if !os(macOS) || targetEnvironment(macCatalyst)
-        try? audioSession.setActive(false)
-        #endif
-        do {
-            try prepareRecordingSessionForCapture()
-        } catch {
-            debugLog("❌ [AudioRecordingService] Silence recovery: session setup failed: \(error)")
-            return
-        }
-        #if !os(macOS) || targetEnvironment(macCatalyst)
-        let realInput = audioSession.availableInputs?.first { $0.portType == .usbAudio }
-            ?? audioSession.availableInputs?.first
-        if let realInput {
-            try? audioSession.setPreferredInput(realInput)
-            debugLog("🔄 [AudioRecordingService] preferred input → \(realInput.portName)")
-        }
-        #endif
-
-        let newEngine = AVAudioEngine()
-        engine = newEngine
-        let inputNode = newEngine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-#if DEBUG
-        logInputRouteDiagnostics(inputFormat: inputFormat)
-#endif
-        // Same manual mono mixdown as startRecording — see the comment there.
-        let monoInputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: inputFormat.sampleRate,
-            channels: 1,
-            interleaved: false
-        )!
-        converter = AVAudioConverter(from: monoInputFormat, to: targetFormat)
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            guard let mono = Self.mixedDownToMono(buffer, format: monoInputFormat) else { return }
-            self?.processTapBuffer(mono, inputFormat: monoInputFormat, outputFormat: targetFormat)
-        }
-        newEngine.prepare()
-        do {
-            try newEngine.start()
-            debugLog("🔄 [AudioRecordingService] Engine rebound and restarted")
-        } catch {
-            debugLog("❌ [AudioRecordingService] Silence recovery: engine restart failed: \(error)")
-        }
-    }
 
     // MARK: PCM (CAF) → M4A conversion
 

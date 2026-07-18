@@ -110,6 +110,9 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     private let minimumCutFrames: AVAudioFramePosition
+    /// VAD cut bounds for the active engine (Qwen3 needs a smaller floor so
+    /// its 14 s batches can cut at all; Whisper keeps the 15 s floor).
+    private let cutConfiguration: IncrementalVoiceActivityCutConfiguration
 
     private var pendingSegmentRequest: PendingSegmentRequest?
     private var segmentProcessingWaiters: [CheckedContinuation<Void, Never>] = []
@@ -124,8 +127,13 @@ final class IncrementalTranscriptionCoordinator {
         self.transcriptionService = transcriptionService
         self.recordingFileURL = recordingFileURL
         self.recordingSampleRate = Self.sampleRate(for: recordingFileURL)
+        var configuration = IncrementalVoiceActivityCutConfiguration.default
+        if TranscriptionEngineMode.currentResolved() == .qwen3ASR {
+            configuration.minimumCutSeconds = Qwen3ASRDefaults.minimumChunkCutSeconds
+        }
+        self.cutConfiguration = configuration
         self.minimumCutFrames = AVAudioFramePosition(
-            Double(IncrementalTranscriptionTiming.minimumCutSeconds) * recordingSampleRate
+            configuration.minimumCutSeconds * recordingSampleRate
         )
     }
 
@@ -296,12 +304,14 @@ final class IncrementalTranscriptionCoordinator {
         guard useVoiceActivityCut else { return requestedEndFrame }
 
         let targetIntervalSeconds = self.targetIntervalSeconds
+        let cutConfiguration = self.cutConfiguration
         let cutFrame = await Task.detached {
             Self.voiceActivityAwareCutFrame(
                 fileURL: fileURL,
                 startFrame: startFrame,
                 targetFrame: requestedEndFrame,
-                targetSegmentSeconds: Double(targetIntervalSeconds)
+                targetSegmentSeconds: Double(targetIntervalSeconds),
+                configuration: cutConfiguration
             )
         }.value
 

@@ -5,3 +5,7 @@ docs/agent-reviews/
 
 # Xcode user state
 xcuserdata/
+
+# SwiftPM build artifacts inside the vendored local package
+Vendor/speech-swift/.build/
+.swiftpm/

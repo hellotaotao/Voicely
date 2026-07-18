@@ -641,7 +641,7 @@ struct TranscriptionServiceTests {
 
         service.setModelManager(UnloadedModelManager())
         #expect(service.getCurrentEngineDescription() == "No transcription available")
-        #expect(service.getEngineStatusMessage() == "WhisperKit not loaded. Please load a model first.")
+        #expect(service.getEngineStatusMessage() == "No transcription engine is ready. Please load a model first.")
 
         service.setModelManager(LoadedModelManager())
         #expect(service.getCurrentEngineDescription() == "WhisperKit (Local AI)")

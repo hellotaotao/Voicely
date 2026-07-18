@@ -140,16 +140,41 @@ struct LanguageConstants {
 struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
     @State private var showingModelDeletion = false
+    @State private var showingQwenModelDeletion = false
     @State private var computeUnitsChanged = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @AppStorage("transcriptionPrompt") private var transcriptionPrompt: String = ""
+    @AppStorage(TranscriptionEngineMode.storageKey) private var engineModeRaw: String
+        = TranscriptionEngineMode.defaultMode.rawValue
+    @ObservedObject private var qwenDownloadController = Qwen3ModelDownloadController.shared
     @Environment(\.dismiss) private var dismiss
+
+    /// Hardware that can't run MLX always resolves to Whisper and hides the
+    /// engine picker entirely (offering it would be a download into a crash).
+    private var resolvedEngineMode: TranscriptionEngineMode {
+        TranscriptionEngineMode.resolve(fromRawValue: engineModeRaw)
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    modelHeroCard
+                    if TranscriptionDeviceSupport.deviceSupportsQwen3 {
+                        settingsSection(
+                            title: "Engine",
+                            identifier: "settings.engineSection"
+                        ) {
+                            enginePickerRow
+                            if resolvedEngineMode == .qwen3ASR {
+                                Divider().background(VoicelyTheme.hairline)
+                                qwenModelBlock
+                            }
+                        }
+                    }
+
+                    if resolvedEngineMode == .whisperKit {
+                        modelHeroCard
+                    }
 
                     settingsSection(
                         title: "Language",
@@ -165,25 +190,27 @@ struct SettingsView: View {
                         promptBlock
                     }
 
-                    settingsSection(
-                        title: "Compute",
-                        identifier: AccessibilityIdentifiers.Settings.computeSection
-                    ) {
-                        encoderRow
-                        Divider().background(VoicelyTheme.hairline)
-                        decoderRow
-                        if computeUnitsChanged {
+                    if resolvedEngineMode == .whisperKit {
+                        settingsSection(
+                            title: "Compute",
+                            identifier: AccessibilityIdentifiers.Settings.computeSection
+                        ) {
+                            encoderRow
                             Divider().background(VoicelyTheme.hairline)
-                            reloadButton
+                            decoderRow
+                            if computeUnitsChanged {
+                                Divider().background(VoicelyTheme.hairline)
+                                reloadButton
+                            }
+                            Divider().background(VoicelyTheme.hairline)
+                            NavigationLink {
+                                BenchmarkView().environmentObject(modelManager)
+                            } label: {
+                                navRow(icon: "timer", title: "Run Benchmark")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.runBenchmarkLink)
                         }
-                        Divider().background(VoicelyTheme.hairline)
-                        NavigationLink {
-                            BenchmarkView().environmentObject(modelManager)
-                        } label: {
-                            navRow(icon: "timer", title: "Run Benchmark")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier(AccessibilityIdentifiers.Settings.runBenchmarkLink)
                     }
 
                     privacyNoticeCard
@@ -429,6 +456,135 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Are you sure you want to delete the model '\(ModelManager.displayName(for: modelManager.selectedModel))'?")
+        }
+    }
+
+    // MARK: - Engine
+
+    private var enginePickerRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Transcription Engine")
+                    .font(.subheadline.weight(.medium))
+                Text(resolvedEngineMode.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Picker("", selection: $engineModeRaw) {
+                ForEach(TranscriptionEngineMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .accessibilityIdentifier("settings.enginePicker")
+        }
+    }
+
+    private var qwenModelBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Qwen3ASRDefaults.modelDisplayName)
+                        .font(.subheadline.weight(.medium))
+                    Text("One-time download, \(Qwen3ASRDefaults.approximateDownloadSizeText). Runs fully on-device.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                qwenStateBadge
+            }
+
+            switch qwenDownloadController.state {
+            case .downloading(let progress, let status):
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: progress, total: 1.0)
+                        .tint(VoicelyTheme.accent)
+                    HStack {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(String(format: "%.0f%%", progress * 100))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            case .notDownloaded:
+                qwenDownloadButton
+            case .failed(let message):
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
+                qwenDownloadButton
+            case .ready:
+                Button(role: .destructive) {
+                    showingQwenModelDeletion = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "trash")
+                        Text("Delete Downloaded Model")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+                    .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
+                    .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onAppear { qwenDownloadController.refresh() }
+        .alert("Delete Model", isPresented: $showingQwenModelDeletion) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    await Qwen3ASRModelStore.shared.deleteDownloadedModel()
+                    qwenDownloadController.refresh()
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to delete '\(Qwen3ASRDefaults.modelDisplayName)'? Transcription stops working until it is downloaded again.")
+        }
+    }
+
+    private var qwenDownloadButton: some View {
+        Button {
+            qwenDownloadController.startDownload()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                Text("Download Model")
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .frame(height: 42)
+            .background(VoicelyTheme.accent, in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
+            .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("settings.qwenDownloadButton")
+    }
+
+    private var qwenStateBadge: some View {
+        switch qwenDownloadController.state {
+        case .ready:
+            return PillBadge(text: "Ready", systemImage: "checkmark.circle.fill", variant: .success)
+        case .downloading:
+            return PillBadge(text: "Downloading", systemImage: "arrow.down.circle", variant: .info)
+        case .failed:
+            return PillBadge(text: "Failed", systemImage: "exclamationmark.triangle", variant: .warning)
+        case .notDownloaded:
+            return PillBadge(text: "Not Downloaded", systemImage: "circle", variant: .neutral)
         }
     }
 

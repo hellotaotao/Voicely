@@ -34,12 +34,23 @@ final class SegmentedAudioTranscriber {
     var transcribeSegmentOutcome: (URL) async -> TranscriptionOutcome
 
     /// Chooses the end frame of the next segment within [start, target].
-    /// Defaults to the neural-VAD cut, run off the main actor; tests inject a
-    /// deterministic value.
+    /// Defaults to the neural-VAD cut, run off the main actor, with cut bounds
+    /// sized for the active engine; tests inject a deterministic value.
     var nextCutFrame: (URL, Int64, Int64) async -> Int64 = { url, start, target in
-        await Task.detached(priority: .utility) {
-            IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
-                fileURL: url, startFrame: start, targetFrame: target)
+        let mode = TranscriptionEngineMode.currentResolved()
+        return await Task.detached(priority: .utility) {
+            switch mode {
+            case .qwen3ASR:
+                var configuration = IncrementalVoiceActivityCutConfiguration.default
+                configuration.minimumCutSeconds = Qwen3ASRDefaults.minimumChunkCutSeconds
+                return IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+                    fileURL: url, startFrame: start, targetFrame: target,
+                    targetSegmentSeconds: Qwen3ASRDefaults.chunkSeconds,
+                    configuration: configuration)
+            case .whisperKit:
+                return IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+                    fileURL: url, startFrame: start, targetFrame: target)
+            }
         }.value
     }
 
@@ -60,9 +71,13 @@ final class SegmentedAudioTranscriber {
     /// to control how deep bisection goes.
     var minSalvageSeconds: Double = 8.0
 
-    /// Files longer than one WhisperKit window get sliced + a resume sidecar.
+    /// Files longer than one engine window get sliced + a resume sidecar
+    /// (Whisper: 30 s; Qwen3: 15 s, its fast-path decoding bound).
     private let singlePassFrameLimit: (Double) -> Int64 = { sampleRate in
-        Int64(30.0 * sampleRate)
+        switch TranscriptionEngineMode.currentResolved() {
+        case .qwen3ASR: return Int64(Qwen3ASRDefaults.singlePassSecondsLimit * sampleRate)
+        case .whisperKit: return Int64(30.0 * sampleRate)
+        }
     }
 
     init(transcriptionService: TranscriptionService,
@@ -250,7 +265,11 @@ final class SegmentedAudioTranscriber {
     private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo,
                                      hadExistingTranscript: Bool, attemptID: String) async {
         let noteID = note.id
-        let batchFrames = Int64(Double(IncrementalTranscriptionTiming.defaultIntervalSeconds) * info.sampleRate)
+        let batchSeconds: Double = switch TranscriptionEngineMode.currentResolved() {
+        case .qwen3ASR: Qwen3ASRDefaults.chunkSeconds
+        case .whisperKit: Double(IncrementalTranscriptionTiming.defaultIntervalSeconds)
+        }
+        let batchFrames = Int64(batchSeconds * info.sampleRate)
         let resumed = progressStore.load(for: noteID)
         var start: Int64 = resumed?.lastFrame ?? 0
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []

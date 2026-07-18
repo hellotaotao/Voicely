@@ -39,7 +39,8 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 ### Core Services (all `@MainActor`)
 
 - **ModelManager** – Downloads, loads, and manages WhisperKit CoreML models. Persists selected model in UserDefaults. Posts `Notification.Name.modelLoadedNotification` when ready.
-- **TranscriptionService** – Orchestrates transcription via WhisperKit. Depends on ModelManager for the loaded model. Supports cancellation, progress smoothing, and batch processing of pending notes.
+- **TranscriptionService** – Orchestrates transcription through the selected engine (`TranscriptionEngineMode`): Qwen3-ASR (MLX, default) or WhisperKit. Supports cancellation, progress smoothing, and batch processing of pending notes.
+- **Qwen3ASRModelStore / Qwen3ModelDownloadController** (`Qwen3TranscriptionEngine.swift`) – Owns the Qwen3-ASR 0.6B (4-bit MLX) model: download to Application Support (hub layout), offline load, warm-up, serialized inference. The engine mode defaults to Qwen3 on MLX-capable hardware (A14/M1+, real devices only); the simulator and older chips resolve to WhisperKit. Qwen3 transcripts have chunk-level (not word-level) timings.
 - **AudioRecordingService** – Handles AVAudioRecorder, microphone permissions, and recording state. Saves audio to iCloud Documents.
 - **AudioPlayerService** – Plays back recorded audio files.
 - **CloudStorageManager** – Singleton managing iCloud Documents for audio file sync and NSMetadataQuery for sync status.
@@ -53,6 +54,8 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 ### Key Dependencies
 
 - **WhisperKit** (argmaxinc) – On-device speech recognition via CoreML
+- **Qwen3ASR** (`Vendor/speech-swift`, vendored soniqo/speech-swift subset with a Mac Catalyst patch) – On-device Qwen3-ASR via MLX
+- **mlx-swift** (ml-explore) – MLX runtime for the Qwen3 engine (GPU-only; no simulator support)
 - **swift-transformers** (huggingface) – Tokenization support
 
 ### Views

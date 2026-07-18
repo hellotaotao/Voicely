@@ -65,7 +65,14 @@ final class RecordingSession: ObservableObject {
     /// Overridable so tests can supply a coordinator that does no real work.
     var coordinatorFactory: (URL) -> IncrementalTranscriptionCoordinator
 
-    var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
+    /// Live incremental cadence for the active engine: Whisper batches ≤29 s
+    /// (one Whisper window); Qwen3 stays under its 15 s fast-path bound.
+    var incrementalIntervalSeconds: Int {
+        switch TranscriptionEngineMode.currentResolved() {
+        case .qwen3ASR: return Int(Qwen3ASRDefaults.chunkSeconds)
+        case .whisperKit: return IncrementalTranscriptionTiming.defaultIntervalSeconds
+        }
+    }
 
     // MARK: Init
 
@@ -99,13 +106,19 @@ final class RecordingSession: ObservableObject {
     }
 
     private var isModelLoaded: Bool {
-        transcriptionService.modelManager?.isModelLoaded() ?? false
+        transcriptionService.isWhisperAvailable()
     }
 
     private var isModelLoading: Bool {
-        guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.modelState == .loading || modelManager.modelState == .downloading
-            || modelManager.modelState == .prewarming
+        switch TranscriptionEngineMode.currentResolved() {
+        case .qwen3ASR:
+            if case .downloading = Qwen3ModelDownloadController.shared.state { return true }
+            return false
+        case .whisperKit:
+            guard let modelManager = transcriptionService.modelManager else { return false }
+            return modelManager.modelState == .loading || modelManager.modelState == .downloading
+                || modelManager.modelState == .prewarming
+        }
     }
 
     // MARK: Start
@@ -173,8 +186,7 @@ final class RecordingSession: ObservableObject {
             // segments — text and word timings land together, in lockstep.
             note.setTranscript(text: assembled.text, words: assembled.words)
             note.isTranscribing = true
-            note.transcriptionModelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
-                ?? self.transcriptionService.modelManager?.selectedModel
+            note.transcriptionModelIdentifier = self.transcriptionService.currentEngineModelIdentifier()
             note.transcriptionLastErrorMessage = nil
             note.recordTranscriptionTelemetry(self.transcriptionService.transcriptionTelemetry)
         }

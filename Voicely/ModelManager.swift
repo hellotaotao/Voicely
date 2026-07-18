@@ -746,6 +746,10 @@ class ModelManager: ObservableObject {
     }
 
     nonisolated static func displayName(for modelIdentifier: String) -> String {
+        // Qwen3 (MLX) identifiers aren't whisper-style; give them their own name.
+        if modelIdentifier == Qwen3ASRDefaults.modelId || modelIdentifier.contains("Qwen3-ASR") {
+            return Qwen3ASRDefaults.modelDisplayName
+        }
         let normalized = modelIdentifier
             .replacingOccurrences(of: "openai_whisper-", with: "")
             .replacingOccurrences(of: "whisper-", with: "")

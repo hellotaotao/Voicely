@@ -12,6 +12,7 @@ import WhisperKit
 
 enum TranscriptionEngine {
     case whisperKit
+    case qwen3ASR
     case notAvailable
 }
 
@@ -87,6 +88,9 @@ class TranscriptionService: ObservableObject {
 
     var modelManager: ModelManager?
     var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil, retryable: false) }
+    /// Which engine this service routes to. Injectable so tests can pin a mode
+    /// regardless of the stored default.
+    var engineModeProvider: () -> TranscriptionEngineMode = { TranscriptionEngineMode.currentResolved() }
     var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
     var nowProvider: () -> Date = { Date() }
     var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
@@ -124,10 +128,18 @@ class TranscriptionService: ObservableObject {
         self.segmentProgressStore = segmentProgressStore
         self.transcribeImpl = { [weak self] filePath, progressCallback in
             guard let self else { return .cancelled }
-            return await self.transcribeWithWhisper(
-                filePath: filePath,
-                progressCallback: progressCallback
-            )
+            switch self.engineModeProvider() {
+            case .qwen3ASR:
+                return await self.transcribeWithQwen(
+                    filePath: filePath,
+                    progressCallback: progressCallback
+                )
+            case .whisperKit:
+                return await self.transcribeWithWhisper(
+                    filePath: filePath,
+                    progressCallback: progressCallback
+                )
+            }
         }
     }
 
@@ -136,7 +148,29 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
     }
 
+    /// Loads whichever engine is selected: Qwen3 downloads (if needed) and
+    /// loads its MLX weights; Whisper loads the selected CoreML model.
+    /// The name predates the engine switch — every call site treats it as
+    /// "make the transcription engine ready".
     func loadWhisperModel() async -> Bool {
+        switch engineModeProvider() {
+        case .qwen3ASR:
+            return await loadQwenEngine()
+        case .whisperKit:
+            return await loadWhisperEngine()
+        }
+    }
+
+    private func loadQwenEngine() async -> Bool {
+        loadingProgress = 0.05
+        let ready = await Qwen3ModelDownloadController.shared.downloadAndLoad()
+        loadingProgress = ready ? 1.0 : 0.0
+        updateEngineStatus()
+        print(ready ? "Qwen3 ASR engine ready" : "Failed to prepare Qwen3 ASR engine")
+        return ready
+    }
+
+    private func loadWhisperEngine() async -> Bool {
         guard let modelManager else {
             print("ModelManager not available")
             return false
@@ -369,9 +403,10 @@ class TranscriptionService: ObservableObject {
             modelManager.whisperKit = nil
             modelManager.modelState = .unloaded
         }
+        Task { await Qwen3ASRModelStore.shared.unloadModel() }
         currentEngine = .notAvailable
         loadingProgress = 0.0
-        print("WhisperKit model unloaded")
+        print("Transcription engine unloaded")
     }
 
     func getAvailableModels() -> [String] {
@@ -393,6 +428,8 @@ class TranscriptionService: ObservableObject {
         switch currentEngine {
         case .whisperKit:
             return "WhisperKit (Local AI)"
+        case .qwen3ASR:
+            return "Qwen3 ASR (Local AI)"
         case .notAvailable:
             return "No transcription available"
         }
@@ -404,8 +441,20 @@ class TranscriptionService: ObservableObject {
         switch currentEngine {
         case .whisperKit:
             return "Using WhisperKit for high-quality offline transcription"
+        case .qwen3ASR:
+            return "Using Qwen3 ASR for fast offline transcription"
         case .notAvailable:
-            return "WhisperKit not loaded. Please load a model first."
+            return "No transcription engine is ready. Please load a model first."
+        }
+    }
+
+    /// Identifier stored on notes and shown in telemetry for the active engine.
+    func currentEngineModelIdentifier() -> String? {
+        switch engineModeProvider() {
+        case .qwen3ASR:
+            return Qwen3ASRDefaults.modelId
+        case .whisperKit:
+            return modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
         }
     }
 
@@ -474,7 +523,7 @@ class TranscriptionService: ObservableObject {
                 return .whisperError("blank output", retryable: false)
             }
             let elapsed = nowProvider().timeIntervalSince(startTime)
-            let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
+            let modelIdentifier = currentEngineModelIdentifier()
             return .transcribed(TranscriptionResult(
                 text: assembled.text,
                 duration: elapsed,
@@ -572,8 +621,17 @@ private extension TranscriptionService {
         deviceIDProvider()
     }
 
+    /// Whether the selected engine can transcribe right now. For Qwen3 the
+    /// weights on disk are enough — the store loads them lazily on first use;
+    /// for Whisper the CoreML model must be loaded. The name predates the
+    /// engine switch.
     var isWhisperLoaded: Bool {
-        modelManager?.isModelLoaded() ?? false
+        switch engineModeProvider() {
+        case .qwen3ASR:
+            return Qwen3ASRModelStore.isModelDownloaded()
+        case .whisperKit:
+            return modelManager?.isModelLoaded() ?? false
+        }
     }
 
     func beginTranscriptionTelemetry(filePath: String) async {
@@ -620,25 +678,35 @@ private extension TranscriptionService {
     }
 
     func currentTelemetryModelName() -> String {
-        let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
-        guard let modelIdentifier, !modelIdentifier.isEmpty else {
+        guard let modelIdentifier = currentEngineModelIdentifier(), !modelIdentifier.isEmpty else {
             return "No model"
         }
         return ModelManager.displayName(for: modelIdentifier)
     }
 
     func currentTelemetryComputeRoute() -> TranscriptionComputeRoute {
-        TranscriptionComputeRoute(
-            encoderUnits: modelManager?.encoderComputeUnits ?? .cpuAndNeuralEngine,
-            decoderUnits: modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
-        )
+        switch engineModeProvider() {
+        case .qwen3ASR:
+            // MLX inference runs entirely on the GPU.
+            return TranscriptionComputeRoute(encoderUnits: .cpuAndGPU, decoderUnits: .cpuAndGPU)
+        case .whisperKit:
+            return TranscriptionComputeRoute(
+                encoderUnits: modelManager?.encoderComputeUnits ?? .cpuAndNeuralEngine,
+                decoderUnits: modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
+            )
+        }
     }
 
     func updateEngineStatus() {
-        if isWhisperLoaded {
-            currentEngine = .whisperKit
-        } else {
+        guard isWhisperLoaded else {
             currentEngine = .notAvailable
+            return
+        }
+        switch engineModeProvider() {
+        case .qwen3ASR:
+            currentEngine = .qwen3ASR
+        case .whisperKit:
+            currentEngine = .whisperKit
         }
     }
 
@@ -848,6 +916,103 @@ private extension TranscriptionService {
     func stopLeaseHeartbeat() {
         leaseHeartbeatTask?.cancel()
         leaseHeartbeatTask = nil
+    }
+
+    /// One Qwen3 (MLX) transcription attempt over a whole file or slice.
+    /// Mirrors the Whisper path's contract: decoded pieces carry slice-local
+    /// times. Qwen3 returns plain text without word timings, so the slice
+    /// becomes one coarse token spanning its real duration — timings stay
+    /// honest at chunk granularity and `text == words.joined()` still holds.
+    func transcribeWithQwen(
+        filePath: String,
+        progressCallback: @escaping (Float) -> Void
+    ) async -> RawTranscription {
+        guard Qwen3ASRModelStore.isModelDownloaded() else {
+            print("Qwen3 model not downloaded")
+            currentEngine = .notAvailable
+            return .modelUnavailable
+        }
+
+        if cancelRequested || Task.isCancelled {
+            return .cancelled
+        }
+
+        currentEngine = .qwen3ASR
+
+        guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
+            print("Failed to prepare audio file for transcription: \(filePath)")
+            return .audioUnavailable
+        }
+
+        let updateProgressOnMain: (Float) -> Void = { [weak self] value in
+            guard let self else { return }
+            self.smoothProgress(to: value, progressCallback: progressCallback)
+        }
+        updateProgressOnMain(0.02)
+
+        let containsProbableSpeech = await Task.detached(priority: .utility) {
+            NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
+        }.value
+        guard containsProbableSpeech else {
+            print("Skipping transcription because no probable speech was detected in audio file: \(filePath)")
+            updateProgressOnMain(1.0)
+            return .noSpeech
+        }
+        updateProgressOnMain(0.1)
+
+        let samples: [Float]
+        do {
+            samples = try await Task.detached(priority: .userInitiated) {
+                try Qwen3AudioPCM.loadPCM16kMono(url: audioURL)
+            }.value
+        } catch {
+            print("Failed to decode audio for Qwen3: \(error)")
+            return .audioUnavailable
+        }
+        guard !samples.isEmpty else {
+            return .noSpeech
+        }
+        updateProgressOnMain(0.25)
+
+        let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
+        let languageHint = Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguageKey)
+        let customPrompt = (UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let options = Qwen3ASRDefaults.decodingOptions(
+            languageHint: languageHint,
+            context: customPrompt.isEmpty ? nil : customPrompt
+        )
+
+        do {
+#if DEBUG
+            let qwenStart = Date()
+#endif
+            let rawText = try await Qwen3ASRModelStore.shared.transcribe(samples: samples, options: options)
+            if cancelRequested || Task.isCancelled {
+                return .cancelled
+            }
+            updateProgressOnMain(1.0)
+
+            let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                // Deterministic blank decode — re-running the same window just
+                // repeats it; let the caller salvage by bisection instead.
+                return .whisperError("empty result", retryable: false)
+            }
+            let sliceDuration = Double(samples.count) / 16_000
+#if DEBUG
+            let qwenElapsed = Date().timeIntervalSince(qwenStart)
+            print("⏱️ Qwen3 transcribe: \(String(format: "%.2f", qwenElapsed))s for \(String(format: "%.1f", sliceDuration))s audio, \(text.count) chars")
+#endif
+            return .text(TranscriptPiece.pieces(fromText: text, start: 0, end: sliceDuration))
+        } catch let error as Qwen3ASRModelStore.StoreError {
+            print("Qwen3 model unavailable: \(error)")
+            currentEngine = .notAvailable
+            return .modelUnavailable
+        } catch {
+            print("Qwen3 transcription error: \(error)")
+            return .whisperError("Qwen3 error: \(error.localizedDescription)", retryable: false)
+        }
     }
 
     func transcribeWithWhisper(

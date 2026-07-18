@@ -34,6 +34,8 @@ struct ContentView: View {
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
     @State private var isDropTargeted = false
+    @AppStorage(TranscriptionEngineMode.storageKey) private var engineModeRaw: String
+        = TranscriptionEngineMode.defaultMode.rawValue
 
     init() {
         let audioService = AudioRecordingService()
@@ -105,6 +107,18 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
+                await processQueuedTranscriptionsIfReady()
+            }
+        }
+        .onChange(of: engineModeRaw) { _, _ in
+            // Engine switched in Settings: get the new engine ready (Qwen3 may
+            // need its weights downloaded; Whisper its CoreML model loaded),
+            // then let queued notes run on it.
+            guard !AppRuntime.isRunningTests else { return }
+            Task { @MainActor in
+                if !transcriptionService.isWhisperAvailable() {
+                    _ = await transcriptionService.loadWhisperModel()
+                }
                 await processQueuedTranscriptionsIfReady()
             }
         }
@@ -1063,6 +1077,9 @@ struct RecordingControls: View {
     }
 
     private var selectedModelDisplayName: String {
+        if TranscriptionEngineMode.currentResolved() == .qwen3ASR {
+            return Qwen3ASRDefaults.modelDisplayName
+        }
         guard let selectedModel = modelManager?.selectedModel, !selectedModel.isEmpty else {
             return "Small"
         }
@@ -1071,6 +1088,14 @@ struct RecordingControls: View {
 
     private var statusTint: Color {
         if !audioService.hasPermission { return .orange }
+        if TranscriptionEngineMode.currentResolved() == .qwen3ASR {
+            switch Qwen3ModelDownloadController.shared.state {
+            case .ready: return .green
+            case .downloading: return .orange
+            case .failed: return .orange
+            case .notDownloaded: return .accentColor
+            }
+        }
         guard let modelManager else { return .secondary }
         switch modelManager.modelState {
         case .loaded: return .green
@@ -1091,6 +1116,9 @@ struct RecordingControls: View {
     }
 
     private var modelPickerMessage: String {
+        if TranscriptionEngineMode.currentResolved() == .qwen3ASR {
+            return "The Qwen3 engine is active — these Whisper models apply after switching the engine in Settings."
+        }
         if quickSelectableModels.isEmpty {
             return "Download a model in Settings to make it available here."
         }
@@ -1429,11 +1457,19 @@ struct VoiceNoteDetailView: View {
     @StateObject private var audioPlayer = AudioPlayerService()
 
     private var isModelLoaded: Bool {
-        guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.isModelLoaded()
+        switch TranscriptionEngineMode.currentResolved() {
+        case .qwen3ASR:
+            return Qwen3ASRModelStore.isModelDownloaded()
+        case .whisperKit:
+            guard let modelManager = transcriptionService.modelManager else { return false }
+            return modelManager.isModelLoaded()
+        }
     }
 
     private var selectedModelDisplayName: String? {
+        if TranscriptionEngineMode.currentResolved() == .qwen3ASR {
+            return Qwen3ASRDefaults.modelDisplayName
+        }
         guard let selectedModel = transcriptionService.modelManager?.selectedModel, !selectedModel.isEmpty else {
             return nil
         }

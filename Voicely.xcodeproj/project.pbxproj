@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		2B18228C2DED2F1200550CD1 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 2B1822252DEB5A0000550CD1 /* WhisperKit */; };
+		AD5EEC110000000000000001 /* Qwen3ASR in Frameworks */ = {isa = PBXBuildFile; productRef = AD5EEC110000000000000002 /* Qwen3ASR */; };
 		F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -109,6 +110,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2B18228C2DED2F1200550CD1 /* WhisperKit in Frameworks */,
+				AD5EEC110000000000000001 /* Qwen3ASR in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -182,6 +184,7 @@
 			name = Voicely;
 			packageProductDependencies = (
 				2B1822252DEB5A0000550CD1 /* WhisperKit */,
+				AD5EEC110000000000000002 /* Qwen3ASR */,
 			);
 			productName = Voicely;
 			productReference = 2B1821F62DEB579E00550CD1 /* Voicely.app */;
@@ -292,6 +295,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				AD5EEC110000000000000003 /* XCLocalSwiftPackageReference "Vendor/speech-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2B1821F72DEB579E00550CD1 /* Products */;
@@ -438,7 +442,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -481,7 +485,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -631,7 +635,7 @@
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
-				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -651,7 +655,7 @@
 				DEVELOPMENT_TEAM = CU3VTR9MRH;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
-				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -772,6 +776,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		AD5EEC110000000000000003 /* XCLocalSwiftPackageReference "Vendor/speech-swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/speech-swift";
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -788,6 +799,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 2B1822262DEB5A0000550CD1 /* XCRemoteSwiftPackageReference "WhisperKit" */;
 			productName = WhisperKit;
+		};
+		AD5EEC110000000000000002 /* Qwen3ASR */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Qwen3ASR;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -99,17 +99,14 @@ class ModelManager: ObservableObject {
         let suitability: String
     }
 
+    // The large-v3-v20240930 turbo builds were retired in 2026-07: on Apple
+    // Silicon Macs every slice blank-decodes (0 segments in well under a second).
+    // A/B testing ruled out quantization — the full-precision 1.62 GB original
+    // fails the same way while the previous-generation 954 MB build transcribes
+    // the same file perfectly. With Qwen3-ASR now the primary engine, WhisperKit
+    // serves as the fallback, so the large tier was dropped rather than kept
+    // alive with a platform special case.
     nonisolated static let curatedModels: [CuratedModel] = [
-        CuratedModel(identifier: "openai_whisper-large-v3-v20240930_626MB",
-                     tier: .pro, isEnglishOnly: false, displayName: "Large v3 Turbo",
-                     sizeLabel: "626 MB",
-                     suitability: "For high-performance devices"),
-        // Same v20240930 turbo as Pro (identical TextDecoder, ~7 MB larger encoder);
-        // offered as a separate "Pro Fast" option per product decision.
-        CuratedModel(identifier: "openai_whisper-large-v3-v20240930_turbo_632MB",
-                     tier: .proFast, isEnglishOnly: false, displayName: "Large v3 Turbo",
-                     sizeLabel: "646 MB",
-                     suitability: "For high-performance devices"),
         CuratedModel(identifier: "openai_whisper-small",
                      tier: .standard, isEnglishOnly: false, displayName: "Small",
                      sizeLabel: "486 MB",
@@ -133,29 +130,33 @@ class ModelManager: ObservableObject {
     }
 
     private static let standardDefaultIdentifier = "openai_whisper-small"
-    private static let proDefaultIdentifier = "openai_whisper-large-v3-v20240930_626MB"
 
-    static var platformDefaultModel: String {
-#if targetEnvironment(macCatalyst)
-        return proDefaultIdentifier
-#else
-        return prefersProModelByDefault(deviceIdentifier: WhisperKit.deviceName(), isMac: false)
-            ? proDefaultIdentifier
-            : standardDefaultIdentifier
-#endif
+    /// Models that shipped previously but are no longer offered. A saved
+    /// selection pointing at one is migrated on launch instead of being left
+    /// active — see `curatedModels` for why these were pulled.
+    nonisolated static let retiredIdentifiers: Set<String> = [
+        "openai_whisper-large-v3-v20240930_626MB",
+        "openai_whisper-large-v3-v20240930_turbo_632MB",
+    ]
+
+    nonisolated static func isRetiredModel(_ identifier: String) -> Bool {
+        retiredIdentifiers.contains(identifier)
     }
 
-    nonisolated static func prefersProModelByDefault(deviceIdentifier: String, isMac: Bool) -> Bool {
-        if isMac {
-            return true
+    /// The model an install should actually use, given whatever is in
+    /// UserDefaults: empty, missing, or retired selections fall back to the
+    /// platform default; anything else is the user's own choice and is kept.
+    nonisolated static func migratedSelection(saved: String?) -> String {
+        guard let saved, !saved.isEmpty, !isRetiredModel(saved) else {
+            return platformDefaultModel
         }
-        if let iPhoneGeneration = numericGeneration(from: deviceIdentifier, prefix: "iPhone") {
-            return iPhoneGeneration >= 15
-        }
-        // iPad identifiers don't cleanly separate A-series from M-series (e.g. iPad14,x
-        // spans both the A15 iPad mini 6 and the M2 iPad Pro), so default every iPad to
-        // Standard and let strong iPad users pick Pro manually.
-        return false
+        return saved
+    }
+
+    nonisolated static var platformDefaultModel: String {
+        // Every supported device runs Standard (Small) now that the large tier
+        // is gone; Qwen3-ASR covers high-end quality on MLX-capable hardware.
+        standardDefaultIdentifier
     }
 
     static func isRecommendedForCurrentDevice(_ model: String) -> Bool {
@@ -208,20 +209,21 @@ class ModelManager: ObservableObject {
     private let specializationProgressRatio: Float = 0.7
     
     init() {
-        // Preserve user's previous selection. Apply platform default only when no saved model exists.
-        if let savedModel = UserDefaults.standard.string(forKey: .selectedModelKey) {
-            if !savedModel.isEmpty {
-                selectedModel = savedModel
-                print("Loaded saved model selection from UserDefaults: \(savedModel)")
+        // Preserve the user's own choice; fall back to the platform default when
+        // nothing is saved, the value is empty, or it names a retired model.
+        let savedModel = UserDefaults.standard.string(forKey: .selectedModelKey)
+        let resolved = Self.migratedSelection(saved: savedModel)
+        selectedModel = resolved
+
+        if savedModel != resolved {
+            UserDefaults.standard.set(resolved, forKey: .selectedModelKey)
+            if let savedModel, Self.isRetiredModel(savedModel) {
+                print("Model '\(savedModel)' is no longer offered. Switched to: \(resolved)")
             } else {
-                selectedModel = Self.platformDefaultModel
-                UserDefaults.standard.set(selectedModel, forKey: .selectedModelKey)
-                print("Saved model is empty. Falling back to default: \(selectedModel)")
+                print("No usable saved model. Using default: \(resolved)")
             }
         } else {
-            selectedModel = Self.platformDefaultModel
-            print("Using default model: \(selectedModel)")
-            UserDefaults.standard.set(selectedModel, forKey: .selectedModelKey)
+            print("Loaded saved model selection from UserDefaults: \(resolved)")
         }
     }
     

@@ -2478,6 +2478,10 @@ struct WrappingFlowLayout: Layout {
         var size: CGSize = .zero
         var maxWidth: CGFloat?
         var subviewCount = 0
+        /// Measured sizes the cached layout was built from. Count and width alone
+        /// miss a badge whose *text* changed (e.g. a telemetry pill going from
+        /// "12% avg" to "8% avg"), which left the old frames clipping the new text.
+        var subviewSizes: [CGSize] = []
     }
 
     var horizontalSpacing: CGFloat = 8
@@ -2503,7 +2507,8 @@ struct WrappingFlowLayout: Layout {
     }
 
     private func updateCache(for subviews: Subviews, maxWidth: CGFloat, cache: inout Cache) {
-        if cache.maxWidth == maxWidth, cache.subviewCount == subviews.count {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        if cache.maxWidth == maxWidth, cache.subviewSizes == sizes {
             return
         }
         let layout = makeLayout(for: subviews, maxWidth: maxWidth)
@@ -2511,6 +2516,7 @@ struct WrappingFlowLayout: Layout {
         cache.size = layout.size
         cache.maxWidth = maxWidth
         cache.subviewCount = subviews.count
+        cache.subviewSizes = sizes
     }
 
     private func makeLayout(for subviews: Subviews, maxWidth: CGFloat) -> (items: [Item], size: CGSize) {

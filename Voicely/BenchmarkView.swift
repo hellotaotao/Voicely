@@ -125,15 +125,24 @@ struct BenchmarkView: View {
     // Anything not yet synced to this device (.missing) is dropped so users can't
     // pick a recording that has no audio to transcribe.
     private var benchmarkCandidates: [(note: VoiceNote, availability: AudioAvailability)] {
-        voiceNotes
+        // `audioAvailability` hits the filesystem twice per note, and this runs
+        // from `body` — so cap the list *before* the I/O rather than after, or a
+        // large library pays for dozens of stat calls on every re-render. A few
+        // extra candidates are checked to refill the cap when some are missing.
+        var results: [(note: VoiceNote, availability: AudioAvailability)] = []
+        let eligible = voiceNotes
             .filter { !$0.audioFilePath.isEmpty
                 && $0.duration >= Self.minDuration
                 && $0.duration <= Self.maxDuration }
             .sorted { $0.duration < $1.duration }
-            .map { (note: $0, availability: audioAvailability(for: $0)) }
-            .filter { $0.availability != .missing }
-            .prefix(8)
-            .map { $0 }
+
+        for note in eligible {
+            let availability = audioAvailability(for: note)
+            guard availability != .missing else { continue }
+            results.append((note: note, availability: availability))
+            if results.count == 8 { break }
+        }
+        return results
     }
 
     private func durationString(_ seconds: TimeInterval) -> String {

@@ -561,11 +561,15 @@ class CloudStorageManager: ObservableObject {
 
         metadataQuery = NSMetadataQuery()
         metadataQuery?.searchScopes = [cloudURL]
-        metadataQuery?.predicate = NSPredicate(
-            format: "(%K LIKE[c] '*.m4a') OR (%K LIKE[c] '*.wav')",
-            NSMetadataItemFSNameKey,
-            NSMetadataItemFSNameKey
-        )
+        // Cover every extension `importAudioFile` accepts, not just recordings:
+        // an imported mp3/caf used to be invisible here, so its upload/download
+        // never showed in sync status. The scope is already the audio directory,
+        // so matching each supported extension keeps it exact.
+        let extensionClauses = Self.supportedImportedAudioFileExtensions
+            .sorted()
+            .map { "(\(NSMetadataItemFSNameKey) LIKE[c] '*.\($0)')" }
+            .joined(separator: " OR ")
+        metadataQuery?.predicate = NSPredicate(format: extensionClauses)
         
         NotificationCenter.default.addObserver(
             self,
@@ -685,25 +689,33 @@ class CloudStorageManager: ObservableObject {
     
     func forceDownloadAll() async {
         guard syncAudioFiles, isCloudEnabled, let containerURL = cloudContainerURL else { return }
-        
-        do {
-            let contents = try fileManager.contentsOfDirectory(at: containerURL, includingPropertiesForKeys: [
-                .ubiquitousItemDownloadingStatusKey
-            ])
-            
-            for url in contents {
-                var downloadStatus: AnyObject?
-                try (url as NSURL).getResourceValue(&downloadStatus, forKey: .ubiquitousItemDownloadingStatusKey)
-                
-                if let status = downloadStatus as? String,
-                   status == URLUbiquitousItemDownloadingStatus.notDownloaded.rawValue {
-                    try fileManager.startDownloadingUbiquitousItem(at: url)
-                    print("Triggered download for: \(url.lastPathComponent)")
+
+        // The directory listing and the per-file resource lookups are real disk /
+        // iCloud metadata I/O — on a large library over a slow connection they
+        // froze the UI for seconds. Run them off the main actor.
+        await Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            do {
+                let contents = try fileManager.contentsOfDirectory(
+                    at: containerURL,
+                    includingPropertiesForKeys: [.ubiquitousItemDownloadingStatusKey]
+                )
+
+                for url in contents {
+                    var downloadStatus: AnyObject?
+                    try (url as NSURL).getResourceValue(&downloadStatus,
+                                                        forKey: .ubiquitousItemDownloadingStatusKey)
+
+                    if let status = downloadStatus as? String,
+                       status == URLUbiquitousItemDownloadingStatus.notDownloaded.rawValue {
+                        try fileManager.startDownloadingUbiquitousItem(at: url)
+                        debugLog("Triggered download for: \(url.lastPathComponent)")
+                    }
                 }
+            } catch {
+                debugLog("Error forcing downloads: \(error)")
             }
-        } catch {
-            print("Error forcing downloads: \(error)")
-        }
+        }.value
     }
     
     func getSyncStatusText() -> String {

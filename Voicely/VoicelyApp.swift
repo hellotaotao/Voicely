@@ -90,6 +90,12 @@ struct VoicelyApp: App {
                     await launchRecordingLiveActivityPreviewIfNeeded()
                     #endif
 
+                    // A crash or force-quit mid-recording leaves a Live Activity
+                    // with no in-memory handle; clear it before anything new starts.
+                    if !AppRuntime.isRunningTests {
+                        RecordingLiveActivityController.shared.endOrphanedActivities()
+                    }
+
                     if AppRuntime.isRunningTests {
                         seedUITestNoteIfNeeded()
                     } else {

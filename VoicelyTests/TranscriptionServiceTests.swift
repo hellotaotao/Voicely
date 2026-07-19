@@ -661,7 +661,6 @@ struct TranscriptionServiceTests {
         service.setModelManager(modelManager)
         service.deviceIDProvider = { deviceID }
         service.nowProvider = { now }
-        service.heartbeatInterval = 3600
         return service
     }
 }

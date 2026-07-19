@@ -33,8 +33,6 @@ struct ModelSupportPolicyTests {
 
     @Test func curatedListIsExactlyTheOfferedModels() {
         #expect(ModelManager.curatedIdentifiers == [
-            "openai_whisper-large-v3-v20240930_626MB",
-            "openai_whisper-large-v3-v20240930_turbo_632MB",
             "openai_whisper-small",
             "openai_whisper-base",
             "openai_whisper-small.en_217MB",
@@ -44,8 +42,6 @@ struct ModelSupportPolicyTests {
     @Test func curatedModelsCarryExpectedTiers() {
         #expect(ModelManager.curatedModel(for: "openai_whisper-base")?.tier == .lite)
         #expect(ModelManager.curatedModel(for: "openai_whisper-small")?.tier == .standard)
-        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_626MB")?.tier == .pro)
-        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_turbo_632MB")?.tier == .proFast)
         #expect(ModelManager.curatedModel(for: "openai_whisper-small.en_217MB")?.isEnglishOnly == true)
         #expect(ModelManager.curatedModel(for: "openai_whisper-small")?.isEnglishOnly == false)
     }
@@ -59,9 +55,36 @@ struct ModelSupportPolicyTests {
         #expect(ModelManager.curatedModel(for: "openai_whisper-medium.en") == nil)
     }
 
+    /// The v20240930 turbo builds blank-decode on Apple Silicon Macs (every slice
+    /// returns 0 segments in well under a second; A/B verified against the
+    /// previous-generation 954MB build and against the full-precision 1.62 GB
+    /// original, so it isn't quantization). Whisper is now the fallback engine
+    /// behind Qwen3, so the large tier was retired rather than special-cased.
+    @Test func retiredTurboModelsAreGone() {
+        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_626MB") == nil)
+        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_turbo_632MB") == nil)
+        #expect(ModelManager.isRetiredModel("openai_whisper-large-v3-v20240930_626MB"))
+        #expect(ModelManager.isRetiredModel("openai_whisper-large-v3-v20240930_turbo_632MB"))
+        #expect(!ModelManager.isRetiredModel("openai_whisper-small"))
+    }
+
+    /// Existing installs have a retired identifier saved in UserDefaults; leaving
+    /// it selected would keep a model that cannot transcribe on Mac as the active
+    /// engine, so the saved value migrates to the platform default.
+    @Test func retiredSavedSelectionMigratesToDefault() {
+        #expect(ModelManager.migratedSelection(saved: "openai_whisper-large-v3-v20240930_626MB")
+                == ModelManager.platformDefaultModel)
+        #expect(ModelManager.migratedSelection(saved: "openai_whisper-large-v3-v20240930_turbo_632MB")
+                == ModelManager.platformDefaultModel)
+        #expect(ModelManager.migratedSelection(saved: "") == ModelManager.platformDefaultModel)
+        #expect(ModelManager.migratedSelection(saved: nil) == ModelManager.platformDefaultModel)
+        // A still-supported choice is preserved.
+        #expect(ModelManager.migratedSelection(saved: "openai_whisper-base") == "openai_whisper-base")
+    }
+
     @Test func curatedMultilingualModelsAreOrderedHighToLow() {
         let dots = ModelManager.curatedModels.filter { !$0.isEnglishOnly }.map(\.tier.filledDots)
-        #expect(dots == [3, 3, 2, 1])
+        #expect(dots == [2, 1])
     }
 
     // MARK: - Performance tier indicator
@@ -81,21 +104,13 @@ struct ModelSupportPolicyTests {
         #expect(ModelManager.PerformanceTier.proFast.displayName == "Pro Fast")
     }
 
-    // MARK: - Device defaults (Pro on A16+/Mac, Standard otherwise)
+    // MARK: - Device default
 
-    @Test func strongDevicesDefaultToPro() {
-        #expect(ModelManager.prefersProModelByDefault(deviceIdentifier: "iPhone15,3", isMac: false))
-        #expect(ModelManager.prefersProModelByDefault(deviceIdentifier: "iPhone16,2", isMac: false))
-        #expect(ModelManager.prefersProModelByDefault(deviceIdentifier: "iPhone17,3", isMac: false))
-        #expect(ModelManager.prefersProModelByDefault(deviceIdentifier: "", isMac: true))
-    }
-
-    @Test func mainstreamAndOlderDevicesDefaultToStandard() {
-        #expect(!ModelManager.prefersProModelByDefault(deviceIdentifier: "iPhone14,7", isMac: false))
-        #expect(!ModelManager.prefersProModelByDefault(deviceIdentifier: "iPhone14,2", isMac: false))
-        #expect(!ModelManager.prefersProModelByDefault(deviceIdentifier: "iPhone13,2", isMac: false))
-        #expect(!ModelManager.prefersProModelByDefault(deviceIdentifier: "iPhone12,1", isMac: false))
-        #expect(!ModelManager.prefersProModelByDefault(deviceIdentifier: "iPad14,1", isMac: false))
+    /// Whisper is the fallback engine now, so every device gets Standard (Small);
+    /// the per-device Pro/Standard split went away with the large tier.
+    @Test func everyDeviceDefaultsToStandard() {
+        #expect(ModelManager.platformDefaultModel == "openai_whisper-small")
+        #expect(ModelManager.curatedModel(for: ModelManager.platformDefaultModel)?.tier == .standard)
     }
 
     // MARK: - displayNameWithLanguageTag
@@ -117,8 +132,6 @@ struct ModelSupportPolicyTests {
     @Test func pickerTitleShowsTierThenModelName() {
         #expect(ModelManager.pickerTitle(for: "openai_whisper-base") == "Lite (Base)")
         #expect(ModelManager.pickerTitle(for: "openai_whisper-small") == "Standard (Small)")
-        #expect(ModelManager.pickerTitle(for: "openai_whisper-large-v3-v20240930_626MB") == "Pro (Large v3 Turbo)")
-        #expect(ModelManager.pickerTitle(for: "openai_whisper-large-v3-v20240930_turbo_632MB") == "Pro Fast (Large v3 Turbo)")
         #expect(ModelManager.pickerTitle(for: "openai_whisper-small.en_217MB") == "Standard (Small, English)")
     }
 
@@ -127,8 +140,6 @@ struct ModelSupportPolicyTests {
     @Test func curatedModelsCarrySizeLabels() {
         #expect(ModelManager.curatedModel(for: "openai_whisper-base")?.sizeLabel == "147 MB")
         #expect(ModelManager.curatedModel(for: "openai_whisper-small")?.sizeLabel == "486 MB")
-        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_626MB")?.sizeLabel == "626 MB")
-        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_turbo_632MB")?.sizeLabel == "646 MB")
         #expect(ModelManager.curatedModel(for: "openai_whisper-small.en_217MB")?.sizeLabel == "218 MB")
     }
 }

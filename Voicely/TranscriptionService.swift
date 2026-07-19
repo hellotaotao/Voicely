@@ -80,7 +80,12 @@ class TranscriptionService: ObservableObject {
 
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
-    @Published var transcriptionProgress: Float = 0.0
+    /// Deliberately NOT `@Published`: progress smoothing writes this ~20×/s for a
+    /// whole run, and `ContentView` / `VoiceNoteDetailView` observe this service,
+    /// so publishing it re-evaluated the entire note list and the open detail view
+    /// at 20 Hz. No view reads it — rows and the detail view read `localProgress`
+    /// (`progressByNoteID`), which updates once per slice. Keep it plain state.
+    var transcriptionProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var progressByNoteID: [UUID: Float] = [:]
@@ -97,7 +102,6 @@ class TranscriptionService: ObservableObject {
         await TranscriptionService.estimatedAudioDuration(for: filePath)
     }
     var leaseDuration: TimeInterval = 5 * 60
-    var heartbeatInterval: TimeInterval = 60
     var nonOriginQueueGracePeriod: TimeInterval = 5 * 60
 
     /// Shared with the import path (ContentView) so the in-flight guard and
@@ -113,7 +117,6 @@ class TranscriptionService: ObservableObject {
     private var lastCancellationHandled = false
     private var progressSmoothingTask: Task<Void, Never>?
     private var progressSmoothingTarget: Float = 0.0
-    private var leaseHeartbeatTask: Task<Void, Never>?
     private var isProcessingPendingTranscriptions = false
     private var needsReprocessing = false
     private var pendingTranscriptionQueue: [UUID: VoiceNote] = [:]
@@ -565,7 +568,6 @@ class TranscriptionService: ObservableObject {
         currentTranscriptionTask?.cancel()
         currentTranscriptionTask = nil
         finishTranscriptionTelemetry()
-        stopLeaseHeartbeat()
         resetProgressSmoothing()
         isTranscribing = false
         transcriptionProgress = 0.0
@@ -881,20 +883,6 @@ private extension TranscriptionService {
         await transcriber.transcribe(note: note, sourceURL: url)
     }
 
-    func beginLocalTranscription(for note: VoiceNote, attemptID: String) {
-        cancelRequested = false
-        activeNoteID = note.id
-        progressByNoteID[note.id] = 0.0
-        transcriptionProgress = 0.0
-        note.claimTranscription(
-            ownerDeviceID: currentDeviceID,
-            attemptID: attemptID,
-            queuedAt: note.transcriptionQueuedAt ?? nowProvider(),
-            leaseExpiresAt: nowProvider().addingTimeInterval(leaseDuration)
-        )
-        note.clearTransientTranscriptionFlags()
-    }
-
     func endLocalTranscription(for noteID: UUID) {
         if activeNoteID == noteID {
             activeNoteID = nil
@@ -905,35 +893,6 @@ private extension TranscriptionService {
 
     func requeueNote(_ note: VoiceNote, queuedAt: Date) {
         note.queueTranscription(at: queuedAt)
-    }
-
-    func startLeaseHeartbeat(for note: VoiceNote, attemptID: String) {
-        stopLeaseHeartbeat()
-        leaseHeartbeatTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.heartbeatInterval * 1_000_000_000))
-
-                guard !Task.isCancelled else {
-                    break
-                }
-
-                guard self.activeNoteID == note.id,
-                      note.transcriptionState == .claimed,
-                      note.transcriptionOwnerDeviceID == self.currentDeviceID,
-                      note.transcriptionAttemptID == attemptID else {
-                    break
-                }
-
-                note.transcriptionLeaseExpiresAt = self.nowProvider().addingTimeInterval(self.leaseDuration)
-            }
-        }
-    }
-
-    func stopLeaseHeartbeat() {
-        leaseHeartbeatTask?.cancel()
-        leaseHeartbeatTask = nil
     }
 
     /// One Qwen3 (MLX) transcription attempt over a whole file or slice.

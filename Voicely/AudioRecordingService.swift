@@ -80,9 +80,21 @@ class AudioRecordingService: ObservableObject {
     }
     private let sharedState = OSAllocatedUnfairLock<SharedState>(initialState: SharedState())
 
+    /// The file and converter the real-time tap writes through. Guarded by a lock
+    /// because the MainActor tears them down (stop, engine rebind) while a buffer
+    /// may still be in flight on the audio thread: `removeTap` is not a documented
+    /// barrier, so unsynchronized access was a data race. The tap copies both
+    /// references out under the lock, which also keeps them alive for the duration
+    /// of its write.
+    private struct AudioWriteTargets: @unchecked Sendable {
+        var file: AVAudioFile?
+        var converter: AVAudioConverter?
+    }
+    private let writeTargets = OSAllocatedUnfairLock<AudioWriteTargets>(
+        initialState: AudioWriteTargets()
+    )
+
     private var engine: AVAudioEngine?
-    private nonisolated(unsafe) var audioFile: AVAudioFile?
-    private nonisolated(unsafe) var converter: AVAudioConverter?
     private var recordingTimer: Timer?
     private var pendingM4AURL: URL?
     private var prewarmTask: Task<Void, Never>?
@@ -260,7 +272,8 @@ class AudioRecordingService: ObservableObject {
         )!
 
         do {
-            audioFile = try AVAudioFile(forWriting: pcmURL, settings: targetFormat.settings)
+            let file = try AVAudioFile(forWriting: pcmURL, settings: targetFormat.settings)
+            writeTargets.withLock { $0.file = file }
         } catch {
             debugLog("❌ [AudioRecordingService] Failed to create PCM file: \(error)")
             return nil
@@ -296,7 +309,8 @@ class AudioRecordingService: ObservableObject {
             channels: 1,
             interleaved: false
         )!
-        converter = AVAudioConverter(from: monoInputFormat, to: targetFormat)
+        let newConverter = AVAudioConverter(from: monoInputFormat, to: targetFormat)
+        writeTargets.withLock { $0.converter = newConverter }
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let mono = Self.mixedDownToMono(buffer, format: monoInputFormat) else { return }
@@ -310,7 +324,7 @@ class AudioRecordingService: ObservableObject {
             debugLog("❌ [AudioRecordingService] Engine start failed: \(error)")
             inputNode.removeTap(onBus: 0)
             engine = nil
-            audioFile = nil
+            writeTargets.withLock { $0.file = nil }
             currentPCMFileURL = nil
             return nil
         }
@@ -340,9 +354,12 @@ class AudioRecordingService: ObservableObject {
             eng.stop()
             engine = nil
         }
-        converter = nil
-
-        audioFile = nil   // Close the write handle
+        // Drop both together so an in-flight buffer can never see a half-torn-down
+        // pair; the tap's copy keeps the file alive until its write returns.
+        writeTargets.withLock {
+            $0.converter = nil
+            $0.file = nil   // Close the write handle
+        }
 
         stopUITimer()
 
@@ -486,6 +503,7 @@ class AudioRecordingService: ObservableObject {
         inputFormat: AVAudioFormat,
         outputFormat: AVAudioFormat
     ) {
+        let (audioFile, converter) = writeTargets.withLock { ($0.file, $0.converter) }
         guard let converter else { return }
         guard inputBuffer.frameLength > 0 else { return }
         guard !sharedState.withLock({ $0.isWritingSuspended }) else { return }

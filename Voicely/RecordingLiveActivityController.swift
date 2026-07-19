@@ -21,6 +21,21 @@ final class RecordingLiveActivityController {
     private var activity: Activity<RecordingActivityAttributes>?
     #endif
 
+    /// Ends activities left behind by a previous process. `activity` is in-memory
+    /// only, so a crash or force-quit while recording leaves the Dynamic Island
+    /// showing "recording" with no handle to dismiss it — relaunching used to
+    /// have no way to find it. Call once at launch, before any new recording.
+    func endOrphanedActivities() {
+        #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
+        guard activity == nil else { return }   // a live session owns its activity
+        for orphan in Activity<RecordingActivityAttributes>.activities {
+            Task {
+                await orphan.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+        #endif
+    }
+
     func start(recordingID: UUID, title: String, elapsedDuration: TimeInterval = 0) {
         #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }

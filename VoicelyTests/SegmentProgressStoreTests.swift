@@ -22,6 +22,25 @@ struct SegmentProgressStoreTests {
         #expect(store.load(for: id) == progress)
     }
 
+    /// An import whose run never started (model still loading, engine not ready)
+    /// has a working copy but no sidecar — the sidecar is only written once a
+    /// batch completes. It must still count as resumable, otherwise the import
+    /// is orphaned: the note stays blank forever and the copy leaks on disk.
+    @Test func workingCopyWithoutSidecarIsStillPending() throws {
+        let store = makeStore()
+        let id = UUID()
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("import_\(UUID().uuidString).m4a")
+        try Data("fake audio".utf8).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        _ = try store.importWorkingCopy(from: source, for: id)
+
+        #expect(store.existingWorkingCopyURL(for: id) != nil)
+        #expect(store.load(for: id) == nil)          // no sidecar yet
+        #expect(store.listPendingNoteIDs().contains(id))
+    }
+
     @Test func deleteRemovesSidecar() throws {
         let store = makeStore()
         let id = UUID()

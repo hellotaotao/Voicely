@@ -177,7 +177,10 @@ final class SegmentedAudioTranscriber {
         for id in progressStore.listPendingNoteIDs() {
             guard let note = byID[id],
                   let workingCopy = progressStore.existingWorkingCopyURL(for: id) else {
-                progressStore.delete(for: id)            // orphan: note gone — clean up
+                // Orphan: the note is gone (or its audio is), so nothing can
+                // resume — drop both the sidecar and any leftover working copy.
+                progressStore.delete(for: id)
+                progressStore.removeWorkingCopy(for: id)
                 continue
             }
             await transcribe(note: note, sourceURL: workingCopy)

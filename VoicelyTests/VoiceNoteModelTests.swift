@@ -81,4 +81,16 @@ struct VoiceNoteModelTests {
         #expect(levels[1] > levels[2])
         #expect(levels[2] > levels[0])
     }
+
+    /// Imports deliberately keep no audio — the throwaway working copy is removed
+    /// when the run ends, failure included — so a failed import has nothing left
+    /// to transcribe. Offering "retry" there is a button that silently does
+    /// nothing, because `requestTranscription` bails on an empty audio path.
+    @Test func retryIsOnlyOfferedWhenTheAudioIsStillOnDevice() {
+        let recording = VoiceNote(title: "rec", audioFilePath: "recording_1.m4a")
+        #expect(recording.canRetryTranscription)
+
+        let importedWithoutAudio = VoiceNote(title: "imported", audioFilePath: "")
+        #expect(!importedWithoutAudio.canRetryTranscription)
+    }
 }

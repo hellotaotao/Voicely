@@ -108,6 +108,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             Task { @MainActor in
                 await processQueuedTranscriptionsIfReady()
+                // An import that arrived before the engine was ready is waiting
+                // on its working copy — pick it up now rather than at the next
+                // scene activation.
+                resumePendingImports()
             }
         }
         .onChange(of: engineModeRaw) { _, _ in
@@ -377,7 +381,10 @@ struct ContentView: View {
             }
         }
         .background(VoicelyTheme.groupedBackground)
-        .accessibilityElement(children: .contain)
+        // No `.accessibilityElement(children: .contain)`: marking this a container
+        // stamped `LibraryScreen` over its descendants' own identifiers, so the
+        // note list, the recording controls and the model picker all vanished from
+        // the accessibility tree under a single id.
         .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
@@ -710,7 +717,13 @@ struct ContentView: View {
             if !transcriptionService.isWhisperAvailable() {
                 _ = await transcriptionService.loadWhisperModel()
             }
-            guard transcriptionService.isWhisperAvailable() else { return }
+            guard transcriptionService.isWhisperAvailable() else {
+                // The working copy stays put, so the next scene activation (or a
+                // finished model download) resumes this import instead of leaving
+                // a permanently blank note. Say so rather than failing silently.
+                inboundAudioImportError = "The transcription model isn't ready yet. This import will start once it finishes loading."
+                return
+            }
             await runImportTranscription { await $0.transcribe(note: note, sourceURL: workingCopy) }
         } catch {
             inboundAudioImportError = error.localizedDescription
@@ -906,7 +919,11 @@ struct VoiceNoteRow: View {
         if isAwaitingTranscription { return "Queued for transcription." }
         if isRemoteTranscribing { return "Transcribing on another device." }
         if note.transcriptionOutcome == .noSpeech { return "No speech detected." }
-        if note.transcriptionOutcome == .failed { return "Couldn't transcribe. Open to try again." }
+        if note.transcriptionOutcome == .failed {
+            return note.canRetryTranscription
+                ? "Couldn't transcribe. Open to try again."
+                : "Couldn't transcribe. Import the file again to retry."
+        }
         return nil
     }
 
@@ -934,7 +951,10 @@ struct VoiceNoteRow: View {
         } else if note.transcriptionOutcome == .noSpeech {
             return PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
         } else if note.transcriptionOutcome == .failed {
-            return PillBadge(text: "Tap to retry", systemImage: "arrow.clockwise", variant: .warning)
+            // Only promise a retry when the audio is still here to retry with.
+            return note.canRetryTranscription
+                ? PillBadge(text: "Tap to retry", systemImage: "arrow.clockwise", variant: .warning)
+                : PillBadge(text: "Couldn't transcribe", systemImage: "exclamationmark.triangle", variant: .warning)
         }
         return nil
     }
@@ -2356,16 +2376,25 @@ struct VoiceNoteDetailView: View {
         } else if note.transcriptionOutcome == .failed {
             VStack(alignment: .leading, spacing: 10) {
                 PillBadge(text: "Couldn't transcribe", systemImage: "arrow.clockwise", variant: .warning)
-                Text("Something went wrong this time. Tap to try again.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button(action: { requestTranscription() }) {
-                    Label("Try again", systemImage: "wand.and.stars")
+                if note.canRetryTranscription {
+                    Text("Something went wrong this time. Tap to try again.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button(action: { requestTranscription() }) {
+                        Label("Try again", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(VoicelyTheme.accent)
+                    .foregroundStyle(Color.black)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
+                } else {
+                    // Imported files are transcribed from a temporary working copy
+                    // that is discarded when the run ends, so there is no audio left
+                    // to retry with — say so instead of showing a dead button.
+                    Text("Imported audio isn't kept after transcription, so this one can't be retried. Import the file again to have another go.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(VoicelyTheme.accent)
-                .foregroundStyle(Color.black)
-                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {

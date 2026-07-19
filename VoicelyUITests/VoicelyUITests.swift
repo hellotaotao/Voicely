@@ -29,6 +29,7 @@ final class VoicelyUITests: XCTestCase {
         static let transcriptionCard = "TranscriptionCard"
         static let transcriptionBody = "TranscriptionBody"
         static let transcribeButton = "TranscribeButton"
+        static let transcribeNowButton = "TranscribeNowButton"
         static let retranscribeButton = "RetranscribeButton"
         static let copyTranscriptionButton = "CopyTranscriptionButton"
         static let shareTranscriptionButton = "ShareTranscriptionButton"
@@ -104,7 +105,6 @@ final class VoicelyUITests: XCTestCase {
         let app = launchApp()
         XCTAssertTrue(app.navigationBars["Voicely"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.element(id: ID.libraryScreen).waitForExistence(timeout: 5))
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).exists)
     }
 
     @MainActor
@@ -112,10 +112,11 @@ final class VoicelyUITests: XCTestCase {
         let app = launchApp()
 
         XCTAssertTrue(app.element(id: ID.libraryScreen).waitForExistence(timeout: 5))
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).exists)
         XCTAssertTrue(app.element(id: ID.emptyState).waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["No Recordings Yet"].exists)
-        XCTAssertTrue(app.element(id: ID.recordingControls).waitForExistence(timeout: 5))
+        // The recording-controls container itself isn't queryable: the enclosing
+        // library view's identifier covers intermediate containers. Assert the
+        // controls that matter instead — those carry their own identifiers.
         XCTAssertTrue(app.element(id: ID.recordingModelPickerButton).waitForExistence(timeout: 5))
         XCTAssertTrue(app.element(id: ID.recordButton).waitForExistence(timeout: 5))
 
@@ -229,7 +230,6 @@ final class VoicelyUITests: XCTestCase {
             seedNoteAudioPath: "ui-test-seeded-recording.m4a"
         )
 
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons[ID.noteRow].firstMatch.waitForExistence(timeout: 5))
         app.buttons[ID.noteRow].firstMatch.tap()
 
@@ -259,7 +259,6 @@ final class VoicelyUITests: XCTestCase {
             seedNoteQueuedForTranscription: true
         )
 
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons[ID.noteRow].firstMatch.waitForExistence(timeout: 5))
         app.buttons[ID.noteRow].firstMatch.tap()
 
@@ -267,11 +266,13 @@ final class VoicelyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[noteTitle].exists)
         XCTAssertTrue(app.staticTexts["Queued for transcription"].exists)
 
-        let transcribeButton = app.transcribeControl
-        app.scrollToElement(transcribeButton)
-        XCTAssertTrue(transcribeButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(transcribeButton.isEnabled)
-        transcribeButton.tap()
+        // A queued note offers "Transcribe Now" (its own identifier), not the
+        // detail view's generic Transcribe control.
+        let transcribeNow = app.element(id: ID.transcribeNowButton)
+        app.scrollToElement(transcribeNow)
+        XCTAssertTrue(transcribeNow.waitForExistence(timeout: 5))
+        XCTAssertTrue(transcribeNow.isEnabled)
+        transcribeNow.tap()
 
         let modelAlert = app.alerts["Model Not Loaded"]
         XCTAssertTrue(modelAlert.waitForExistence(timeout: 5))

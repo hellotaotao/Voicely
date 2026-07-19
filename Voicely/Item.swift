@@ -133,6 +133,15 @@ final class VoiceNote {
             }
         }
     }
+    /// Whether a failed transcription can actually be retried. Imports keep no
+    /// audio by design — the throwaway working copy is removed once the run ends,
+    /// failure included — so there is nothing left to transcribe and
+    /// `requestTranscription` bails out. Callers use this to avoid offering a
+    /// retry that would silently do nothing.
+    var canRetryTranscription: Bool {
+        !audioFilePath.isEmpty
+    }
+
     /// Single write path for transcript content. `transcription` is a derived
     /// cache of the word timeline — whenever words exist, the text must be
     /// exactly their concatenation, so every producer goes through here instead

@@ -75,12 +75,22 @@ final class SegmentProgressStore {
         return directory.appendingPathComponent(name)
     }
 
+    /// Note IDs with resumable import state: a progress sidecar, a working copy,
+    /// or both. Working copies count on their own because the sidecar is written
+    /// only after a batch finishes — an import whose run never started (engine
+    /// still loading, model download unfinished) would otherwise be orphaned,
+    /// leaving a permanently blank note and a leaked copy on disk.
     func listPendingNoteIDs() -> [UUID] {
         let entries = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
-        return entries.compactMap { name in
-            guard name.hasSuffix(".json") else { return nil }
-            return UUID(uuidString: String(name.dropLast(5)))
+        var ids: [UUID] = []
+        var seen = Set<UUID>()
+        for name in entries {
+            let base = name.hasSuffix(".json") ? String(name.dropLast(5))
+                                               : (name as NSString).deletingPathExtension
+            guard let id = UUID(uuidString: base), seen.insert(id).inserted else { continue }
+            ids.append(id)
         }
+        return ids
     }
 
     /// Copies the shared (security-scoped) source file into the non-synced

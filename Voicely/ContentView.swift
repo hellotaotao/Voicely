@@ -826,6 +826,11 @@ struct ContentView: View {
     }
 
     private func deleteNoteAndAudio(_ note: VoiceNote) {
+        // Never delete the note currently being recorded: the recording keeps
+        // writing to it, and finalize would resurrect a note the context has
+        // already dropped. Stop the recording first, then delete.
+        guard !recordingSession.isRecording(note) else { return }
+
         if transcriptionService.isLocallyTranscribing(note) {
             transcriptionService.cancelTranscription(for: note)
         }

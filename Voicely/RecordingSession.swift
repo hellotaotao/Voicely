@@ -96,6 +96,13 @@ final class RecordingSession: ObservableObject {
         )
     }
 
+    /// True while this note is the one being recorded. Deleting it mid-recording
+    /// would leave `finalizeRecording`'s trailing task writing to a note that is
+    /// no longer in the model context, so callers guard destructive actions on it.
+    func isRecording(_ note: VoiceNote) -> Bool {
+        currentRecordingNote?.id == note.id
+    }
+
     var canStopRecording: Bool {
         RecordingControlState.shouldAcceptStopRequest(
             isStarting: isStartingRecording,

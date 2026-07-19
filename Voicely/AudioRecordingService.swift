@@ -247,8 +247,7 @@ class AudioRecordingService: ObservableObject {
         }
 
         let m4aURL = CloudStorageManager.shared.generateAudioFilename()
-        let pcmURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voicely_rec_\(Int(Date().timeIntervalSince1970)).caf")
+        let pcmURL = Self.makePCMTemporaryURL()
 
         pendingM4AURL = m4aURL
 
@@ -539,6 +538,16 @@ class AudioRecordingService: ObservableObject {
                 state.lastSignalFrame = state.framePosition
             }
         }
+    }
+
+    /// Temporary PCM path for one recording. The nonce keeps a stop→restart
+    /// inside the same wall-clock second from reusing the previous recording's
+    /// path: `AVAudioFile(forWriting:)` would truncate it, and the finished
+    /// recording's deferred cleanup would delete the new one's audio.
+    nonisolated static func makePCMTemporaryURL(now: Date = Date()) -> URL {
+        let nonce = UUID().uuidString.prefix(8)
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("voicely_rec_\(Int(now.timeIntervalSince1970))_\(nonce).caf")
     }
 
     /// Averages all channels of a Float32 deinterleaved buffer into a new mono

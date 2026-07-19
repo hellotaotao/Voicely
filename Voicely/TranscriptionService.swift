@@ -108,6 +108,8 @@ class TranscriptionService: ObservableObject {
 
     private var currentTranscriptionTask: Task<RawTranscription?, Never>?
     private var cancelRequested = false
+    /// Notes whose in-flight (possibly multi-batch) run the user cancelled.
+    private var cancelledRunNoteIDs: Set<UUID> = []
     private var lastCancellationHandled = false
     private var progressSmoothingTask: Task<Void, Never>?
     private var progressSmoothingTarget: Float = 0.0
@@ -568,12 +570,28 @@ class TranscriptionService: ObservableObject {
         isTranscribing = false
         transcriptionProgress = 0.0
         if let noteID = activeNoteID {
+            // Sticky mark so a segmented (multi-batch) run stops at its next
+            // boundary — cancelling only the in-flight slice would let the outer
+            // loop carry on through the rest of the file.
+            cancelledRunNoteIDs.insert(noteID)
             endLocalTranscription(for: noteID)
         }
     }
 
     func wasTranscriptionCancelled() -> Bool {
         lastCancellationHandled
+    }
+
+    /// True once the user cancelled the run for this note. `cancelRequested` is
+    /// consumed by whichever slice observes it, so a multi-batch run needs this
+    /// separate, sticky signal to stop at its next boundary instead of grinding
+    /// through every remaining batch. Cleared when a fresh run for the note starts.
+    func isRunCancelled(noteID: UUID) -> Bool {
+        cancelledRunNoteIDs.contains(noteID)
+    }
+
+    func clearRunCancellation(for noteID: UUID) {
+        cancelledRunNoteIDs.remove(noteID)
     }
 
     /// Drops a stale cancellation flag left by an unrelated, already-finished

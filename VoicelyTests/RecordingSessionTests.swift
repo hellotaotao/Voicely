@@ -166,6 +166,30 @@ struct RecordingSessionTests {
         #expect(note?.transcriptionState == .completed)
     }
 
+    /// The note being recorded must be identifiable so the UI can refuse to
+    /// delete it: deleting mid-recording leaves `finalizeRecording`'s trailing
+    /// task writing to a note that no longer exists in the context.
+    @Test func isRecordingNoteIdentifiesTheInProgressNoteOnly() async {
+        let (session, audio, collector) = makeSession()
+
+        let unrelated = VoiceNote(title: "other", audioFilePath: "other.m4a")
+        #expect(session.isRecording(unrelated) == false)
+
+        session.startRecording()
+        await waitUntil { session.currentRecordingNote != nil }
+        let recording = collector.notes.first
+
+        #expect(recording.map { session.isRecording($0) } == true)
+        #expect(session.isRecording(unrelated) == false)
+
+        audio.recordingDuration = 2
+        session.stopRecording()
+        await waitUntil { session.currentRecordingNote == nil }
+
+        // Once finalized the note is an ordinary note again — deletable.
+        #expect(recording.map { session.isRecording($0) } == false)
+    }
+
     /// The accidental-stop guard still applies: an immediate stop on a fresh
     /// recording is ignored, leaving the session recording.
     @Test func immediateStopIsIgnoredOnFreshRecording() async {

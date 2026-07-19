@@ -151,6 +151,57 @@ struct SegmentedAudioTranscriberTests {
         #expect(note.transcription == note.wordTimings.map(\.word).joined())
     }
 
+    // MARK: Cancellation
+
+    /// A cancelled slice must stop the whole run. Salvage-by-bisection would
+    /// re-transcribe the very range the user asked us to abandon, and the loop
+    /// would keep burning compute through every remaining batch.
+    @Test @MainActor func cancelledSliceStopsTheRunWithoutSalvaging() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)   // 3 segments
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        let calls = Counter()
+        transcriber.transcribeSegmentOutcome = { _ in
+            let n = await calls.incrementAndGet()
+            // Batch 1 transcribes, batch 2 comes back cancelled.
+            return n == 1
+                ? .transcribed(.init(text: "seg1", duration: 1, modelIdentifier: "m"))
+                : .cancelled
+        }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(await calls.value == 2)                 // no bisection, no batch 3
+        #expect(note.transcriptionState != .completed)  // not finalized
+        // Batch 1's progress survives so a later resume doesn't redo it.
+        #expect((store.load(for: note.id)?.lastFrame ?? 0) > 0)
+    }
+
+    /// Cancelling from the UI mid-run stops the loop at the next batch boundary
+    /// instead of running to completion in the background.
+    @Test @MainActor func userCancelMidRunStopsTheLoop() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)   // 3 segments
+        let store = SegmentedAudioTestSupport.makeStore()
+        let service = TranscriptionService()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        let calls = Counter()
+        transcriber.transcribeSegmentOutcome = { _ in
+            let n = await calls.incrementAndGet()
+            if n == 1 {
+                // The user taps cancel while the first batch is finishing.
+                await MainActor.run { service.cancelTranscription(for: note) }
+            }
+            return .transcribed(.init(text: "seg\(n)", duration: 1, modelIdentifier: "m"))
+        }
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(await calls.value == 1)                 // stopped, didn't grind through batches 2-3
+        #expect(note.transcriptionState != .completed)
+    }
+
     // MARK: Task 5 — resume from sidecar
 
     @Test @MainActor func resumeStartsFromSavedFrame() async throws {

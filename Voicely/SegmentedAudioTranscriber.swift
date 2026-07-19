@@ -101,6 +101,8 @@ final class SegmentedAudioTranscriber {
         defer { progressStore.endTranscribing(note.id) }
         // Drop a stale cancellation flag left by a prior, unrelated transcription.
         transcriptionService.clearPendingCancellation()
+        // A previous cancelled run must not abort this fresh one on its first check.
+        transcriptionService.clearRunCancellation(for: note.id)
 
         // A re-transcription of an existing recording starts with a transcript;
         // an import starts empty. Used to preserve the old text on total failure.
@@ -308,6 +310,10 @@ final class SegmentedAudioTranscriber {
 
         while start < info.totalFrames {
             if shouldStopForBackground() { return }   // sidecar already persisted; resume later
+            // User cancelled: stop here, keeping the sidecar so the run can be
+            // resumed later. Continuing would burn compute on a file nobody is
+            // waiting for — and write to a note that may already be deleted.
+            if transcriptionService.isRunCancelled(noteID: noteID) { return }
 
             let targetFrame = min(start + batchFrames, info.totalFrames)
             let isLastBatch = targetFrame >= info.totalFrames
@@ -344,7 +350,11 @@ final class SegmentedAudioTranscriber {
                 }
             case .noSpeech:
                 break  // silence in this slice — contributes nothing, not an error
-            case .whisperError, .modelUnavailable, .audioUnavailable, .cancelled:
+            case .cancelled:
+                // Not a failure: the user asked us to stop. Bisecting would
+                // re-transcribe the very range we were told to abandon.
+                return
+            case .whisperError, .modelUnavailable, .audioUnavailable:
                 // The segment failed as a whole. A real error is often local, so
                 // split it and salvage the parts that do transcribe; only the
                 // still-failing sub-range is kept as a (smaller) placeholder.

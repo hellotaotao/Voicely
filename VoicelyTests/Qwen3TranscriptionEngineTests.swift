@@ -124,3 +124,33 @@ struct Qwen3EngineRoutingTests {
         #expect(ModelManager.displayName(for: Qwen3ASRDefaults.modelId) == Qwen3ASRDefaults.modelDisplayName)
     }
 }
+
+@MainActor
+struct TranscriptionMemoryPressureTests {
+    /// The segmented path transcribes many chunks back to back, so a warning
+    /// that lands mid-run must be ignored — dropping the model between chunks
+    /// would reload hundreds of MB each time and worsen the pressure.
+    @Test func memoryWarningIsIgnoredWhileTranscribing() {
+        let service = TranscriptionService()
+        service.engineModeProvider = { .whisperKit }
+        service.loadingProgress = 0.5
+        service.isTranscribing = true
+
+        service.handleMemoryWarning()
+
+        #expect(service.loadingProgress == 0.5)
+    }
+
+    /// Idle: the resident model is the process's largest allocation, so a
+    /// warning releases it. Both engines reload lazily on the next run.
+    @Test func memoryWarningReleasesEngineWhenIdle() {
+        let service = TranscriptionService()
+        service.engineModeProvider = { .whisperKit }
+        service.loadingProgress = 0.5
+        service.isTranscribing = false
+
+        service.handleMemoryWarning()
+
+        #expect(service.loadingProgress == 0.0)
+    }
+}

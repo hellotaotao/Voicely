@@ -8,6 +8,7 @@
 import AVFoundation
 import Foundation
 import os
+import UIKit
 import WhisperKit
 
 enum TranscriptionEngine {
@@ -126,6 +127,7 @@ class TranscriptionService: ObservableObject {
     private var telemetryStartedAt: Date?
     private var telemetryAudioDuration: TimeInterval?
     private var telemetryTimerTask: Task<Void, Never>?
+    private var memoryWarningObserver: NSObjectProtocol?
 
     init(modelManager: ModelManager? = nil,
          segmentProgressStore: SegmentProgressStore = SegmentProgressStore()) {
@@ -146,6 +148,54 @@ class TranscriptionService: ObservableObject {
                 )
             }
         }
+        registerForMemoryWarnings()
+    }
+
+    deinit {
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        if let memoryWarningObserver {
+            NotificationCenter.default.removeObserver(memoryWarningObserver)
+        }
+        #endif
+    }
+
+    // MARK: Memory pressure
+
+    /// The resident engine model is by far this process's largest allocation
+    /// (Qwen3's MLX weights, or Whisper's CoreML model). Releasing it on a
+    /// memory warning is what keeps the app off the jetsam list; both engines
+    /// reload lazily on the next transcription.
+    private func registerForMemoryWarnings() {
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleMemoryWarning()
+            }
+        }
+        #endif
+    }
+
+    /// Never unloads mid-run: the segmented path transcribes many chunks back
+    /// to back, so dropping the model between them would reload hundreds of MB
+    /// each time and make the pressure worse rather than better.
+    func handleMemoryWarning() {
+        guard !isTranscribing,
+              activeNoteID == nil,
+              !isProcessingPendingTranscriptions,
+              currentTranscriptionTask == nil else {
+            print("⚠️ Memory warning ignored — transcription in flight")
+            return
+        }
+        print("⚠️ Memory warning — releasing the transcription engine")
+        unloadWhisperModel()
+        // `unloadWhisperModel` reports `.notAvailable`; recompute so an engine
+        // that is still usable (Qwen3 weights on disk, reloaded on demand)
+        // doesn't leave the UI stuck claiming transcription is unavailable.
+        updateEngineStatus()
     }
 
     func setModelManager(_ manager: ModelManager) {
@@ -412,6 +462,21 @@ class TranscriptionService: ObservableObject {
         currentEngine = .notAvailable
         loadingProgress = 0.0
         print("Transcription engine unloaded")
+    }
+
+    /// Releases a single engine's in-memory model. Called when the user switches
+    /// engines in Settings so the one we just left doesn't stay resident next to
+    /// the newly loaded one. The two engines never run concurrently, so only the
+    /// engine being switched away from can be holding memory here.
+    func unloadEngine(_ mode: TranscriptionEngineMode) {
+        switch mode {
+        case .whisperKit:
+            modelManager?.whisperKit = nil
+            modelManager?.modelState = .unloaded
+        case .qwen3ASR:
+            Task { await Qwen3ASRModelStore.shared.unloadModel() }
+        }
+        print("Unloaded \(mode.rawValue) engine after switch")
     }
 
     func getAvailableModels() -> [String] {

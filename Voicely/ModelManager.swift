@@ -534,7 +534,31 @@ class ModelManager: ObservableObject {
             print("Error deleting model: \(error)")
         }
     }
-    
+
+    /// Reclaims disk space from models that were retired (see `retiredIdentifiers`).
+    /// The selection migration in `init` only rewrites UserDefaults; the retired
+    /// CoreML weights (hundreds of MB each) stay on disk, and the picker's curated
+    /// allow-list never surfaces them for a manual delete — so nothing else can
+    /// remove them. Idempotent: only acts when a retired folder is actually present.
+    func purgeRetiredModelsFromDisk() {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let root = documents.appendingPathComponent(modelStorage)
+        for identifier in Self.retiredIdentifiers {
+            let folder = root.appendingPathComponent(identifier)
+            guard FileManager.default.fileExists(atPath: folder.path) else { continue }
+            do {
+                try FileManager.default.removeItem(at: folder)
+                downloadedModels.removeAll { $0 == identifier }
+                localModels.removeAll { $0 == identifier }
+                print("🗑️ Removed retired model from disk: \(identifier)")
+            } catch {
+                print("⚠️ Failed to remove retired model \(identifier): \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func updateProgressBar(targetProgress: Float, maxTime: TimeInterval) async {
         let initialProgress = loadingProgressValue
         let decayConstant = -log(1 - targetProgress) / Float(maxTime)

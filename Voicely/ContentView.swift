@@ -114,12 +114,17 @@ struct ContentView: View {
                 resumePendingImports()
             }
         }
-        .onChange(of: engineModeRaw) { _, _ in
-            // Engine switched in Settings: get the new engine ready (Qwen3 may
-            // need its weights downloaded; Whisper its CoreML model loaded),
-            // then let queued notes run on it.
+        .onChange(of: engineModeRaw) { oldValue, newValue in
+            // Engine switched in Settings: free the engine we just left so both
+            // don't stay resident, then get the new engine ready (Qwen3 may need
+            // its weights downloaded; Whisper its CoreML model loaded) and let
+            // queued notes run on it.
             guard !AppRuntime.isRunningTests else { return }
+            let previous = TranscriptionEngineMode.resolve(fromRawValue: oldValue)
+            let next = TranscriptionEngineMode.resolve(fromRawValue: newValue)
+            guard previous != next else { return }
             Task { @MainActor in
+                transcriptionService.unloadEngine(previous)
                 if !transcriptionService.isWhisperAvailable() {
                     _ = await transcriptionService.loadWhisperModel()
                 }
@@ -622,6 +627,7 @@ struct ContentView: View {
         }
 
         transcriptionService.setModelManager(modelManager)
+        modelManager.purgeRetiredModelsFromDisk()
         await modelManager.fetchModels(includeRemote: false)
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
 

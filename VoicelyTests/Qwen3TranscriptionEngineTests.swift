@@ -125,6 +125,31 @@ struct Qwen3EngineRoutingTests {
     }
 }
 
+struct ModelBackupExclusionTests {
+    /// The weights are re-downloadable, so they must not be charged to the
+    /// user's iCloud backup quota. Asserts the real filesystem flag, not just
+    /// that the call returned.
+    @Test func modelCacheDirectoryIsExcludedFromBackup() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ModelBackupTest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(ModelManager.excludeFromBackup(directory) == true)
+
+        let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        #expect(values.isExcludedFromBackup == true)
+    }
+
+    /// First launch runs before anything is downloaded; a missing cache
+    /// directory must be a no-op rather than an error.
+    @Test func missingDirectoryIsNotExcluded() {
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ModelBackupMissing-\(UUID().uuidString)", isDirectory: true)
+        #expect(ModelManager.excludeFromBackup(missing) == false)
+    }
+}
+
 @MainActor
 struct TranscriptionMemoryPressureTests {
     /// The segmented path transcribes many chunks back to back, so a warning

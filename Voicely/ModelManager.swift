@@ -201,6 +201,8 @@ class ModelManager: ObservableObject {
     @Published var decoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
     @Published var errorMessage: String?
     
+    /// Root of the on-disk hub cache; `modelStorage` lives beneath it.
+    private let modelCacheRoot = "huggingface"
     private let modelStorage = "huggingface/models/argmaxinc/whisperkit-coreml"
     private let repoName = "argmaxinc/whisperkit-coreml"
     private let bundledModelsDirectory = "BundledModels"
@@ -279,6 +281,8 @@ class ModelManager: ObservableObject {
             return
         }
         
+        Self.excludeFromBackup(documents.appendingPathComponent(modelCacheRoot, isDirectory: true))
+
         let modelPath = documents.appendingPathComponent(modelStorage).path
         localModelPath = modelPath
         var models: [String] = []
@@ -532,6 +536,33 @@ class ModelManager: ObservableObject {
             print("Deleted model: \(model)")
         } catch {
             print("Error deleting model: \(error)")
+        }
+    }
+
+    /// Keeps the downloaded CoreML weights out of iCloud/device backups.
+    /// WhisperKit caches them under Documents, which iOS backs up by default —
+    /// that is hundreds of MB of re-downloadable data charged to the user's
+    /// iCloud quota. Setting the flag on the cache root covers every model
+    /// beneath it; Qwen3 excludes its own weights the same way.
+    ///
+    /// Returns whether the directory ends up excluded, so tests can assert it.
+    @discardableResult
+    nonisolated static func excludeFromBackup(_ directory: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return false }
+        // Already flagged: skip the write so this stays cheap on every launch.
+        if (try? directory.resourceValues(forKeys: [.isExcludedFromBackupKey]))?.isExcludedFromBackup == true {
+            return true
+        }
+        var url = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do {
+            try url.setResourceValues(values)
+            print("✅ Excluded \(directory.lastPathComponent) from backup")
+            return true
+        } catch {
+            print("⚠️ Could not exclude \(directory.lastPathComponent) from backup: \(error.localizedDescription)")
+            return false
         }
     }
 

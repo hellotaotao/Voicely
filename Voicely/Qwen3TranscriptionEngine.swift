@@ -35,14 +35,16 @@ enum TranscriptionDeviceSupport {
 // MARK: - Engine mode
 
 /// Switch between the Qwen3-ASR (MLX) engine and the WhisperKit engine.
-/// Stored in UserDefaults under `storageKey`; Qwen3 is the default on
-/// hardware that can run it.
+/// Stored in UserDefaults under `storageKey`. WhisperKit is the default:
+/// Qwen3's decode path has unit coverage but has never been verified on a real
+/// device, and it only reports chunk-level timings, so tap-to-seek playback
+/// degrades on it. It stays available as an opt-in choice in Settings.
 enum TranscriptionEngineMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case qwen3ASR
     case whisperKit
 
     nonisolated static let storageKey = "transcriptionEngineMode"
-    nonisolated static let defaultMode: TranscriptionEngineMode = .qwen3ASR
+    nonisolated static let defaultMode: TranscriptionEngineMode = .whisperKit
 
     nonisolated var id: String { rawValue }
 
@@ -60,27 +62,26 @@ enum TranscriptionEngineMode: String, CaseIterable, Codable, Identifiable, Senda
         return mode
     }
 
-    /// The effective engine for this process. The existing unit-test suites
-    /// exercise the WhisperKit paths with mocked model managers, so a test run
-    /// without an explicitly stored engine keeps the legacy default; Qwen3
-    /// tests opt in by storing the mode (or injecting a provider).
+    /// The effective engine for this process. Tests used to be special-cased
+    /// here so an unset default wouldn't route them at Qwen3; now that Whisper
+    /// is the default for everyone, tests and shipping installs resolve
+    /// identically and Qwen3 tests opt in by storing the mode (or injecting a
+    /// provider).
     nonisolated static func currentResolved(userDefaults: UserDefaults = .standard) -> TranscriptionEngineMode {
-        let raw = userDefaults.string(forKey: storageKey)
-        if raw == nil, AppRuntime.isRunningTests { return .whisperKit }
-        return resolve(fromRawValue: raw)
+        resolve(fromRawValue: userDefaults.string(forKey: storageKey))
     }
 
     nonisolated var displayName: String {
         switch self {
-        case .qwen3ASR: "Qwen3 (Recommended)"
-        case .whisperKit: "Whisper (Classic)"
+        case .qwen3ASR: "Qwen3 (Experimental)"
+        case .whisperKit: "Whisper"
         }
     }
 
     nonisolated var subtitle: String {
         switch self {
-        case .qwen3ASR: "Fast multilingual engine running on the GPU."
-        case .whisperKit: "The previous engine, kept as a fallback."
+        case .qwen3ASR: "Fast multilingual engine on the GPU. Unverified on device, and timings are per chunk, not per word."
+        case .whisperKit: "The default engine. Word-level timings drive tap-to-seek playback."
         }
     }
 }

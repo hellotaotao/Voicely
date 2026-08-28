@@ -87,8 +87,12 @@ struct Qwen3AudioPCMTests {
 }
 
 struct TranscriptionEngineModeTests {
-    @Test func defaultsToQwen3OnSupportedHardware() {
-        #expect(TranscriptionEngineMode.resolve(fromRawValue: nil, deviceSupportsQwen3: true) == .qwen3ASR)
+    /// Qwen3 is opt-in, not the default: its decode path has unit coverage but
+    /// has never been verified on a real device, and it reports chunk-level
+    /// timings, which degrades tap-to-seek playback. Capable hardware still gets
+    /// Whisper until someone chooses otherwise in Settings.
+    @Test func defaultsToWhisperEvenOnQwenCapableHardware() {
+        #expect(TranscriptionEngineMode.resolve(fromRawValue: nil, deviceSupportsQwen3: true) == .whisperKit)
     }
 
     @Test func resolvesStoredValue() {
@@ -97,7 +101,7 @@ struct TranscriptionEngineModeTests {
     }
 
     @Test func invalidStoredValueFallsBackToDefault() {
-        #expect(TranscriptionEngineMode.resolve(fromRawValue: "coreML", deviceSupportsQwen3: true) == .qwen3ASR)
+        #expect(TranscriptionEngineMode.resolve(fromRawValue: "coreML", deviceSupportsQwen3: true) == .whisperKit)
     }
 
     @Test func unsupportedHardwareAlwaysResolvesWhisper() {
@@ -105,9 +109,10 @@ struct TranscriptionEngineModeTests {
         #expect(TranscriptionEngineMode.resolve(fromRawValue: "qwen3ASR", deviceSupportsQwen3: false) == .whisperKit)
     }
 
-    /// The legacy suites exercise the Whisper paths with mocked model managers,
-    /// so a test process without an explicitly stored engine must keep them on
-    /// Whisper. (This test itself runs in that environment.)
+    /// `currentResolved` used to special-case test processes so an unset default
+    /// wouldn't route them at Qwen3. That special case is gone — tests and
+    /// shipping installs now resolve through the same path — and this guards
+    /// that an unset default still lands on Whisper for both.
     @Test func testRunWithoutStoredValueDefaultsToWhisper() {
         let defaults = UserDefaults(suiteName: "Qwen3EngineModeTests-\(UUID().uuidString)")!
         defaults.removeObject(forKey: TranscriptionEngineMode.storageKey)

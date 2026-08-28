@@ -37,6 +37,32 @@ If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared 
 - CloudKit/iCloud features are used; avoid checking in secrets or local credentials.
 - Keep `Info.plist` changes minimal and documented in PRs when permissions or entitlements change.
 
+
+## Release note — 0.24.0 (2026-08-29)
+
+Qwen3 shipped as the default engine in 2c82df8 with a fatal decode bug (fixed in
+c2007b9), and the large Whisper tier was dropped in cafca6b *because* Qwen3 was
+meant to cover high-end quality. That left dev in a state where the default
+engine did not work and the fallback had no large model — nothing releasable.
+0.24.0 unwinds that coupling instead of unwinding the work:
+
+- **WhisperKit is the default engine again.** `TranscriptionEngineMode.defaultMode`
+  is `.whisperKit`. Qwen3 remains fully built and selectable in Settings, labelled
+  "Qwen3 (Experimental)". Real-device Qwen quality is still unverified — that is
+  the gate for promoting it back to default, and it is deliberately not on the
+  0.24.0 critical path.
+- **The large tier is back** as `openai_whisper-large-v3_turbo_954MB` (Pro, 954 MB).
+  This is the build that was the Mac default before 3664c2b swapped it for
+  v20240930; A/B testing showed it transcribes correctly where both v20240930
+  variants blank-decode on Apple Silicon. The v20240930 pair stays retired, and a
+  saved selection naming one migrates to the 954 MB build rather than dropping to
+  Small.
+- **`currentResolved` no longer special-cases test processes.** That branch existed
+  only so an unset default wouldn't route tests at Qwen3; with Whisper as the
+  default for everyone, tests and shipping installs resolve through the same path.
+- **Standard (Small) is still the per-device default** — the large tier is a 954 MB
+  download, so it stays an explicit choice.
+
 ## To Do
 - Validate the new iOS system recording integrations on device: Live Activity / Dynamic Island recording status and the Start Voicely Recording App Shortcut / Action Button assignment path. (`Voicely/RecordingLiveActivityController.swift`, `VoicelyWidgets/`, `Voicely/StartRecordingIntent.swift`, `Voicely/VoicelyDeepLink.swift`)
 - Add meeting-length recording controls as the next major product step: let users choose an auto-stop duration when starting recording, support precise durations such as 30/35/41/60 minutes, show a prominent countdown warning a few minutes before stopping, offer extend/stop-now choices, and later explore smart auto-stop when farewell phrases plus silence indicate the meeting has ended. (`Voicely/ContentView.swift`, `Voicely/AudioRecordingService.swift`, `Voicely/RecordingActivityAttributes.swift`)
@@ -74,7 +100,7 @@ If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared 
 - ~~Delete unreachable `CloudKitSettingsView`~~ — DONE (2026-07-07): nothing referenced it but its own `#Preview`; the 543-line file was removed.
 
 ### Pre-existing issues found during Mac verification (2026-07-06, all reproduced on pre-refactor baseline too)
-- ~~Retire the large-v3-v20240930 family~~ — DONE (2026-07-07): both variants were removed from `curatedModels` and `platformDefaultModel` is now Small everywhere (the per-device Pro/Standard split and `prefersProModelByDefault` went with them). A saved selection naming a retired model migrates to the default on launch via `ModelManager.migratedSelection(saved:)`. Rationale: they blank-decode on Apple Silicon Macs (A/B-verified against the 954 MB previous generation and the full-precision 1.62 GB original, so not quantization), they still work on iPhone, but with Qwen3-ASR now primary, WhisperKit is the fallback and a large tier that is broken on one platform is not worth carrying. Tests: `retiredTurboModelsAreGone`, `retiredSavedSelectionMigratesToDefault`.
+- ~~Retire the large-v3-v20240930 family~~ — DONE (2026-07-07): both variants were removed from `curatedModels` and `platformDefaultModel` is now Small everywhere (the per-device Pro/Standard split and `prefersProModelByDefault` went with them). A saved selection naming a retired model migrates to the default on launch via `ModelManager.migratedSelection(saved:)`. Rationale: they blank-decode on Apple Silicon Macs (A/B-verified against the 954 MB previous generation and the full-precision 1.62 GB original, so not quantization), they still work on iPhone, but with Qwen3-ASR now primary, WhisperKit is the fallback and a large tier that is broken on one platform is not worth carrying. Tests: `retiredTurboModelsAreGone`, `retiredSavedSelectionMigratesToTheWorkingLargeBuild`. **Partly reversed for 0.24.0** — see the release note below: the two v20240930 builds stay retired, but the large *tier* is back as `openai_whisper-large-v3_turbo_954MB`.
 - The custom prompt (Settings) is injected into EVERY whisper slice (`Using custom prompt: Claude Code` per slice) and leaks verbatim into output on low-information audio — the classic whisper initial-prompt parroting hallucination ("claude", "claude code" scattered through noisy transcripts). Consider: only injecting the prompt when it contains domain vocabulary the user explicitly wants biased, warning in Settings, or dropping the prompt for slices whose VAD confidence is marginal. (`Voicely/TranscriptionService.swift`, `Voicely/SettingsView.swift`)
 - ~~"Tap to retry" on a failed import is a dead button~~ — DONE (2026-07-07): `VoiceNote.canRetryTranscription` gates the affordance. Imports keep no audio (the working copy is discarded when the run ends), so `requestTranscription` bailed silently; the row badge, the row subtitle and the detail view now say the import can't be retried and to import the file again. Test: `retryIsOnlyOfferedWhenTheAudioIsStillOnDevice`.
 - ~~Importing right after launch races model loading~~ — DONE (2026-07-07): the original diagnosis was wrong (that failure was the v20240930 blank decode; the import path already awaits the model). The real defect: when the engine cannot be readied the import returned silently, and because the sidecar is only written after a batch completes, `listPendingNoteIDs` never saw the import — a permanently blank note plus a leaked working copy. `listPendingNoteIDs` now also counts working copies, the model-loaded notification triggers `resumePendingImports`, orphan cleanup removes the copy too, and the user is told the import will start once the model finishes loading. Test: `workingCopyWithoutSidecarIsStillPending`.

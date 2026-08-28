@@ -99,14 +99,18 @@ class ModelManager: ObservableObject {
         let suitability: String
     }
 
-    // The large-v3-v20240930 turbo builds were retired in 2026-07: on Apple
-    // Silicon Macs every slice blank-decodes (0 segments in well under a second).
+    // The large tier is the 954 MB turbo build, not the v20240930 pair that
+    // replaced it in 3664c2b and was retired in cafca6b. On Apple Silicon Macs
+    // every v20240930 slice blank-decodes (0 segments in well under a second);
     // A/B testing ruled out quantization — the full-precision 1.62 GB original
-    // fails the same way while the previous-generation 954 MB build transcribes
-    // the same file perfectly. With Qwen3-ASR now the primary engine, WhisperKit
-    // serves as the fallback, so the large tier was dropped rather than kept
-    // alive with a platform special case.
+    // fails the same way while this 954 MB build transcribes the same file
+    // perfectly. It was the Mac default before the swap, so it is the one large
+    // build verified on both platforms.
     nonisolated static let curatedModels: [CuratedModel] = [
+        CuratedModel(identifier: "openai_whisper-large-v3_turbo_954MB",
+                     tier: .pro, isEnglishOnly: false, displayName: "Large v3 Turbo",
+                     sizeLabel: "954 MB",
+                     suitability: "Best accuracy / largest download"),
         CuratedModel(identifier: "openai_whisper-small",
                      tier: .standard, isEnglishOnly: false, displayName: "Small",
                      sizeLabel: "486 MB",
@@ -134,6 +138,11 @@ class ModelManager: ObservableObject {
     // is safe.
     nonisolated private static let standardDefaultIdentifier = "openai_whisper-small"
 
+    /// Offered to installs whose saved selection was retired. Someone who chose
+    /// the large tier gets the large build that works, not a silent downgrade
+    /// to Small.
+    nonisolated private static let proReplacementIdentifier = "openai_whisper-large-v3_turbo_954MB"
+
     /// Models that shipped previously but are no longer offered. A saved
     /// selection pointing at one is migrated on launch instead of being left
     /// active — see `curatedModels` for why these were pulled.
@@ -150,15 +159,15 @@ class ModelManager: ObservableObject {
     /// UserDefaults: empty, missing, or retired selections fall back to the
     /// platform default; anything else is the user's own choice and is kept.
     nonisolated static func migratedSelection(saved: String?) -> String {
-        guard let saved, !saved.isEmpty, !isRetiredModel(saved) else {
-            return platformDefaultModel
-        }
+        guard let saved, !saved.isEmpty else { return platformDefaultModel }
+        if isRetiredModel(saved) { return proReplacementIdentifier }
         return saved
     }
 
     nonisolated static var platformDefaultModel: String {
-        // Every supported device runs Standard (Small) now that the large tier
-        // is gone; Qwen3-ASR covers high-end quality on MLX-capable hardware.
+        // Standard (Small) is the default everywhere: it keeps the first-run
+        // download small. The large tier and Qwen3 are both there for anyone who
+        // wants to trade download size for accuracy.
         standardDefaultIdentifier
     }
 

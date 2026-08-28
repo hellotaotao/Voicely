@@ -31,7 +31,31 @@ Prepared for the first official App Store release package. Primary copy is Engli
 | Marketing URL | Optional, but recommended: use a live public product page, for example `https://hellotaotao.com/voicely` |
 | Privacy Policy URL | TODO before submission: use a live public privacy policy page |
 | Copyright | TODO: confirm legal owner name for App Store Connect |
-| Current source version | `0.15.3` build `1`; decide whether the official App Store version should be `1.0` or keep `0.15.3` before archiving |
+| Current source version | `1.0.0` build `1` (set in `Config/Version.xcconfig`). This is the first **public App Store** release — earlier `0.18.5` was TestFlight-only. Build number must be higher than any build already uploaded under the same `1.0.0` version string. |
+
+## What's New (Release Notes / 1.0.0)
+
+> First public App Store release. Use this in the "What's New in This Version" field. English first, Chinese reference below.
+
+**English**
+
+Voicely's first public release brings on-device meeting transcription to the App Store:
+
+- Tap-to-seek transcript: tap any word to jump audio to that moment, with words highlighting as it plays.
+- Live transcript streaming: watch text appear segment by segment, with a collapsible performance card.
+- Resilient transcription: failed segments are bisected and retried so one bad stretch no longer loses the whole transcript.
+- Per-note language memory and improved automatic language detection.
+- Faster first transcription by warming the model on launch, plus decoding stability improvements.
+
+**中文(参考)**
+
+Voicely 首个公开版本,把设备端本地会议转写带到 App Store:
+
+- 点词跳转:点转录里的任意词,音频跳到对应位置,播放时词语同步高亮。
+- 实时转录:文字稿边转边一段段出现,并配可折叠的性能指标卡片。
+- 更稳的转录:失败片段自动二分重试,单段出错不再拖垮整篇文字稿。
+- 逐条记忆所选语言,并改进自动语言检测。
+- 启动时预热模型,首次转录更快,解码更稳定。
 
 ## Full Description
 
@@ -43,11 +67,14 @@ Use Voicely to:
 
 - Capture meeting-length audio from your iPhone.
 - Transcribe recordings locally with WhisperKit models.
+- Watch the transcript stream in segment by segment as transcription runs, with a collapsible performance card.
+- Tap any word in the transcript to jump audio playback to that moment; the words highlight in sync as audio plays.
+- Recover partial transcripts automatically — if a segment fails, Voicely bisects and retries so a single bad stretch does not lose the whole recording.
 - Review, edit, copy, and share transcript text.
 - Re-transcribe a recording with a different selected model.
 - Keep audio and transcripts together for later playback.
 - Delete recordings and their audio files when they are no longer needed.
-- Choose language, custom prompt, model, and compute settings.
+- Choose language, custom prompt, model, and compute settings, with per-note language remembered and improved auto-detection.
 - Sync through the user's iCloud account when iCloud is available and enabled.
 
 Voicely does not claim compliance certification or replace your organization's records, retention, or legal review process. It is a local-first transcription tool: recordings and transcripts are stored in the app's data store and may sync through the user's iCloud account when CloudKit and iCloud Drive are available. Model downloads and iCloud sync require network connectivity.
@@ -88,11 +115,14 @@ Voicely 面向内容敏感、需要谨慎处理的会议场景。你可以录制
 
 - 在 iPhone 上录制会议长度的音频。
 - 使用 WhisperKit 模型在本地生成文字稿。
+- 转写过程中看文字稿一段段实时流式出现，并配可折叠的性能指标卡片。
+- 点击文字稿中的任意词，音频即跳到对应时刻；播放时词语同步高亮。
+- 自动救回部分文字稿——某段转写失败时，Voicely 会二分重试，单段出错不会丢掉整段录音。
 - 查看、编辑、复制并分享转写文本。
 - 使用不同模型重新转写录音。
 - 将音频和文字稿保存在同一条记录中，方便回放。
 - 不再需要时删除录音及其音频文件。
-- 选择语言、自定义提示词、模型和计算设置。
+- 选择语言、自定义提示词、模型和计算设置；逐条记忆所选语言并改进自动检测。
 - 在用户启用并可用的 iCloud 环境中进行同步。
 
 Voicely 不声称具备合规认证，也不能替代组织内部的记录留存、法律审查或合规流程。它是一款本地优先的转写工具：录音和文字稿保存在应用数据中，并可能在 CloudKit 和 iCloud Drive 可用时通过用户的 iCloud 账户同步。模型下载和 iCloud 同步需要网络连接。

@@ -33,6 +33,7 @@ struct ModelSupportPolicyTests {
 
     @Test func curatedListIsExactlyTheOfferedModels() {
         #expect(ModelManager.curatedIdentifiers == [
+            "openai_whisper-large-v3_turbo_954MB",
             "openai_whisper-small",
             "openai_whisper-base",
             "openai_whisper-small.en_217MB",
@@ -40,6 +41,7 @@ struct ModelSupportPolicyTests {
     }
 
     @Test func curatedModelsCarryExpectedTiers() {
+        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3_turbo_954MB")?.tier == .pro)
         #expect(ModelManager.curatedModel(for: "openai_whisper-base")?.tier == .lite)
         #expect(ModelManager.curatedModel(for: "openai_whisper-small")?.tier == .standard)
         #expect(ModelManager.curatedModel(for: "openai_whisper-small.en_217MB")?.isEnglishOnly == true)
@@ -58,24 +60,27 @@ struct ModelSupportPolicyTests {
     /// The v20240930 turbo builds blank-decode on Apple Silicon Macs (every slice
     /// returns 0 segments in well under a second; A/B verified against the
     /// previous-generation 954MB build and against the full-precision 1.62 GB
-    /// original, so it isn't quantization). Whisper is now the fallback engine
-    /// behind Qwen3, so the large tier was retired rather than special-cased.
+    /// original, so it isn't quantization). These two stay retired — but the
+    /// large *tier* came back as the 954MB build, which works on both platforms.
     @Test func retiredTurboModelsAreGone() {
         #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_626MB") == nil)
         #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3-v20240930_turbo_632MB") == nil)
         #expect(ModelManager.isRetiredModel("openai_whisper-large-v3-v20240930_626MB"))
         #expect(ModelManager.isRetiredModel("openai_whisper-large-v3-v20240930_turbo_632MB"))
         #expect(!ModelManager.isRetiredModel("openai_whisper-small"))
+        #expect(!ModelManager.isRetiredModel("openai_whisper-large-v3_turbo_954MB"))
     }
 
     /// Existing installs have a retired identifier saved in UserDefaults; leaving
     /// it selected would keep a model that cannot transcribe on Mac as the active
-    /// engine, so the saved value migrates to the platform default.
-    @Test func retiredSavedSelectionMigratesToDefault() {
+    /// engine. Someone who chose the large tier gets the large build that works
+    /// — migrating them to Small would be a silent downgrade — while an empty or
+    /// missing selection still lands on the platform default.
+    @Test func retiredSavedSelectionMigratesToTheWorkingLargeBuild() {
         #expect(ModelManager.migratedSelection(saved: "openai_whisper-large-v3-v20240930_626MB")
-                == ModelManager.platformDefaultModel)
+                == "openai_whisper-large-v3_turbo_954MB")
         #expect(ModelManager.migratedSelection(saved: "openai_whisper-large-v3-v20240930_turbo_632MB")
-                == ModelManager.platformDefaultModel)
+                == "openai_whisper-large-v3_turbo_954MB")
         #expect(ModelManager.migratedSelection(saved: "") == ModelManager.platformDefaultModel)
         #expect(ModelManager.migratedSelection(saved: nil) == ModelManager.platformDefaultModel)
         // A still-supported choice is preserved.
@@ -84,7 +89,7 @@ struct ModelSupportPolicyTests {
 
     @Test func curatedMultilingualModelsAreOrderedHighToLow() {
         let dots = ModelManager.curatedModels.filter { !$0.isEnglishOnly }.map(\.tier.filledDots)
-        #expect(dots == [2, 1])
+        #expect(dots == [3, 2, 1])
     }
 
     // MARK: - Performance tier indicator
@@ -106,8 +111,9 @@ struct ModelSupportPolicyTests {
 
     // MARK: - Device default
 
-    /// Whisper is the fallback engine now, so every device gets Standard (Small);
-    /// the per-device Pro/Standard split went away with the large tier.
+    /// Standard (Small) is the default on every device to keep the first-run
+    /// download small. The large tier is back on the menu but is a 954 MB
+    /// download, so it stays an explicit choice rather than a default.
     @Test func everyDeviceDefaultsToStandard() {
         #expect(ModelManager.platformDefaultModel == "openai_whisper-small")
         #expect(ModelManager.curatedModel(for: ModelManager.platformDefaultModel)?.tier == .standard)
@@ -138,6 +144,7 @@ struct ModelSupportPolicyTests {
     // MARK: - Download size labels
 
     @Test func curatedModelsCarrySizeLabels() {
+        #expect(ModelManager.curatedModel(for: "openai_whisper-large-v3_turbo_954MB")?.sizeLabel == "954 MB")
         #expect(ModelManager.curatedModel(for: "openai_whisper-base")?.sizeLabel == "147 MB")
         #expect(ModelManager.curatedModel(for: "openai_whisper-small")?.sizeLabel == "486 MB")
         #expect(ModelManager.curatedModel(for: "openai_whisper-small.en_217MB")?.sizeLabel == "218 MB")

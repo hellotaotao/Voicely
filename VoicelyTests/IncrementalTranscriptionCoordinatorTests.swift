@@ -452,9 +452,9 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(coordinator.accumulatedTranscript == "hello\nworld")
     }
 
-    @Test @MainActor func adjacentIdenticalSegmentsAreDeduplicated() async throws {
-        // A decode loop that repeats the previous segment verbatim (a classic
-        // whisper hallucination) is collapsed — words and text together.
+    @Test @MainActor func adjacentIdenticalSegmentsAtDisjointTimesArePreserved() async throws {
+        // Separate audio ranges may contain a genuine repeated phrase. Without
+        // overlapping timestamps, text identity must not erase either segment.
         let pcmURL = try makeSilentCAF(seconds: 70)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
@@ -466,8 +466,8 @@ struct IncrementalTranscriptionCoordinatorTests {
         await coordinator.transcribeSegment(upToFrame: 480_000)
         await coordinator.transcribeSegment(upToFrame: 960_000)
 
-        #expect(coordinator.accumulatedTranscript == "hello")
-        #expect(coordinator.accumulatedWords.count == 1)
+        #expect(coordinator.accumulatedTranscript == "hello\nhello")
+        #expect(coordinator.accumulatedWords.count == 2)
     }
 
     @Test @MainActor func stopWaitsForInFlightSegmentAndPendingFinalSegment() async throws {

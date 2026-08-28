@@ -16,6 +16,9 @@ struct SegmentedTranscriptionProgress: Codable, Equatable {
     /// before this field decode cleanly (nil ⇒ a legacy run with no saved words,
     /// whose pre-resume timeline can't be reconstructed on resume).
     var accumulatedWords: [WordToken]? = nil
+    /// Immutable engine and decoding settings captured when the run began.
+    /// Optional so sidecars from older builds remain resumable.
+    var runConfiguration: TranscriptionRunConfiguration? = nil
 }
 
 /// Durable on-disk state for in-flight imported-audio transcriptions:

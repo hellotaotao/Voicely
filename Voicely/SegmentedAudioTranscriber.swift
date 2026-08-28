@@ -30,39 +30,25 @@ final class SegmentedAudioTranscriber {
     private let progressStore: SegmentProgressStore
     private let nowProvider: () -> Date
 
-    /// Per-segment transcription. Defaults to the real service; tests override.
-    var transcribeSegmentOutcome: (URL) async -> TranscriptionOutcome
+    /// Optional per-segment test override. Production calls the real service
+    /// with the immutable configuration captured for the whole run.
+    var transcribeSegmentOutcome: ((URL) async -> TranscriptionOutcome)?
 
     /// Chooses the end frame of the next segment within [start, target].
     /// Defaults to the neural-VAD cut, run off the main actor, with cut bounds
     /// sized for the active engine; tests inject a deterministic value.
-    var nextCutFrame: (URL, Int64, Int64) async -> Int64 = { url, start, target in
-        let mode = TranscriptionEngineMode.currentResolved()
-        return await Task.detached(priority: .utility) {
-            switch mode {
-            case .qwen3ASR:
-                var configuration = IncrementalVoiceActivityCutConfiguration.default
-                configuration.minimumCutSeconds = Qwen3ASRDefaults.minimumChunkCutSeconds
-                return IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
-                    fileURL: url, startFrame: start, targetFrame: target,
-                    targetSegmentSeconds: Qwen3ASRDefaults.chunkSeconds,
-                    configuration: configuration)
-            case .whisperKit:
-                return IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
-                    fileURL: url, startFrame: start, targetFrame: target)
-            }
-        }.value
-    }
+    var nextCutFrame: ((URL, Int64, Int64) async -> Int64)?
 
     /// When true, the segment loop stops at the next boundary, leaving the
     /// sidecar intact for later resume. Wired to background-time expiration.
     var shouldStopForBackground: () -> Bool = { false }
 
-    /// Queue-claimed notes hand transient single-pass failures (model or audio
-    /// unavailable, cancellation) back to the queue instead of finishing as
-    /// failed — the queue retries them automatically once the condition clears.
-    /// Imports have no queue identity, so nil keeps the finish-as-failed default.
-    var onTransientSinglePassFailure: ((VoiceNote) -> Void)?
+    /// Queue-claimed notes hand transient failures (model or audio unavailable,
+    /// cancellation) back to the queue instead of finishing as failed — the
+    /// queue retries them automatically once the condition clears. Imports have
+    /// no queue identity; nil re-queues the note directly so a scene activation
+    /// resumes it from the sidecar.
+    var onTransientFailure: ((VoiceNote) -> Void)?
 
     /// Minimum length (seconds) of a failed range still worth bisecting. A real
     /// transcription error is often local, so a failed segment is split in half
@@ -73,25 +59,12 @@ final class SegmentedAudioTranscriber {
 
     /// Files longer than one engine window get sliced + a resume sidecar
     /// (Whisper: 30 s; Qwen3: 15 s, its fast-path decoding bound).
-    private let singlePassFrameLimit: (Double) -> Int64 = { sampleRate in
-        switch TranscriptionEngineMode.currentResolved() {
-        case .qwen3ASR: return Int64(Qwen3ASRDefaults.singlePassSecondsLimit * sampleRate)
-        case .whisperKit: return Int64(30.0 * sampleRate)
-        }
-    }
-
     init(transcriptionService: TranscriptionService,
          progressStore: SegmentProgressStore,
          nowProvider: @escaping () -> Date = { Date() }) {
         self.transcriptionService = transcriptionService
         self.progressStore = progressStore
         self.nowProvider = nowProvider
-        self.transcribeSegmentOutcome = { url in
-            // The whole run drives one telemetry session (see transcribe); a
-            // per-slice call must not reset it, so it transcribes silently.
-            await transcriptionService.transcribeAudioOutcome(filePath: url.path,
-                                                              driveTelemetry: false)
-        }
     }
 
     func transcribe(note: VoiceNote, sourceURL: URL) async {
@@ -121,6 +94,21 @@ final class SegmentedAudioTranscriber {
             return
         }
 
+        let resumedProgress = progressStore.load(for: note.id)
+        let runConfiguration = resumedProgress?.runConfiguration
+            ?? transcriptionService.captureRunConfiguration()
+        guard let runToken = transcriptionService.beginTranscriptionRun(
+            configuration: runConfiguration
+        ) else {
+            if let onTransientFailure {
+                onTransientFailure(note)
+            } else {
+                note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
+            }
+            return
+        }
+        defer { transcriptionService.endTranscriptionRun(runToken) }
+
         // Claim for this device before doing any work. The attempt ID is checked
         // again before results are applied: another device can re-claim the note
         // while we transcribe, and a stale attempt must not overwrite its work.
@@ -146,14 +134,18 @@ final class SegmentedAudioTranscriber {
         // view shows a real, growing whole-recording time-ratio/speed. Per-slice
         // transcribe calls pass driveTelemetry:false (see init) so they don't
         // reset it each ~29 s slice (which would show only per-slice values).
-        transcriptionService.beginTranscriptionTelemetry(audioDuration: audioDurationSeconds)
+        transcriptionService.beginTranscriptionTelemetry(
+            audioDuration: audioDurationSeconds,
+            configuration: runConfiguration
+        )
         defer { transcriptionService.finishTranscriptionTelemetry() }
 
-        if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
-            var outcome = await transcribeSegmentOutcome(sourceURL)
+        let singlePassFrameLimit = Int64(runConfiguration.singlePassSecondsLimit * info.sampleRate)
+        if info.totalFrames <= singlePassFrameLimit {
+            var outcome = await transcribe(sourceURL, configuration: runConfiguration)
             // A real Whisper error is often transient — retry once before giving up.
             if case .whisperError(_, true) = outcome, !transcriptionService.wasTranscriptionCancelled() {
-                outcome = await transcribeSegmentOutcome(sourceURL)
+                outcome = await transcribe(sourceURL, configuration: runConfiguration)
             }
             finalizeSinglePass(note: note, outcome: outcome,
                                hadExistingTranscript: hadExistingTranscript,
@@ -162,7 +154,9 @@ final class SegmentedAudioTranscriber {
         } else {
             await transcribeSegmented(note: note, sourceURL: sourceURL, info: info,
                                       hadExistingTranscript: hadExistingTranscript,
-                                      attemptID: attemptID)
+                                      attemptID: attemptID,
+                                      configuration: runConfiguration,
+                                      resumed: resumedProgress)
             // Backgrounded mid-run: keep the working copy + sidecar for resume.
             if note.transcriptionState != .completed { return }
         }
@@ -185,6 +179,43 @@ final class SegmentedAudioTranscriber {
             }
             await transcribe(note: note, sourceURL: workingCopy)
         }
+    }
+
+    private func transcribe(
+        _ url: URL,
+        configuration: TranscriptionRunConfiguration
+    ) async -> TranscriptionOutcome {
+        if let transcribeSegmentOutcome {
+            return await transcribeSegmentOutcome(url)
+        }
+        return await transcriptionService.transcribeAudioOutcome(
+            filePath: url.path,
+            driveTelemetry: false,
+            configuration: configuration
+        )
+    }
+
+    private func chooseCutFrame(
+        _ url: URL,
+        start: Int64,
+        target: Int64,
+        configuration: TranscriptionRunConfiguration
+    ) async -> Int64 {
+        if let nextCutFrame {
+            return await nextCutFrame(url, start, target)
+        }
+
+        return await Task.detached(priority: .utility) {
+            var cutConfiguration = IncrementalVoiceActivityCutConfiguration.default
+            cutConfiguration.minimumCutSeconds = configuration.minimumChunkCutSeconds
+            return IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+                fileURL: url,
+                startFrame: start,
+                targetFrame: target,
+                targetSegmentSeconds: configuration.chunkSeconds,
+                configuration: cutConfiguration
+            )
+        }.value
     }
 
     // MARK: - Single pass (≤30 s)
@@ -224,8 +255,8 @@ final class SegmentedAudioTranscriber {
         // A queue-claimed note goes back to the queue to run again later.
         switch outcome {
         case .modelUnavailable, .audioUnavailable, .cancelled:
-            if let onTransientSinglePassFailure {
-                onTransientSinglePassFailure(note)
+            if let onTransientFailure {
+                onTransientFailure(note)
                 return
             }
         default:
@@ -268,14 +299,12 @@ final class SegmentedAudioTranscriber {
     // MARK: - Segmented (>30 s)
 
     private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo,
-                                     hadExistingTranscript: Bool, attemptID: String) async {
+                                     hadExistingTranscript: Bool, attemptID: String,
+                                     configuration: TranscriptionRunConfiguration,
+                                     resumed: SegmentedTranscriptionProgress?) async {
         let noteID = note.id
-        let batchSeconds: Double = switch TranscriptionEngineMode.currentResolved() {
-        case .qwen3ASR: Qwen3ASRDefaults.chunkSeconds
-        case .whisperKit: Double(IncrementalTranscriptionTiming.defaultIntervalSeconds)
-        }
+        let batchSeconds = configuration.chunkSeconds
         let batchFrames = Int64(batchSeconds * info.sampleRate)
-        let resumed = progressStore.load(for: noteID)
         var start: Int64 = resumed?.lastFrame ?? 0
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         let segmentIndex = SegmentIndexCounter()
@@ -308,7 +337,8 @@ final class SegmentedAudioTranscriber {
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                      accumulatedText: assembled?.text ?? "",
                                      failedRanges: failedRanges, updatedAt: nowProvider(),
-                                     accumulatedWords: assembled?.words ?? []), for: noteID)
+                                     accumulatedWords: assembled?.words ?? [],
+                                     runConfiguration: configuration), for: noteID)
         }
 
         while start < info.totalFrames {
@@ -322,12 +352,18 @@ final class SegmentedAudioTranscriber {
             let isLastBatch = targetFrame >= info.totalFrames
             var end = targetFrame
             if !isLastBatch {
-                let cut = await nextCutFrame(sourceURL, start, targetFrame)
+                let cut = await chooseCutFrame(
+                    sourceURL,
+                    start: start,
+                    target: targetFrame,
+                    configuration: configuration
+                )
                 if cut > start { end = cut }
             }
 
             guard let outcome = await transcribeSliceOutcome(
-                sourceURL: sourceURL, start: start, end: end, index: segmentIndex.next()) else {
+                sourceURL: sourceURL, start: start, end: end, index: segmentIndex.next(),
+                configuration: configuration) else {
                 // Couldn't read this slice (e.g. an unsupported container) — record
                 // it as failed instead of silently finishing as noSpeech. A slice we
                 // can't even read won't be fixed by splitting, so don't bisect here.
@@ -357,14 +393,24 @@ final class SegmentedAudioTranscriber {
                 // Not a failure: the user asked us to stop. Bisecting would
                 // re-transcribe the very range we were told to abandon.
                 return
-            case .whisperError, .modelUnavailable, .audioUnavailable:
+            case .modelUnavailable, .audioUnavailable:
+                // Engine-level condition (weights gone, model failed to load,
+                // source unreadable) — not a property of this slice. Bisecting
+                // would hammer the broken engine for every half and fill the
+                // file with placeholder gaps. Stop here: the sidecar keeps the
+                // finished slices, and the note goes back to the queue to run
+                // again once the condition clears.
+                requeueAfterTransientFailure(note, attemptID: attemptID)
+                return
+            case .whisperError:
                 // The segment failed as a whole. A real error is often local, so
                 // split it and salvage the parts that do transcribe; only the
                 // still-failing sub-range is kept as a (smaller) placeholder.
                 let salvaged = Self.coalesceFailures(await salvageFailedRange(
                     sourceURL: sourceURL, start: start, end: end,
                     minFrames: Int64(minSalvageSeconds * info.sampleRate),
-                    indexCounter: segmentIndex))
+                    indexCounter: segmentIndex,
+                    configuration: configuration))
                 for piece in salvaged {
                     switch piece {
                     case .text(let slicePieces, let pieceStart, let duration, let model):
@@ -457,25 +503,42 @@ final class SegmentedAudioTranscriber {
         note.clearTransientTranscriptionFlags()
     }
 
+    /// Hands the note back for a later retry after an engine-level failure:
+    /// through the queue's callback when the note has a queue identity, or by
+    /// re-queueing directly (imports — a scene activation resumes them from the
+    /// sidecar). Skipped if another device already re-claimed the note.
+    private func requeueAfterTransientFailure(_ note: VoiceNote, attemptID: String) {
+        if let onTransientFailure {
+            onTransientFailure(note)
+            return
+        }
+        guard note.transcriptionAttemptID == attemptID,
+              note.transcriptionState == .claimed else {
+            return
+        }
+        note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
+    }
+
     // MARK: - Bisection salvage
 
     /// Extract [start, end] to a temp file and transcribe it, retrying up to twice
     /// on a transient whisper error. Returns nil only when the slice can't even be
     /// read; the temp file is always removed before returning.
     private func transcribeSliceOutcome(sourceURL: URL, start: Int64, end: Int64,
-                                        index: Int) async -> TranscriptionOutcome? {
+                                        index: Int,
+                                        configuration: TranscriptionRunConfiguration) async -> TranscriptionOutcome? {
         guard let segmentURL = await Task.detached(priority: .utility, operation: {
             IncrementalTranscriptionCoordinator.extractSegment(
                 fileURL: sourceURL, from: start, to: end, segmentIndex: index)
         }).value else { return nil }
 
-        var outcome = await transcribeSegmentOutcome(segmentURL)
+        var outcome = await transcribe(segmentURL, configuration: configuration)
         var retries = 0
         // Only a transient (thrown) error is worth re-running the identical window;
         // a deterministic blank/empty decode is left for bisection to salvage.
         while case .whisperError(_, true) = outcome, retries < 2 {
             retries += 1
-            outcome = await transcribeSegmentOutcome(segmentURL)
+            outcome = await transcribe(segmentURL, configuration: configuration)
         }
         try? FileManager.default.removeItem(at: segmentURL)
         return outcome
@@ -489,15 +552,16 @@ final class SegmentedAudioTranscriber {
     /// `minFrames` aren't split further (salvage would cost more than it saves).
     private func salvageFailedRange(sourceURL: URL, start: Int64, end: Int64,
                                     minFrames: Int64,
-                                    indexCounter: SegmentIndexCounter) async -> [SalvagedPiece] {
+                                    indexCounter: SegmentIndexCounter,
+                                    configuration: TranscriptionRunConfiguration) async -> [SalvagedPiece] {
         guard end - start > minFrames else {
             return [.failure(SegmentFailureRange(startFrame: start, endFrame: end))]
         }
         let mid = start + (end - start) / 2
         let left = await transcribeSliceOutcome(sourceURL: sourceURL, start: start, end: mid,
-                                                index: indexCounter.next())
+                                                index: indexCounter.next(), configuration: configuration)
         let right = await transcribeSliceOutcome(sourceURL: sourceURL, start: mid, end: end,
-                                                 index: indexCounter.next())
+                                                 index: indexCounter.next(), configuration: configuration)
 
         // Both halves failed ⇒ the error spans the whole range; splitting further
         // just fragments one gap into several. Keep a single placeholder.
@@ -506,16 +570,19 @@ final class SegmentedAudioTranscriber {
         }
 
         return await resolveHalf(left, sourceURL: sourceURL, start: start, end: mid,
-                                 minFrames: minFrames, indexCounter: indexCounter)
+                                 minFrames: minFrames, indexCounter: indexCounter,
+                                 configuration: configuration)
              + (await resolveHalf(right, sourceURL: sourceURL, start: mid, end: end,
-                                  minFrames: minFrames, indexCounter: indexCounter))
+                                  minFrames: minFrames, indexCounter: indexCounter,
+                                  configuration: configuration))
     }
 
     /// Turn one bisected half's outcome into pieces: text on success, nothing on
     /// silence, and a deeper bisection on a (now-localized) failure.
     private func resolveHalf(_ outcome: TranscriptionOutcome?, sourceURL: URL,
                              start: Int64, end: Int64, minFrames: Int64,
-                             indexCounter: SegmentIndexCounter) async -> [SalvagedPiece] {
+                             indexCounter: SegmentIndexCounter,
+                             configuration: TranscriptionRunConfiguration) async -> [SalvagedPiece] {
         switch outcome {
         case .transcribed(let result):
             let slicePieces = result.effectivePieces
@@ -528,7 +595,8 @@ final class SegmentedAudioTranscriber {
             return []
         default:   // whisperError / modelUnavailable / audioUnavailable / cancelled / nil
             return await salvageFailedRange(sourceURL: sourceURL, start: start, end: end,
-                                            minFrames: minFrames, indexCounter: indexCounter)
+                                            minFrames: minFrames, indexCounter: indexCounter,
+                                            configuration: configuration)
         }
     }
 

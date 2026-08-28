@@ -3,9 +3,88 @@
 //  VoicelyTests
 //
 
+import AVFoundation
 import Foundation
 import Testing
 @testable import Voicely
+
+/// Decoding audio for the Qwen3 engine. The recorder's whole pipeline runs at
+/// 16 kHz mono Float32, which is exactly the model's target format — so real
+/// recordings take the direct-read path, and the m4a/wav distinction only
+/// changes which decoder AVAudioFile uses underneath.
+struct Qwen3AudioPCMTests {
+    private func makeWAV(rate: Double, frames: AVAudioFrameCount) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("qwen3pcm_\(UUID().uuidString).wav")
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+        for i in 0..<Int(frames) {
+            buffer.floatChannelData![0][i] = sin(Float(i) * 0.05) * 0.4
+        }
+        try file.write(from: buffer)
+        return url
+    }
+
+    private func makeM4A(rate: Double, frames: AVAudioFrameCount) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("qwen3pcm_\(UUID().uuidString).m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: rate,
+            AVNumberOfChannelsKey: 1,
+        ]
+        let file = try AVAudioFile(forWriting: url, settings: settings)
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+        for i in 0..<Int(frames) {
+            buffer.floatChannelData![0][i] = sin(Float(i) * 0.05) * 0.4
+        }
+        try file.write(from: buffer)
+        return url
+    }
+
+    /// 16 kHz mono Float32 hits the direct-read path. AVAudioFile.read throws a
+    /// bare nilError when called again at EOF, so the loop must stop on frame
+    /// position — this is the decode that failed for every real recording.
+    @Test func decodesRecorderFormatWAVDirectly() throws {
+        let url = try makeWAV(rate: 16_000, frames: 87_871)  // odd length, like a real take
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples = try Qwen3AudioPCM.loadPCM16kMono(url: url)
+        #expect(samples.count == 87_871)
+    }
+
+    /// Same direct-read path, but with the read chunk boundary landing exactly
+    /// on EOF (length a multiple of the 32_768 read capacity).
+    @Test func decodesWhenEOFLandsOnChunkBoundary() throws {
+        let url = try makeWAV(rate: 16_000, frames: 65_536)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples = try Qwen3AudioPCM.loadPCM16kMono(url: url)
+        #expect(samples.count == 65_536)
+    }
+
+    /// The recorder's m4a output decodes to 16 kHz mono Float32 too, so the
+    /// compressed container takes the same direct-read path.
+    @Test func decodesRecorderFormatM4A() throws {
+        let url = try makeM4A(rate: 16_000, frames: 32_000)  // 2 s
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples = try Qwen3AudioPCM.loadPCM16kMono(url: url)
+        // AAC priming/padding shifts the exact frame count a little.
+        #expect(abs(samples.count - 32_000) < 4_096)
+    }
+
+    /// Non-16 kHz input exercises the converter path.
+    @Test func resamples48kWAVThroughConverter() throws {
+        let url = try makeWAV(rate: 48_000, frames: 96_000)  // 2 s
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples = try Qwen3AudioPCM.loadPCM16kMono(url: url)
+        #expect(abs(samples.count - 32_000) < 1_600)  // 2 s at 16 kHz, ±0.1 s
+    }
+}
 
 struct TranscriptionEngineModeTests {
     @Test func defaultsToQwen3OnSupportedHardware() {

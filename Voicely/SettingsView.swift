@@ -139,6 +139,7 @@ struct LanguageConstants {
 
 struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
+    @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showingModelDeletion = false
     @State private var showingQwenModelDeletion = false
     @State private var computeUnitsChanged = false
@@ -356,6 +357,7 @@ struct SettingsView: View {
                     .background(VoicelyTheme.accentTint(0.10), in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .disabled(transcriptionService.isRunConfigurationLocked)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Settings.browseModelsLink)
             }
         }
@@ -407,7 +409,10 @@ struct SettingsView: View {
                         .font(.subheadline)
                         .fixedSize()
                     Spacer(minLength: 12)
-                    ModelQuickPicker(modelManager: modelManager)
+                    ModelQuickPicker(
+                        modelManager: modelManager,
+                        isDisabled: transcriptionService.isRunConfigurationLocked
+                    )
                 }
             }
         }
@@ -449,8 +454,10 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
         }
+        .disabled(transcriptionService.isRunConfigurationLocked)
         .alert("Delete Model", isPresented: $showingModelDeletion) {
             Button("Delete", role: .destructive) {
+                guard !transcriptionService.isRunConfigurationLocked else { return }
                 modelManager.deleteModel(modelManager.selectedModel)
             }
             Button("Cancel", role: .cancel) { }
@@ -478,6 +485,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .labelsHidden()
+            .disabled(transcriptionService.isRunConfigurationLocked)
             .accessibilityIdentifier("settings.enginePicker")
         }
     }
@@ -541,11 +549,13 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
                 }
                 .buttonStyle(.plain)
+                .disabled(transcriptionService.isRunConfigurationLocked)
             }
         }
         .onAppear { qwenDownloadController.refresh() }
         .alert("Delete Model", isPresented: $showingQwenModelDeletion) {
             Button("Delete", role: .destructive) {
+                guard !transcriptionService.isRunConfigurationLocked else { return }
                 Task {
                     await Qwen3ASRModelStore.shared.deleteDownloadedModel()
                     qwenDownloadController.refresh()
@@ -669,8 +679,10 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .labelsHidden()
+            .disabled(transcriptionService.isRunConfigurationLocked)
             .onChange(of: selection.wrappedValue) { computeUnitsChanged = true }
         }
+        .disabled(transcriptionService.isRunConfigurationLocked)
     }
 
     private var reloadButton: some View {
@@ -689,6 +701,7 @@ struct SettingsView: View {
             .foregroundStyle(VoicelyTheme.accent)
         }
         .buttonStyle(.plain)
+        .disabled(transcriptionService.isRunConfigurationLocked)
     }
 
     private func navRow(icon: String, title: String) -> some View {
@@ -774,6 +787,7 @@ struct SettingsView: View {
 /// One left column conveys both download and selection state, see ModelSelectionIndicator.
 private struct ModelQuickPicker: View {
     @ObservedObject var modelManager: ModelManager
+    let isDisabled: Bool
     @State private var isExpanded = false
 
     var body: some View {
@@ -791,6 +805,7 @@ private struct ModelQuickPicker: View {
             .foregroundStyle(VoicelyTheme.accent)
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
         .accessibilityIdentifier(AccessibilityIdentifiers.Settings.modelPicker)
         .popover(isPresented: $isExpanded) {
             modelList
@@ -828,6 +843,7 @@ private struct ModelQuickPicker: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .disabled(isDisabled)
                 }
             }
             .padding(.vertical, 8)
@@ -889,4 +905,5 @@ private struct ModelQuickPickerRow: View {
 #Preview {
     SettingsView()
         .environmentObject(ModelManager())
+        .environmentObject(TranscriptionService())
 }

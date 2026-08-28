@@ -71,19 +71,29 @@ enum TranscriptAssembler {
             // for the all-non-speech fallback.
             if TranscriptSanitizer.cleanedTranscript(pieceText) == nil {
                 droppedNonSpeech += 1
-                if normalizedKey(of: nonSpeech.last ?? []) != normalizedKey(of: tokens) {
+                if let previous = nonSpeech.last,
+                   previous.count >= 2,
+                   tokens.count >= 2,
+                   normalizedKey(of: previous) == normalizedKey(of: tokens),
+                   timeRangesOverlap(previous, tokens) {
+                    continue
+                } else {
                     nonSpeech.append(tokens)
                 }
                 continue
             }
 
             if let previous = kept.last {
-                if normalizedKey(of: previous) == normalizedKey(of: tokens) {
+                if previous.count >= 2,
+                   tokens.count >= 2,
+                   normalizedKey(of: previous) == normalizedKey(of: tokens),
+                   timeRangesOverlap(previous, tokens) {
                     droppedDuplicates += 1
                     logDroppedDuplicate(kept: previous, dropped: tokens)
                     continue
                 }
-                if let merged = mergedBoundary(previous: previous, current: tokens) {
+                if timeRangesOverlap(previous, tokens),
+                   let merged = mergedBoundary(previous: previous, current: tokens) {
                     kept[kept.count - 1] = merged
                     overlapMerges += 1
                     continue
@@ -156,6 +166,21 @@ enum TranscriptAssembler {
             .joined()
     }
 
+    private static func timeRange(_ tokens: [WordToken]) -> ClosedRange<Double>? {
+        guard let first = tokens.first, let last = tokens.last else { return nil }
+        return min(first.start, last.end)...max(first.start, last.end)
+    }
+
+    private static func timeRangesOverlap(_ lhs: [WordToken], _ rhs: [WordToken]) -> Bool {
+        guard let lhsRange = timeRange(lhs), let rhsRange = timeRange(rhs) else { return false }
+        if lhsRange.lowerBound == lhsRange.upperBound,
+           rhsRange.lowerBound == rhsRange.upperBound {
+            return abs(lhsRange.lowerBound - rhsRange.lowerBound) < 0.25
+        }
+        return max(lhsRange.lowerBound, rhsRange.lowerBound)
+            < min(lhsRange.upperBound, rhsRange.upperBound)
+    }
+
     /// Conservative boundary merge: when the current piece starts with the same
     /// ≥2 tokens (≥8 normalized chars) the previous piece ended with, the head
     /// duplicates are dropped — with their timings — and the remainder is
@@ -207,5 +232,44 @@ enum TranscriptAssembler {
         let density = Double(dropped.count) / droppedSpan
         print("🔁 [Assembler] duplicate piece dropped: kept \(String(format: "%.2f–%.2f", keptFirst.start, keptLast.end))s, dropped \(String(format: "%.2f–%.2f", droppedFirst.start, droppedLast.end))s, \(dropped.count) tokens, \(String(format: "%.1f", density)) tok/s")
 #endif
+    }
+}
+
+enum TranscriptDegeneracyDetector {
+    static func hasCatastrophicRepetition(_ text: String) -> Bool {
+        let tokens = text
+            .split(whereSeparator: \.isWhitespace)
+            .map(normalizedToken)
+            .filter { !$0.isEmpty }
+        guard tokens.count >= 24 else { return false }
+
+        let maximumMotifLength = min(8, tokens.count / 12)
+        guard maximumMotifLength > 0 else { return false }
+
+        for motifLength in 1...maximumMotifLength {
+            let motifStart = tokens.count - motifLength
+            let motif = Array(tokens[motifStart..<tokens.count])
+            var cursor = tokens.count
+            var repetitions = 0
+
+            while cursor >= motifLength {
+                let candidate = Array(tokens[(cursor - motifLength)..<cursor])
+                guard candidate == motif else { break }
+                repetitions += 1
+                cursor -= motifLength
+            }
+
+            if repetitions >= 12, repetitions * motifLength >= 24 {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private static func normalizedToken(_ text: some StringProtocol) -> String {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
     }
 }

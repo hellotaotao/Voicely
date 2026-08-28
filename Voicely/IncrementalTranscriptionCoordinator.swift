@@ -98,6 +98,7 @@ final class IncrementalTranscriptionCoordinator {
     private let transcriptionService: TranscriptionService
     private let recordingFileURL: URL
     private let recordingSampleRate: Double
+    let runConfiguration: TranscriptionRunConfiguration
 
     private var segmentTimer: Timer?
     private var targetIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
@@ -123,14 +124,19 @@ final class IncrementalTranscriptionCoordinator {
 
     // MARK: Init
 
-    init(transcriptionService: TranscriptionService, recordingFileURL: URL) {
+    init(
+        transcriptionService: TranscriptionService,
+        recordingFileURL: URL,
+        configuration: TranscriptionRunConfiguration? = nil
+    ) {
         self.transcriptionService = transcriptionService
         self.recordingFileURL = recordingFileURL
         self.recordingSampleRate = Self.sampleRate(for: recordingFileURL)
+        let runConfiguration = configuration ?? transcriptionService.captureRunConfiguration()
+        self.runConfiguration = runConfiguration
+        self.targetIntervalSeconds = max(1, Int(runConfiguration.chunkSeconds))
         var configuration = IncrementalVoiceActivityCutConfiguration.default
-        if TranscriptionEngineMode.currentResolved() == .qwen3ASR {
-            configuration.minimumCutSeconds = Qwen3ASRDefaults.minimumChunkCutSeconds
-        }
+        configuration.minimumCutSeconds = runConfiguration.minimumChunkCutSeconds
         self.cutConfiguration = configuration
         self.minimumCutFrames = AVAudioFramePosition(
             configuration.minimumCutSeconds * recordingSampleRate
@@ -277,7 +283,10 @@ final class IncrementalTranscriptionCoordinator {
                     ? Double(endFrame - startFrame) / recordingSampleRate : 0
                 slicePieces = TranscriptPiece.pieces(fromText: text, start: 0, end: sliceSeconds)
             }
-        } else if let result = await transcriptionService.transcribeAudio(filePath: segmentURL.path) {
+        } else if let result = await transcriptionService.transcribeAudio(
+            filePath: segmentURL.path,
+            configuration: runConfiguration
+        ) {
             slicePieces = result.effectivePieces
         }
 

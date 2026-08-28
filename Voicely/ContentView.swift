@@ -115,6 +115,12 @@ struct ContentView: View {
             }
         }
         .onChange(of: engineModeRaw) { oldValue, newValue in
+            if let lockedMode = transcriptionService.activeRunConfiguration?.engineMode {
+                if engineModeRaw != lockedMode.rawValue {
+                    engineModeRaw = lockedMode.rawValue
+                }
+                return
+            }
             // Engine switched in Settings: free the engine we just left so both
             // don't stay resident, then get the new engine ready (Qwen3 may need
             // its weights downloaded; Whisper its CoreML model loaded) and let
@@ -212,6 +218,7 @@ struct ContentView: View {
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
                     .environmentObject(modelManager)
+                    .environmentObject(transcriptionService)
             }
             .task {
                 await setupServices()
@@ -269,6 +276,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
                 .environmentObject(modelManager)
+                .environmentObject(transcriptionService)
         }
         .task {
             await setupServices()
@@ -291,6 +299,7 @@ struct ContentView: View {
                 .sheet(isPresented: $showingSettings) {
                     SettingsView()
                         .environmentObject(modelManager)
+                        .environmentObject(transcriptionService)
                 }
                 .task {
                     await setupServices()
@@ -1183,7 +1192,7 @@ struct RecordingControls: View {
                     Button(modelPickerButtonTitle(for: model)) {
                         selectModel(model)
                     }
-                    .disabled(isModelLoading)
+                    .disabled(isModelLoading || transcriptionService.isRunConfigurationLocked)
                 }
             }
             Button("Manage Models…") { onManageModels() }
@@ -1285,6 +1294,7 @@ struct RecordingControls: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Selected Model \(selectedModelDisplayName)")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
+            .disabled(transcriptionService.isRunConfigurationLocked)
 
             recordButton
         }
@@ -1445,7 +1455,7 @@ struct RecordingControls: View {
     }
 
     private func selectModel(_ model: String) {
-        guard let modelManager else { return }
+        guard let modelManager, !transcriptionService.isRunConfigurationLocked else { return }
 
         if modelManager.selectedModel == model && modelManager.isModelLoaded() {
             return
@@ -1578,18 +1588,9 @@ struct VoiceNoteDetailView: View {
         if serviceSnapshot.isActive {
             return serviceSnapshot
         }
-
-        let modelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
-            ?? transcriptionService.modelManager?.selectedModel
-        let modelName = modelIdentifier.map(ModelManager.displayName(for:)) ?? "No model"
-
-        return TranscriptionTelemetrySnapshot.inactive(
-            modelName: modelName,
-            computeRoute: TranscriptionComputeRoute(
-                encoderUnits: transcriptionService.modelManager?.encoderComputeUnits ?? .cpuAndNeuralEngine,
-                decoderUnits: transcriptionService.modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
-            )
-        )
+        // Engine-aware fallback: reading the WhisperKit model manager here
+        // showed a Whisper model name between Qwen3 inference bursts.
+        return transcriptionService.inactiveTelemetrySnapshot()
     }
 
     private var usesCompactDetailLayout: Bool {
@@ -2320,7 +2321,7 @@ struct VoiceNoteDetailView: View {
                     .background(VoicelyTheme.surfaceRaised)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptEditor)
-            } else if !cachedWordTimings.isEmpty {
+            } else if !cachedWordTimings.isEmpty && note.supportsWordSynchronizedPlayback {
                 TappableTranscriptView(
                     words: cachedWordTimings,
                     currentTime: audioPlayer.currentTime,

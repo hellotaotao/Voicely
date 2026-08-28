@@ -130,10 +130,9 @@ struct SegmentedAudioTranscriberTests {
         #expect(note.transcriptionOutcome == .transcribed)
     }
 
-    @Test @MainActor func adjacentIdenticalSlicesAreDeduplicatedWithTheirWords() async throws {
-        // A cross-window decode loop repeating the previous slice verbatim (the
-        // classic whisper hallucination) collapses to one piece — text and word
-        // timings together, so the tappable transcript matches the plain text.
+    @Test @MainActor func adjacentIdenticalSlicesAtDisjointTimesArePreserved() async throws {
+        // Text identity alone is not enough to delete speech. These slices cover
+        // distinct recording ranges, so a genuine repeated phrase must survive.
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
         let store = SegmentedAudioTestSupport.makeStore()
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
@@ -146,8 +145,8 @@ struct SegmentedAudioTranscriberTests {
 
         await transcriber.transcribe(note: note, sourceURL: url)
 
-        #expect(note.transcription == "same words")
-        #expect(note.wordTimings.count == 2)
+        #expect(note.transcription == "same words\nsame words\nsame words")
+        #expect(note.wordTimings.count == 6)
         #expect(note.transcription == note.wordTimings.map(\.word).joined())
     }
 
@@ -319,6 +318,53 @@ struct SegmentedAudioTranscriberTests {
     }
 
     // MARK: Task 6 — retry, failed-range placeholder, noSpeech
+
+    // MARK: engine-level failures abort the run
+
+    /// modelUnavailable is an engine-level condition, not a property of the
+    /// slice that reported it: bisecting would hammer the broken engine for
+    /// every half and fill the whole file with placeholder gaps. The run must
+    /// stop at that slice, keep the sidecar, and hand the note back for a
+    /// retry once the engine recovers.
+    @Test @MainActor func modelUnavailableAbortsSegmentedRunAndRequeues() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        let calls = Counter()
+        transcriber.transcribeSegmentOutcome = { _ in
+            let n = await calls.incrementAndGet()
+            return n == 1
+                ? .transcribed(.init(text: "seg1", duration: 1, modelIdentifier: "m"))
+                : .modelUnavailable
+        }
+        var requeued = false
+        transcriber.onTransientFailure = { _ in requeued = true }   // queue-claimed note
+        let note = VoiceNote(title: "note", audioFilePath: "file.m4a")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(requeued)
+        #expect(note.transcriptionState != .completed)
+        #expect(!note.transcription.contains("transcription unavailable"))
+        #expect(await calls.value == 2)           // the failing slice is not bisected
+        #expect(store.load(for: note.id) != nil)  // finished slices stay resumable
+    }
+
+    /// Same abort for audioUnavailable, on an import (no queue identity): the
+    /// note goes back to queued instead of finishing as a placeholder-filled
+    /// failure — the next scene activation resumes it from the sidecar.
+    @Test @MainActor func audioUnavailableAbortsSegmentedRunWithoutPlaceholders() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in .audioUnavailable }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcriptionState == .queued)
+        #expect(note.transcription.isEmpty)
+    }
 
     @Test @MainActor func failedSegmentBisectsAndRescuesWhenHalvesSucceed() async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)  // 3 segments
@@ -593,5 +639,42 @@ struct SegmentedAudioTranscriberTests {
         #expect(await calls.value == 1)                       // stopped after segment 1
         #expect(note.transcriptionState == .claimed)          // not finalized
         #expect((store.load(for: note.id)?.lastFrame ?? 0) > 0) // sidecar kept for resume
+    }
+
+    @Test @MainActor func resumedRunKeepsCapturedEngineAndChunkCadence() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
+        let store = SegmentedAudioTestSupport.makeStore()
+        let service = TranscriptionService()
+        service.engineModeProvider = { .qwen3ASR }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        let calls = Counter()
+
+        let first = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        first.transcribeSegmentOutcome = { _ in
+            let value = await calls.incrementAndGet()
+            return .transcribed(.init(text: "part\(value)", duration: 1, modelIdentifier: "m"))
+        }
+        first.shouldStopForBackground = {
+            (store.load(for: note.id)?.lastFrame ?? 0) >= Int64(14 * 16_000)
+        }
+
+        await first.transcribe(note: note, sourceURL: url)
+
+        let saved = try #require(store.load(for: note.id))
+        #expect(saved.runConfiguration?.engineMode == .qwen3ASR)
+        #expect(saved.runConfiguration?.chunkSeconds == 14)
+        #expect(saved.lastFrame == Int64(14 * 16_000))
+
+        service.engineModeProvider = { .whisperKit }
+        let second = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        second.transcribeSegmentOutcome = { _ in
+            let value = await calls.incrementAndGet()
+            return .transcribed(.init(text: "part\(value)", duration: 1, modelIdentifier: "m"))
+        }
+
+        await second.transcribe(note: note, sourceURL: url)
+
+        #expect(await calls.value == 3)
+        #expect(note.transcription == "part1\npart2\npart3")
     }
 }

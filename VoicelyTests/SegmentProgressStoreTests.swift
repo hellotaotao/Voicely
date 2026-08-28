@@ -13,13 +13,40 @@ struct SegmentProgressStoreTests {
     @Test func saveThenLoadRoundTrips() throws {
         let store = makeStore()
         let id = UUID()
+        let configuration = TranscriptionRunConfiguration(
+            engineMode: .qwen3ASR,
+            modelIdentifier: Qwen3ASRDefaults.modelId,
+            selectedLanguageKey: "auto",
+            prompt: nil,
+            chunkSeconds: 14,
+            singlePassSecondsLimit: 15,
+            minimumChunkCutSeconds: 7,
+            timingGranularity: .segment
+        )
         let progress = SegmentedTranscriptionProgress(
             lastFrame: 480_000, totalFrames: 1_920_000,
             accumulatedText: "hello", failedRanges: [.init(startFrame: 0, endFrame: 16_000)],
-            updatedAt: Date(timeIntervalSince1970: 1_000)
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            runConfiguration: configuration
         )
         store.save(progress, for: id)
         #expect(store.load(for: id) == progress)
+    }
+
+    @Test func legacySidecarWithoutRunConfigurationStillDecodes() throws {
+        let data = Data("""
+        {
+          "lastFrame": 1,
+          "totalFrames": 2,
+          "accumulatedText": "hello",
+          "failedRanges": [],
+          "updatedAt": 0
+        }
+        """.utf8)
+
+        let progress = try JSONDecoder().decode(SegmentedTranscriptionProgress.self, from: data)
+
+        #expect(progress.runConfiguration == nil)
     }
 
     /// An import whose run never started (model still loading, engine not ready)

@@ -129,7 +129,10 @@ class ModelManager: ObservableObject {
         curatedModels.first { $0.identifier == identifier }
     }
 
-    private static let standardDefaultIdentifier = "openai_whisper-small"
+    // nonisolated so the nonisolated `platformDefaultModel` can read it without
+    // hopping to the main actor (Swift 6). A `let` String is Sendable, so this
+    // is safe.
+    nonisolated private static let standardDefaultIdentifier = "openai_whisper-small"
 
     /// Models that shipped previously but are no longer offered. A saved
     /// selection pointing at one is migrated on launch instead of being left

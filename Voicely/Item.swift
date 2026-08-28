@@ -133,6 +133,18 @@ final class VoiceNote {
             }
         }
     }
+    /// Capability derived from the engine that produced the stored timeline.
+    /// Qwen3 currently supplies one timestamp range per chunk, not per word.
+    var transcriptionTimingGranularity: TranscriptionTimingGranularity {
+        guard !wordTimings.isEmpty else { return .none }
+        if transcriptionModelIdentifier == Qwen3ASRDefaults.modelId {
+            return .segment
+        }
+        return .word
+    }
+    var supportsWordSynchronizedPlayback: Bool {
+        transcriptionTimingGranularity == .word
+    }
     /// Whether a failed transcription can actually be retried. Imports keep no
     /// audio by design — the throwaway working copy is removed once the run ends,
     /// failure included — so there is nothing left to transcribe and

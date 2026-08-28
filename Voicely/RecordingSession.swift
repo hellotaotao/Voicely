@@ -56,6 +56,8 @@ final class RecordingSession: ObservableObject {
     private let transcriptionService: TranscriptionService
 
     private var coordinator: IncrementalTranscriptionCoordinator?
+    private var runConfiguration: TranscriptionRunConfiguration?
+    private var runToken: TranscriptionRunToken?
 
     /// Called when a note is created (on start, or — defensively — on stop if no
     /// in-progress note exists). The owner inserts it into the model context and
@@ -63,15 +65,13 @@ final class RecordingSession: ObservableObject {
     var onRecordingComplete: (VoiceNote) -> Void = { _ in }
 
     /// Overridable so tests can supply a coordinator that does no real work.
-    var coordinatorFactory: (URL) -> IncrementalTranscriptionCoordinator
+    var coordinatorFactory: (URL, TranscriptionRunConfiguration) -> IncrementalTranscriptionCoordinator
 
     /// Live incremental cadence for the active engine: Whisper batches ≤29 s
     /// (one Whisper window); Qwen3 stays under its 15 s fast-path bound.
     var incrementalIntervalSeconds: Int {
-        switch TranscriptionEngineMode.currentResolved() {
-        case .qwen3ASR: return Int(Qwen3ASRDefaults.chunkSeconds)
-        case .whisperKit: return IncrementalTranscriptionTiming.defaultIntervalSeconds
-        }
+        Int(runConfiguration?.chunkSeconds
+            ?? transcriptionService.captureRunConfiguration().chunkSeconds)
     }
 
     // MARK: Init
@@ -79,10 +79,11 @@ final class RecordingSession: ObservableObject {
     init(audioService: RecordingAudioControlling, transcriptionService: TranscriptionService) {
         self.audioService = audioService
         self.transcriptionService = transcriptionService
-        self.coordinatorFactory = { url in
+        self.coordinatorFactory = { url, configuration in
             IncrementalTranscriptionCoordinator(
                 transcriptionService: transcriptionService,
-                recordingFileURL: url
+                recordingFileURL: url,
+                configuration: configuration
             )
         }
     }
@@ -183,7 +184,15 @@ final class RecordingSession: ObservableObject {
         onRecordingComplete(note)
         RecordingLiveActivityController.shared.start(recordingID: note.id, title: note.title)
 
-        let coord = coordinatorFactory(pcmURL)
+        let configuration = transcriptionService.captureRunConfiguration()
+        guard let token = transcriptionService.beginTranscriptionRun(configuration: configuration) else {
+            registerLiveActivityControls()
+            return
+        }
+        runConfiguration = configuration
+        runToken = token
+
+        let coord = coordinatorFactory(pcmURL, configuration)
         coord.frameCountProvider = { [weak audioService] in
             audioService?.currentFramePosition ?? 0
         }
@@ -193,7 +202,7 @@ final class RecordingSession: ObservableObject {
             // segments — text and word timings land together, in lockstep.
             note.setTranscript(text: assembled.text, words: assembled.words)
             note.isTranscribing = true
-            note.transcriptionModelIdentifier = self.transcriptionService.currentEngineModelIdentifier()
+            note.transcriptionModelIdentifier = configuration.modelIdentifier
             note.transcriptionLastErrorMessage = nil
             note.recordTranscriptionTelemetry(self.transcriptionService.transcriptionTelemetry)
         }
@@ -248,8 +257,12 @@ final class RecordingSession: ObservableObject {
 
     private func finalizeRecording() {
         let capturedCoordinator = coordinator
+        let capturedConfiguration = runConfiguration
+        let capturedRunToken = runToken
         let recordingNote = currentRecordingNote
         coordinator = nil
+        runConfiguration = nil
+        runToken = nil
         registerLiveActivityControls()
         currentRecordingNote = nil
         isStartingRecording = false
@@ -259,7 +272,12 @@ final class RecordingSession: ObservableObject {
         let stopResult = audioService.stopRecording()
         RecordingLiveActivityController.shared.end(elapsedDuration: stopResult.duration)
 
-        guard let filePath = stopResult.filePath else { return }
+        guard let filePath = stopResult.filePath else {
+            if let capturedRunToken {
+                transcriptionService.endTranscriptionRun(capturedRunToken)
+            }
+            return
+        }
 
         let note: VoiceNote
         if let recordingNote {
@@ -276,6 +294,11 @@ final class RecordingSession: ObservableObject {
         note.transcriptionProgress = 0.0
 
         Task { @MainActor in
+            defer {
+                if let capturedRunToken {
+                    transcriptionService.endTranscriptionRun(capturedRunToken)
+                }
+            }
             var assembled: AssembledTranscript?
             if let coord = capturedCoordinator {
                 _ = await coord.stop(currentFrame: finalFrame)
@@ -286,8 +309,10 @@ final class RecordingSession: ObservableObject {
                 // Live recordings carry word timings too — text and timeline are
                 // one write, already filtered across segments by the assembler.
                 note.setTranscript(text: assembled.text, words: assembled.words)
-                note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
-                    ?? transcriptionService.modelManager?.selectedModel
+                // Engine-aware: asking the WhisperKit model manager here stamped
+                // a Whisper model name onto notes Qwen3 transcribed.
+                note.transcriptionModelIdentifier = capturedConfiguration?.modelIdentifier
+                    ?? transcriptionService.currentEngineModelIdentifier()
                 note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
                 note.completeTranscription()
                 note.clearTransientTranscriptionFlags()
@@ -295,6 +320,23 @@ final class RecordingSession: ObservableObject {
             }
 
             await stopResult.awaitConversionIfNeeded(forIncrementalTranscript: "")
+            if let capturedConfiguration,
+               let info = SegmentedAudioTranscriber.readAudioInfo(URL(fileURLWithPath: filePath)) {
+                transcriptionService.segmentProgressStore.save(
+                    SegmentedTranscriptionProgress(
+                        lastFrame: 0,
+                        totalFrames: info.totalFrames,
+                        accumulatedText: "",
+                        failedRanges: [],
+                        updatedAt: Date(),
+                        runConfiguration: capturedConfiguration
+                    ),
+                    for: note.id
+                )
+            }
+            if let capturedRunToken {
+                transcriptionService.endTranscriptionRun(capturedRunToken)
+            }
             transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
             if isModelLoaded {
                 await transcriptionService.processPendingTranscriptions(notes: [note])

@@ -646,13 +646,10 @@ class AudioRecordingService: ObservableObject {
         ) else {
             throw CocoaError(.fileWriteUnknown)
         }
-        exportSession.outputURL = m4aURL
-        exportSession.outputFileType = .m4a
-
-        await exportSession.export()
-
-        if let error = exportSession.error {
-            throw error
-        }
+        // iOS 18 / Catalyst 18 replacement for the deprecated
+        // outputURL + outputFileType + export() + .error dance. Throws on
+        // failure directly. (Main app deploys to iOS 18 / macOS 15, so no
+        // availability fallback is needed.)
+        try await exportSession.export(to: m4aURL, as: .m4a)
     }
 }

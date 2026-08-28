@@ -140,9 +140,10 @@ struct RecordingSessionTests {
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         audio.currentPCMFileURL = pcmURL
 
-        session.coordinatorFactory = { url in
+        session.coordinatorFactory = { url, configuration in
             let coordinator = IncrementalTranscriptionCoordinator(
-                transcriptionService: TranscriptionService(), recordingFileURL: url)
+                transcriptionService: TranscriptionService(), recordingFileURL: url,
+                configuration: configuration)
             coordinator.transcribeOverride = { @Sendable _ in "hello world" }
             coordinator.segmentWordsOverride = { @Sendable _ in
                 [WordToken(word: " hello", start: 0.0, end: 0.5),
@@ -164,6 +165,49 @@ struct RecordingSessionTests {
         #expect(note?.wordTimings.map(\.word).joined() == note?.transcription)
         #expect(note?.wordTimings.count == 2)
         #expect(note?.transcriptionState == .completed)
+    }
+
+    /// The model stamped on a finished live recording must follow the selected
+    /// engine. Regression: finalize used to read the WhisperKit model manager
+    /// directly, labelling Qwen3-transcribed notes with a Whisper model name.
+    @Test func finalizeStampsTheActiveEngineModelIdentifier() async throws {
+        let audio = MockRecordingAudio()
+        let transcription = TranscriptionService()
+        transcription.engineModeProvider = { .qwen3ASR }
+        let session = RecordingSession(audioService: audio, transcriptionService: transcription)
+        let collector = NoteCollector()
+        session.onRecordingComplete = { collector.append($0) }
+
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                   channels: 1, interleaved: false)!
+        let frames: AVAudioFrameCount = 80_000   // 5 s
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+        let pcmURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voicely_session_\(UUID().uuidString).caf")
+        let file = try AVAudioFile(forWriting: pcmURL, settings: format.settings)
+        try file.write(from: buffer)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        audio.currentPCMFileURL = pcmURL
+
+        session.coordinatorFactory = { url, configuration in
+            let coordinator = IncrementalTranscriptionCoordinator(
+                transcriptionService: TranscriptionService(), recordingFileURL: url,
+                configuration: configuration)
+            coordinator.transcribeOverride = { @Sendable _ in "hello" }
+            return coordinator
+        }
+
+        session.startRecording()
+        await waitUntil { session.currentRecordingNote != nil }
+        let note = collector.notes.first
+
+        audio.recordingDuration = 5
+        audio.currentFramePosition = AVAudioFramePosition(frames)
+        session.stopRecording()
+        await waitUntil { note?.transcription.isEmpty == false }
+
+        #expect(note?.transcriptionModelIdentifier == Qwen3ASRDefaults.modelId)
     }
 
     /// The note being recorded must be identifiable so the UI can refuse to

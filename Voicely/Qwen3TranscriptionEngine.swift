@@ -37,7 +37,7 @@ enum TranscriptionDeviceSupport {
 /// Switch between the Qwen3-ASR (MLX) engine and the WhisperKit engine.
 /// Stored in UserDefaults under `storageKey`; Qwen3 is the default on
 /// hardware that can run it.
-enum TranscriptionEngineMode: String, CaseIterable, Identifiable {
+enum TranscriptionEngineMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case qwen3ASR
     case whisperKit
 
@@ -297,7 +297,11 @@ enum Qwen3AudioPCM {
             }
             var conversionError: NSError?
             let status = converter.convert(to: outBuffer, error: &conversionError) { _, outStatus in
-                if fileExhausted {
+                // Position check, not read-and-catch: AVAudioFile.read throws at
+                // EOF, and treating any thrown error as end-of-file would turn a
+                // real I/O failure into a silently truncated transcript.
+                if fileExhausted || file.framePosition >= file.length {
+                    fileExhausted = true
                     outStatus.pointee = .endOfStream
                     return nil
                 }
@@ -339,7 +343,11 @@ enum Qwen3AudioPCM {
     nonisolated private static func readAllSamples(from file: AVAudioFile, format: AVAudioFormat) throws -> [Float] {
         var output: [Float] = []
         let capacity: AVAudioFrameCount = 32_768
-        while true {
+        // AVAudioFile.read throws (a bare nilError) when called again at EOF
+        // instead of returning an empty buffer, so the loop must stop on frame
+        // position. The recorder's whole pipeline is 16 kHz mono Float32 — the
+        // format this direct path serves — so every real recording hits this.
+        while file.framePosition < file.length {
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
                 throw AudioDecodeError.formatUnavailable
             }
@@ -397,8 +405,8 @@ final class Qwen3ModelDownloadController: ObservableObject {
         print("⬇️ Qwen3 model download/load started")
         let task = Task { [weak self, store] () -> Bool in
             do {
-                try await store.downloadAndLoadModel { progress, status in
-                    Task { @MainActor [weak self] in
+                try await store.downloadAndLoadModel { [weak self] progress, status in
+                    Task { @MainActor in
                         guard let self, case .downloading = self.state else { return }
                         self.state = .downloading(progress: progress, status: status)
                     }

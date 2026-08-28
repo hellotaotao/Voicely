@@ -93,4 +93,28 @@ struct VoiceNoteModelTests {
         let importedWithoutAudio = VoiceNote(title: "imported", audioFilePath: "")
         #expect(!importedWithoutAudio.canRetryTranscription)
     }
+
+    @Test func qwenChunkTimingsAreNotPresentedAsWordSynchronized() {
+        let note = VoiceNote(title: "qwen", audioFilePath: "recording.m4a")
+        note.transcriptionModelIdentifier = Qwen3ASRDefaults.modelId
+        note.setTranscript(
+            text: "hello world",
+            words: [WordToken(word: "hello world", start: 0, end: 14)]
+        )
+
+        #expect(note.transcriptionTimingGranularity == .segment)
+        #expect(!note.supportsWordSynchronizedPlayback)
+    }
+
+    @Test func whisperWordTimingsRemainTappable() {
+        let note = VoiceNote(title: "whisper", audioFilePath: "recording.m4a")
+        note.transcriptionModelIdentifier = "openai_whisper-small"
+        note.setTranscript(
+            text: " hello",
+            words: [WordToken(word: " hello", start: 0, end: 0.5)]
+        )
+
+        #expect(note.transcriptionTimingGranularity == .word)
+        #expect(note.supportsWordSynchronizedPlayback)
+    }
 }

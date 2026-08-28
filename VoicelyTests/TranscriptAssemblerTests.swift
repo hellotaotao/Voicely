@@ -48,7 +48,7 @@ struct TranscriptAssemblerTests {
     @Test func dropsAdjacentDuplicatePieceWithItsWords() {
         let result = TranscriptAssembler.assemble([
             TranscriptPiece(words: [tok(" hello", 0, 1), tok(" world", 1, 2)]),
-            TranscriptPiece(words: [tok(" Hello,", 2, 3), tok(" world!", 3, 4)])
+            TranscriptPiece(words: [tok(" Hello,", 0.5, 1.5), tok(" world!", 1.5, 2.5)])
         ])
 
         #expect(result?.text == "hello world")
@@ -56,6 +56,38 @@ struct TranscriptAssemblerTests {
         // The kept piece is the first one — its timings win.
         #expect(result?.words.last?.end == 2)
         #expect(result?.droppedDuplicateCount == 1)
+    }
+
+    @Test func preservesAdjacentIdenticalSpeechAtDisjointTimes() {
+        let result = TranscriptAssembler.assemble([
+            TranscriptPiece(words: [tok(" thank", 0, 1), tok(" you", 1, 2)]),
+            TranscriptPiece(words: [tok(" Thank", 29, 30), tok(" you!", 30, 31)])
+        ])
+
+        #expect(result?.text == "thank you\nThank you!")
+        #expect(result?.droppedDuplicateCount == 0)
+    }
+
+    @Test func preservesBackToBackIdenticalSpeechWithoutOverlappingAudio() {
+        let result = TranscriptAssembler.assemble([
+            TranscriptPiece(words: [tok(" thank", 0, 0.5), tok(" you", 0.5, 1)]),
+            TranscriptPiece(words: [tok(" Thank", 1, 1.5), tok(" you!", 1.5, 2)])
+        ])
+
+        #expect(result?.text == "thank you\nThank you!")
+        #expect(result?.droppedDuplicateCount == 0)
+        #expect(result?.overlapMergeCount == 0)
+    }
+
+    @Test func preservesRepeatedCoarseSegmentTokensEvenWhenRangesMatch() {
+        let result = TranscriptAssembler.assemble([
+            TranscriptPiece(text: "Thank you", start: 0, end: 14),
+            TranscriptPiece(text: "Thank you", start: 0, end: 14),
+            TranscriptPiece(text: "Thank you", start: 0, end: 14)
+        ])
+
+        #expect(result?.text == "Thank you\nThank you\nThank you")
+        #expect(result?.droppedDuplicateCount == 0)
     }
 
     @Test func preservesNonAdjacentRepeatedPieces() {
@@ -78,8 +110,8 @@ struct TranscriptAssemblerTests {
                 tok(" call", 3, 4), tok(" Alice", 4, 5), tok(" tomorrow", 5, 6)
             ]),
             TranscriptPiece(words: [
-                tok(" Alice", 28, 29), tok(" tomorrow", 29, 30),
-                tok(" about", 30, 31), tok(" the", 31, 32), tok(" invoice", 32, 33)
+                tok(" Alice", 5.5, 5.8), tok(" tomorrow", 5.8, 6.1),
+                tok(" about", 6.1, 6.4), tok(" the", 6.4, 6.7), tok(" invoice", 6.7, 7.0)
             ])
         ])
 
@@ -88,11 +120,25 @@ struct TranscriptAssemblerTests {
         #expect(result?.overlapMergeCount == 1)
         // The kept remainder keeps its own timestamps.
         let aboutToken = result?.words.first { $0.word.contains("about") }
-        #expect(aboutToken?.start == 30)
+        #expect(aboutToken?.start == 6.1)
         // The duplicated head tokens are gone: "Alice" appears once, at 4s.
         let aliceTokens = result?.words.filter { $0.word.contains("Alice") } ?? []
         #expect(aliceTokens.count == 1)
         #expect(aliceTokens.first?.start == 4)
+    }
+
+    @Test func preservesBoundaryPhraseWhenTimestampsAreFarApart() {
+        let result = TranscriptAssembler.assemble([
+            TranscriptPiece(words: [
+                tok(" I", 0, 1), tok(" called", 1, 2), tok(" Alice", 2, 3), tok(" tomorrow", 3, 4)
+            ]),
+            TranscriptPiece(words: [
+                tok(" Alice", 29, 30), tok(" tomorrow", 30, 31), tok(" answered", 31, 32)
+            ])
+        ])
+
+        #expect(result?.text == "I called Alice tomorrow\nAlice tomorrow answered")
+        #expect(result?.overlapMergeCount == 0)
     }
 
     // MARK: All-non-speech fallback keeps whisper verbatim
@@ -104,12 +150,23 @@ struct TranscriptAssemblerTests {
             TranscriptPiece(text: "[Laughter]", start: 20, end: 30)
         ])
 
-        #expect(result?.text == "(music)\n[Laughter]")
+        #expect(result?.text == "(music)\n(music)\n[Laughter]")
         #expect(result?.text == result?.words.map(\.word).joined())
         #expect(result?.isNonSpeechFallback == true)
         // Synthesized tokens carry the piece time ranges (tap seeks to the region).
         #expect(result?.words.first?.start == 0)
         #expect(result?.words.last?.start == 20)
+    }
+
+    @Test func catastrophicSuffixDetectorIgnoresOrdinaryFarewellRepeats() {
+        #expect(!TranscriptDegeneracyDetector.hasCatastrophicRepetition(
+            "Thank you. Thank you. Thank you. Bye."
+        ))
+    }
+
+    @Test func catastrophicSuffixDetectorFlagsLongRepeatedMotif() {
+        let text = Array(repeating: "Thank you", count: 12).joined(separator: " ")
+        #expect(TranscriptDegeneracyDetector.hasCatastrophicRepetition(text))
     }
 
     @Test func speechResultIsNotMarkedAsFallback() {

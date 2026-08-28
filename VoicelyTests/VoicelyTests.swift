@@ -18,7 +18,7 @@ struct VoicelyTests {
         let service = TranscriptionService()
         service.setModelManager(LoadedModelManager())
 
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             for _ in 0..<10 {
                 if Task.isCancelled {
                     return .cancelled

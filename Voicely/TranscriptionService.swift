@@ -28,6 +28,7 @@ struct TranscriptionResult {
     /// callers collect these across slices and assemble once at the outer level,
     /// so cross-slice dedup/merge decisions see segment granularity.
     var pieces: [TranscriptPiece] = []
+    var timingGranularity: TranscriptionTimingGranularity = .none
 
     /// Pieces for accumulation; synthesizes from text/words for hand-built
     /// results (test stubs) that don't carry pieces.
@@ -77,7 +78,11 @@ enum TranscriptionOutcome {
 
 @MainActor
 class TranscriptionService: ObservableObject {
-    typealias TranscribeImpl = (String, @escaping (Float) -> Void) async -> RawTranscription
+    typealias TranscribeImpl = (
+        String,
+        TranscriptionRunConfiguration,
+        @escaping (Float) -> Void
+    ) async -> RawTranscription
 
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
@@ -91,12 +96,19 @@ class TranscriptionService: ObservableObject {
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var progressByNoteID: [UUID: Float] = [:]
     @Published private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot = .inactive()
+    @Published private(set) var activeRunConfiguration: TranscriptionRunConfiguration?
 
     var modelManager: ModelManager?
-    var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil, retryable: false) }
+    var transcribeImpl: TranscribeImpl = { _, _, _ in .whisperError(nil, retryable: false) }
     /// Which engine this service routes to. Injectable so tests can pin a mode
     /// regardless of the stored default.
     var engineModeProvider: () -> TranscriptionEngineMode = { TranscriptionEngineMode.currentResolved() }
+    var selectedLanguageProvider: () -> String = {
+        UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
+    }
+    var transcriptionPromptProvider: () -> String = {
+        UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? ""
+    }
     var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
     var nowProvider: () -> Date = { Date() }
     var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
@@ -112,6 +124,7 @@ class TranscriptionService: ObservableObject {
     private static let ownershipMigrationDefaultsKey = "VoicelyOwnershipMigrationV1"
 
     private var currentTranscriptionTask: Task<RawTranscription?, Never>?
+    private var activeRunToken: TranscriptionRunToken?
     private var cancelRequested = false
     /// Notes whose in-flight (possibly multi-batch) run the user cancelled.
     private var cancelledRunNoteIDs: Set<UUID> = []
@@ -126,6 +139,7 @@ class TranscriptionService: ObservableObject {
     private var pendingTranscriptionOrderCursor = 0
     private var telemetryStartedAt: Date?
     private var telemetryAudioDuration: TimeInterval?
+    private var telemetryRunConfiguration: TranscriptionRunConfiguration?
     private var telemetryTimerTask: Task<Void, Never>?
     private var memoryWarningObserver: NSObjectProtocol?
 
@@ -133,17 +147,19 @@ class TranscriptionService: ObservableObject {
          segmentProgressStore: SegmentProgressStore = SegmentProgressStore()) {
         self.modelManager = modelManager
         self.segmentProgressStore = segmentProgressStore
-        self.transcribeImpl = { [weak self] filePath, progressCallback in
+        self.transcribeImpl = { [weak self] filePath, configuration, progressCallback in
             guard let self else { return .cancelled }
-            switch self.engineModeProvider() {
+            switch configuration.engineMode {
             case .qwen3ASR:
                 return await self.transcribeWithQwen(
                     filePath: filePath,
+                    configuration: configuration,
                     progressCallback: progressCallback
                 )
             case .whisperKit:
                 return await self.transcribeWithWhisper(
                     filePath: filePath,
+                    configuration: configuration,
                     progressCallback: progressCallback
                 )
             }
@@ -191,7 +207,7 @@ class TranscriptionService: ObservableObject {
             return
         }
         print("⚠️ Memory warning — releasing the transcription engine")
-        unloadWhisperModel()
+        guard unloadWhisperModel() else { return }
         // `unloadWhisperModel` reports `.notAvailable`; recompute so an engine
         // that is still usable (Qwen3 weights on disk, reloaded on demand)
         // doesn't leave the UI stuck claiming transcription is unavailable.
@@ -453,7 +469,12 @@ class TranscriptionService: ObservableObject {
         return note.transcriptionState == .claimed && leaseHasExpired(note, now: now)
     }
 
-    func unloadWhisperModel() {
+    @discardableResult
+    func unloadWhisperModel() -> Bool {
+        guard !isRunConfigurationLocked else {
+            print("⚠️ Engine unload ignored — transcription run owns its configuration")
+            return false
+        }
         if let modelManager {
             modelManager.whisperKit = nil
             modelManager.modelState = .unloaded
@@ -462,13 +483,19 @@ class TranscriptionService: ObservableObject {
         currentEngine = .notAvailable
         loadingProgress = 0.0
         print("Transcription engine unloaded")
+        return true
     }
 
     /// Releases a single engine's in-memory model. Called when the user switches
     /// engines in Settings so the one we just left doesn't stay resident next to
     /// the newly loaded one. The two engines never run concurrently, so only the
     /// engine being switched away from can be holding memory here.
-    func unloadEngine(_ mode: TranscriptionEngineMode) {
+    @discardableResult
+    func unloadEngine(_ mode: TranscriptionEngineMode) -> Bool {
+        guard !isRunConfigurationLocked else {
+            print("⚠️ Engine switch ignored — transcription run owns its configuration")
+            return false
+        }
         switch mode {
         case .whisperKit:
             modelManager?.whisperKit = nil
@@ -477,6 +504,7 @@ class TranscriptionService: ObservableObject {
             Task { await Qwen3ASRModelStore.shared.unloadModel() }
         }
         print("Unloaded \(mode.rawValue) engine after switch")
+        return true
     }
 
     func getAvailableModels() -> [String] {
@@ -528,14 +556,73 @@ class TranscriptionService: ObservableObject {
         }
     }
 
+    func currentEngineModelIdentifier(for configuration: TranscriptionRunConfiguration) -> String {
+        configuration.modelIdentifier
+    }
+
+    var isRunConfigurationLocked: Bool {
+        activeRunToken != nil
+    }
+
+    func beginTranscriptionRun(
+        configuration: TranscriptionRunConfiguration
+    ) -> TranscriptionRunToken? {
+        guard activeRunToken == nil else { return nil }
+        let token = TranscriptionRunToken()
+        activeRunToken = token
+        activeRunConfiguration = configuration
+        return token
+    }
+
+    func endTranscriptionRun(_ token: TranscriptionRunToken) {
+        guard activeRunToken == token else { return }
+        activeRunToken = nil
+        activeRunConfiguration = nil
+    }
+
+    func captureRunConfiguration() -> TranscriptionRunConfiguration {
+        let engineMode = engineModeProvider()
+        let trimmedPrompt = transcriptionPromptProvider()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch engineMode {
+        case .qwen3ASR:
+            return TranscriptionRunConfiguration(
+                engineMode: engineMode,
+                modelIdentifier: Qwen3ASRDefaults.modelId,
+                selectedLanguageKey: selectedLanguageProvider(),
+                prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+                chunkSeconds: Qwen3ASRDefaults.chunkSeconds,
+                singlePassSecondsLimit: Qwen3ASRDefaults.singlePassSecondsLimit,
+                minimumChunkCutSeconds: Qwen3ASRDefaults.minimumChunkCutSeconds,
+                timingGranularity: .segment
+            )
+        case .whisperKit:
+            return TranscriptionRunConfiguration(
+                engineMode: engineMode,
+                modelIdentifier: modelManager?.currentModelIdentifier()
+                    ?? modelManager?.selectedModel
+                    ?? ModelManager.platformDefaultModel,
+                selectedLanguageKey: selectedLanguageProvider(),
+                prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+                chunkSeconds: Double(IncrementalTranscriptionTiming.defaultIntervalSeconds),
+                singlePassSecondsLimit: 30,
+                minimumChunkCutSeconds: Double(IncrementalTranscriptionTiming.minimumCutSeconds),
+                timingGranularity: .word
+            )
+        }
+    }
+
     /// Runs one transcription attempt and reports *why* there is no transcript, so
     /// callers can react per cause instead of treating every empty result the same.
     func transcribeAudioOutcome(
         filePath: String,
         progressCallback: @escaping (Float) -> Void = { _ in },
-        driveTelemetry: Bool = true
+        driveTelemetry: Bool = true,
+        configuration: TranscriptionRunConfiguration? = nil
     ) async -> TranscriptionOutcome {
-        updateEngineStatus()
+        let runConfiguration = configuration ?? captureRunConfiguration()
+        updateEngineStatus(for: runConfiguration)
 
         while isTranscribing {
             try? await Task.sleep(nanoseconds: 200_000_000)
@@ -562,16 +649,16 @@ class TranscriptionService: ObservableObject {
             transcriptionProgress = 0.0
         }
 
-        guard isWhisperLoaded else {
+        guard isEngineReady(for: runConfiguration) else {
             return .modelUnavailable
         }
 
         if driveTelemetry {
-            await beginTranscriptionTelemetry(filePath: filePath)
+            await beginTranscriptionTelemetry(filePath: filePath, configuration: runConfiguration)
         }
 
         let task = Task { [weak self] in
-            await self?.transcribeImpl(filePath, progressCallback)
+            await self?.transcribeImpl(filePath, runConfiguration, progressCallback)
         }
         currentTranscriptionTask = task
 
@@ -586,20 +673,29 @@ class TranscriptionService: ObservableObject {
                 lastCancellationHandled = true
                 return .cancelled
             }
+            let rawText = rawPieces
+                .map { $0.words.map(\.word).joined() }
+                .joined(separator: "\n")
+            guard !TranscriptDegeneracyDetector.hasCatastrophicRepetition(rawText) else {
+                return .whisperError("catastrophic repetition detected", retryable: false)
+            }
             guard let assembled = TranscriptAssembler.assemble(rawPieces) else {
                 // Whisper ran but produced nothing usable. Treat it as a real error
                 // to surface for diagnosis — not as a calm "no speech". Deterministic,
                 // so not retryable: an identical re-decode yields the same blank.
                 return .whisperError("blank output", retryable: false)
             }
+            guard !TranscriptDegeneracyDetector.hasCatastrophicRepetition(assembled.text) else {
+                return .whisperError("catastrophic repetition detected", retryable: false)
+            }
             let elapsed = nowProvider().timeIntervalSince(startTime)
-            let modelIdentifier = currentEngineModelIdentifier()
             return .transcribed(TranscriptionResult(
                 text: assembled.text,
                 duration: elapsed,
-                modelIdentifier: modelIdentifier,
+                modelIdentifier: runConfiguration.modelIdentifier,
                 words: assembled.words,
-                pieces: rawPieces
+                pieces: rawPieces,
+                timingGranularity: runConfiguration.timingGranularity
             ))
         case .noSpeech:
             return .noSpeech
@@ -616,11 +712,13 @@ class TranscriptionService: ObservableObject {
 
     func transcribeAudio(
         filePath: String,
-        progressCallback: @escaping (Float) -> Void = { _ in }
+        progressCallback: @escaping (Float) -> Void = { _ in },
+        configuration: TranscriptionRunConfiguration? = nil
     ) async -> TranscriptionResult? {
         if case .transcribed(let result) = await transcribeAudioOutcome(
             filePath: filePath,
-            progressCallback: progressCallback
+            progressCallback: progressCallback,
+            configuration: configuration
         ) {
             return result
         }
@@ -711,16 +809,26 @@ private extension TranscriptionService {
     /// for Whisper the CoreML model must be loaded. The name predates the
     /// engine switch.
     var isWhisperLoaded: Bool {
-        switch engineModeProvider() {
+        isEngineReady(for: captureRunConfiguration())
+    }
+
+    func isEngineReady(for configuration: TranscriptionRunConfiguration) -> Bool {
+        switch configuration.engineMode {
         case .qwen3ASR:
             return Qwen3ASRModelStore.isModelDownloaded()
         case .whisperKit:
-            return modelManager?.isModelLoaded() ?? false
+            guard let modelManager, modelManager.isModelLoaded() else { return false }
+            return modelManager.currentModelIdentifier() == configuration.modelIdentifier
+                || modelManager.selectedModel == configuration.modelIdentifier
         }
     }
 
-    func beginTranscriptionTelemetry(filePath: String) async {
+    func beginTranscriptionTelemetry(
+        filePath: String,
+        configuration: TranscriptionRunConfiguration
+    ) async {
         finishTranscriptionTelemetry()
+        telemetryRunConfiguration = configuration
         telemetryStartedAt = nowProvider()
         telemetryAudioDuration = await audioDurationProvider(filePath)
         startTelemetryTimer()
@@ -763,14 +871,16 @@ private extension TranscriptionService {
     }
 
     func currentTelemetryModelName() -> String {
-        guard let modelIdentifier = currentEngineModelIdentifier(), !modelIdentifier.isEmpty else {
+        guard let modelIdentifier = telemetryRunConfiguration?.modelIdentifier
+            ?? currentEngineModelIdentifier(),
+              !modelIdentifier.isEmpty else {
             return "No model"
         }
         return ModelManager.displayName(for: modelIdentifier)
     }
 
     func currentTelemetryComputeRoute() -> TranscriptionComputeRoute {
-        switch engineModeProvider() {
+        switch telemetryRunConfiguration?.engineMode ?? engineModeProvider() {
         case .qwen3ASR:
             // MLX inference runs entirely on the GPU.
             return TranscriptionComputeRoute(encoderUnits: .cpuAndGPU, decoderUnits: .cpuAndGPU)
@@ -783,11 +893,15 @@ private extension TranscriptionService {
     }
 
     func updateEngineStatus() {
-        guard isWhisperLoaded else {
+        updateEngineStatus(for: captureRunConfiguration())
+    }
+
+    func updateEngineStatus(for configuration: TranscriptionRunConfiguration) {
+        guard isEngineReady(for: configuration) else {
             currentEngine = .notAvailable
             return
         }
-        switch engineModeProvider() {
+        switch configuration.engineMode {
         case .qwen3ASR:
             currentEngine = .qwen3ASR
         case .whisperKit:
@@ -941,7 +1055,7 @@ private extension TranscriptionService {
         }
         let transcriber = SegmentedAudioTranscriber(transcriptionService: self,
                                                     progressStore: segmentProgressStore)
-        transcriber.onTransientSinglePassFailure = { [weak self] note in
+        transcriber.onTransientFailure = { [weak self] note in
             guard let self else { return }
             self.requeueNote(note, queuedAt: self.nowProvider())
         }
@@ -967,6 +1081,7 @@ private extension TranscriptionService {
     /// honest at chunk granularity and `text == words.joined()` still holds.
     func transcribeWithQwen(
         filePath: String,
+        configuration: TranscriptionRunConfiguration,
         progressCallback: @escaping (Float) -> Void
     ) async -> RawTranscription {
         guard Qwen3ASRModelStore.isModelDownloaded() else {
@@ -1016,13 +1131,12 @@ private extension TranscriptionService {
         }
         updateProgressOnMain(0.25)
 
-        let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
-        let languageHint = Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguageKey)
-        let customPrompt = (UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let languageHint = Qwen3ASRDefaults.languageHint(
+            forSelectedLanguageKey: configuration.selectedLanguageKey
+        )
         let options = Qwen3ASRDefaults.decodingOptions(
             languageHint: languageHint,
-            context: customPrompt.isEmpty ? nil : customPrompt
+            context: configuration.prompt
         )
 
         do {
@@ -1059,6 +1173,7 @@ private extension TranscriptionService {
 
     func transcribeWithWhisper(
         filePath: String,
+        configuration: TranscriptionRunConfiguration,
         progressCallback: @escaping (Float) -> Void
     ) async -> RawTranscription {
         guard let modelManager,
@@ -1119,9 +1234,9 @@ private extension TranscriptionService {
                 whisperKit.transcriptionStateCallback = nil
             }
 
-            let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
+            let selectedLanguageKey = configuration.selectedLanguageKey
             let languageCode: String?
-            let customPrompt = UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? ""
+            let customPrompt = configuration.prompt ?? ""
 
             updateProgressOnMain(0.02)
 
@@ -1290,6 +1405,17 @@ private extension TranscriptionService {
 }
 
 extension TranscriptionService {
+    /// Idle-state snapshot for views that need a model name / compute route
+    /// when no telemetry session is running. Respects the selected engine —
+    /// callers must not fall back to the WhisperKit model manager directly,
+    /// which shows a Whisper model name even while Qwen3 is the engine.
+    func inactiveTelemetrySnapshot() -> TranscriptionTelemetrySnapshot {
+        TranscriptionTelemetrySnapshot.inactive(
+            modelName: currentTelemetryModelName(),
+            computeRoute: currentTelemetryComputeRoute()
+        )
+    }
+
     /// Builds a finished (non-active) telemetry snapshot from a completed run's
     /// total processing time and audio duration. The segmented path's live
     /// telemetry session is finished (timer reset to inactive) when the run ends,
@@ -1318,8 +1444,12 @@ extension TranscriptionService {
     /// false so they don't reset it each ~29 s slice (which made the card show
     /// per-slice values instead of the whole recording). Pair with
     /// `finishTranscriptionTelemetry()`.
-    func beginTranscriptionTelemetry(audioDuration: TimeInterval) {
+    func beginTranscriptionTelemetry(
+        audioDuration: TimeInterval,
+        configuration: TranscriptionRunConfiguration? = nil
+    ) {
         finishTranscriptionTelemetry()
+        telemetryRunConfiguration = configuration
         telemetryStartedAt = nowProvider()
         telemetryAudioDuration = audioDuration > 0 ? audioDuration : nil
         startTelemetryTimer()
@@ -1339,6 +1469,7 @@ extension TranscriptionService {
         refreshTranscriptionTelemetry(isActive: false)
         telemetryStartedAt = nil
         telemetryAudioDuration = nil
+        telemetryRunConfiguration = nil
     }
 
     func annotatedText(for result: TranscriptionResult) -> String {

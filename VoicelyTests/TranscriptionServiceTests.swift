@@ -66,7 +66,7 @@ struct TranscriptionServiceTests {
 
     @Test @MainActor func transcribeAudioReturnsResultWhenModelLoaded() async {
         let service = makeService(deviceID: "device-a")
-        service.transcribeImpl = { _, progress in
+        service.transcribeImpl = { _, _, progress in
             progress(0.2)
             return "hello"
         }
@@ -82,7 +82,7 @@ struct TranscriptionServiceTests {
 
     @Test @MainActor func transcribeAudioRemovesNoSpeechMarkerLines() async {
         let service = makeService(deviceID: "device-a")
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             "hello\n[BLANK_AUDIO]\n(humming)"
         }
 
@@ -93,7 +93,7 @@ struct TranscriptionServiceTests {
 
     @Test @MainActor func transcribeAudioKeepsNonSpeechMarkersVerbatim() async {
         let service = makeService(deviceID: "device-a")
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             "[Silence]\n[BLANK_AUDIO]\n(humming)"
         }
 
@@ -103,10 +103,36 @@ struct TranscriptionServiceTests {
         #expect(result?.text == "[Silence]\n[BLANK_AUDIO]\n(humming)")
     }
 
+    @Test @MainActor func ordinaryFarewellRepeatsRemainValidTranscript() async {
+        let service = makeService(deviceID: "device-a")
+        service.transcribeImpl = { _, _, _ in "Thank you. Thank you. Bye." }
+
+        let result = await service.transcribeAudio(filePath: "file.m4a")
+
+        #expect(result?.text == "Thank you. Thank you. Bye.")
+    }
+
+    @Test @MainActor func catastrophicRepeatedSuffixReturnsExplicitFailure() async {
+        let service = makeService(deviceID: "device-a")
+        let repeated = Array(repeating: "Thank you", count: 12).joined(separator: " ")
+        service.transcribeImpl = { _, _, _ in .text([
+            TranscriptPiece(text: repeated, start: 0, end: 10)
+        ]) }
+
+        let outcome = await service.transcribeAudioOutcome(filePath: "file.m4a")
+
+        guard case .whisperError(let diagnostic, let retryable) = outcome else {
+            Issue.record("Expected catastrophic repetition failure")
+            return
+        }
+        #expect(diagnostic == "catastrophic repetition detected")
+        #expect(!retryable)
+    }
+
     @Test @MainActor func transcribeAudioReturnsNilWhenModelNotLoaded() async {
         let service = TranscriptionService()
         service.setModelManager(UnloadedModelManager())
-        service.transcribeImpl = { _, _ in "hello" }
+        service.transcribeImpl = { _, _, _ in "hello" }
 
         let result = await service.transcribeAudio(filePath: "file.m4a")
 
@@ -127,7 +153,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func originDeviceClaimsQueuedNoteImmediately() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "origin", now: now)
-        service.transcribeImpl = { _, _ in "Transcribed text" }
+        service.transcribeImpl = { _, _, _ in "Transcribed text" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "origin"
@@ -144,7 +170,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func nonOriginDeviceDoesNotClaimQueuedNoteBeforeGracePeriod() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "desktop", now: now)
-        service.transcribeImpl = { _, _ in "Should not run" }
+        service.transcribeImpl = { _, _, _ in "Should not run" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -163,7 +189,7 @@ struct TranscriptionServiceTests {
             deviceID: "desktop",
             now: queuedAt.addingTimeInterval(301)
         )
-        service.transcribeImpl = { _, _ in "Desktop result" }
+        service.transcribeImpl = { _, _, _ in "Desktop result" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -178,7 +204,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func foreignOwnerWithActiveLeaseIsSkipped() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "desktop", now: now)
-        service.transcribeImpl = { _, _ in "Should not run" }
+        service.transcribeImpl = { _, _, _ in "Should not run" }
 
         let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -199,7 +225,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func expiredForeignLeaseIsTakenOver() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "desktop", now: now)
-        service.transcribeImpl = { _, _ in "Desktop takeover" }
+        service.transcribeImpl = { _, _, _ in "Desktop takeover" }
 
         let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -219,7 +245,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func explicitTakeOverClaimsActiveRemoteTranscription() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "desktop", now: now)
-        service.transcribeImpl = { _, _ in "Manual takeover" }
+        service.transcribeImpl = { _, _, _ in "Manual takeover" }
 
         let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -247,7 +273,7 @@ struct TranscriptionServiceTests {
         service.setModelManager(modelManager)
         service.deviceIDProvider = { "phone" }
         service.nowProvider = { now }
-        service.transcribeImpl = { _, _ in "Queued result" }
+        service.transcribeImpl = { _, _, _ in "Queued result" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -266,7 +292,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "phone", now: now)
         service.nowProvider = { now }
         service.audioDurationProvider = { _ in 20 }
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             now = now.addingTimeInterval(5)
             return "Telemetry result"
         }
@@ -291,7 +317,7 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         var attempts = 0
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             attempts += 1
             return "   \n"  // Whisper ran but produced nothing usable → a real error
         }
@@ -323,7 +349,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func forceRetranscribeIgnoresStaleResumeSidecar() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             .text([TranscriptPiece(words: [WordToken(word: "fresh", start: 0.0, end: 0.5)])])
         }
 
@@ -344,7 +370,9 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionState == .completed)
         #expect(!note.transcription.contains("old stale"))       // no resumed leftovers
         #expect(note.transcription.contains("fresh"))
-        #expect(note.wordTimings.allSatisfy { $0.word == "fresh" })
+        #expect(note.wordTimings.allSatisfy {
+            $0.word.trimmingCharacters(in: .whitespacesAndNewlines) == "fresh"
+        })
         #expect(note.wordTimings.first?.start == 0.0)             // ran from frame 0
     }
 
@@ -352,7 +380,7 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         var attempts = 0
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             attempts += 1
             return attempts == 1 ? .whisperError("transient", retryable: true) : "recovered"
         }
@@ -374,7 +402,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func noSpeechCompletesNoteAsNoSpeechWithoutError() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
-        service.transcribeImpl = { _, _ in .noSpeech }
+        service.transcribeImpl = { _, _, _ in .noSpeech }
 
         let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -395,7 +423,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func modelUnavailableKeepsNoteQueuedWithoutFailure() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
-        service.transcribeImpl = { _, _ in .modelUnavailable }
+        service.transcribeImpl = { _, _, _ in .modelUnavailable }
 
         let note = VoiceNote(title: "Queued", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -415,7 +443,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func nonSpeechOnlyTranscriptionCompletesAsBlankAudio() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
-        service.transcribeImpl = { _, _ in "[BLANK_AUDIO]" }
+        service.transcribeImpl = { _, _, _ in "[BLANK_AUDIO]" }
 
         let note = VoiceNote(title: "Blank", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"
@@ -436,7 +464,7 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         let gate = TranscriptionGate()
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             await gate.wait()
             return "stale result"
         }
@@ -479,7 +507,7 @@ struct TranscriptionServiceTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         let gate = TranscriptionGate()
-        service.transcribeImpl = { _, _ in
+        service.transcribeImpl = { _, _, _ in
             await gate.wait()
             return "should not finish"
         }
@@ -514,7 +542,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "phone", now: now)
         let gate = TranscriptionGate()
         let firstPath = makeTestAudioPath()
-        service.transcribeImpl = { filePath, _ in
+        service.transcribeImpl = { filePath, _, _ in
             if filePath == firstPath {
                 await gate.wait()
                 return "first result"
@@ -555,7 +583,7 @@ struct TranscriptionServiceTests {
     @Test @MainActor func ownedClaimedNoteResumesOnCurrentDevice() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
-        service.transcribeImpl = { _, _ in "Recovered result" }
+        service.transcribeImpl = { _, _, _ in "Recovered result" }
 
         let note = VoiceNote(title: "Claimed", audioFilePath: makeTestAudioPath())
         note.transcriptionOriginDeviceID = "phone"

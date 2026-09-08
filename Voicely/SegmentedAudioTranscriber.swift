@@ -15,6 +15,9 @@ final class SegmentedAudioTranscriber {
     /// Per-segment transcription. Defaults to the real service; tests override.
     var transcribeSegmentOutcome: (URL) async -> TranscriptionOutcome
 
+    /// Builds one shared snapshot for a segment checkpoint and its UI preview.
+    var joinTranscriptPieces: ([String]) -> String = { $0.joined(separator: "\n") }
+
     /// Chooses the end frame of the next segment within [start, target].
     /// Defaults to the neural-VAD cut, run off the main actor; tests inject a
     /// deterministic value.
@@ -190,14 +193,15 @@ final class SegmentedAudioTranscriber {
         let batchFrames = Int64(Double(IncrementalTranscriptionTiming.defaultIntervalSeconds) * info.sampleRate)
         let resumed = progressStore.load(for: noteID)
         var start: Int64 = resumed?.lastFrame ?? 0
-        var pieces: [String] = (resumed?.accumulatedText).flatMap { $0.isEmpty ? [] : [$0] } ?? []
+        var accumulatedText = resumed?.accumulatedText ?? ""
+        var pieces: [String] = accumulatedText.isEmpty ? [] : [accumulatedText]
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         var producedAnyText = !pieces.isEmpty
         var segmentIndex = 0
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
 
-        transcriptionService.reportExternalPreview(pieces.joined(separator: "\n"), for: noteID)
+        transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
         while start < info.totalFrames {
             if transcriptionService.isDiscarded(noteID: noteID) { return }
             if transcriptionService.isRunCancelled(noteID: noteID) || Task.isCancelled {
@@ -232,8 +236,9 @@ final class SegmentedAudioTranscriber {
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
                 pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
                 start = end
+                accumulatedText = joinTranscriptPieces(pieces)
                 progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
-                                         accumulatedText: pieces.joined(separator: "\n"),
+                                         accumulatedText: accumulatedText,
                                          failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
                 continue
             }
@@ -271,10 +276,11 @@ final class SegmentedAudioTranscriber {
             }
 
             start = end
+            accumulatedText = joinTranscriptPieces(pieces)
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
-                                     accumulatedText: pieces.joined(separator: "\n"),
+                                     accumulatedText: accumulatedText,
                                      failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
-            transcriptionService.reportExternalPreview(pieces.joined(separator: "\n"), for: noteID)
+            transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
@@ -288,7 +294,7 @@ final class SegmentedAudioTranscriber {
             return
         }
 
-        note.transcription = pieces.joined(separator: "\n")
+        note.transcription = accumulatedText
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
         note.completeTranscription()

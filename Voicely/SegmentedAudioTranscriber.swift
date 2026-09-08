@@ -240,6 +240,7 @@ final class SegmentedAudioTranscriber {
                 progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                          accumulatedText: accumulatedText,
                                          failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
+                transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
                 continue
             }
 

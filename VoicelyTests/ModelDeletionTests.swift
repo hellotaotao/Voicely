@@ -103,13 +103,16 @@ struct ModelDeletionTests {
         try await waitUntil { pending != nil }
         await manager.deleteModel("small")
         #expect(manager.downloadedModels.contains("small"))
+        #expect(manager.errorMessage?.contains("still loading") == true)
         await manager.loadModel("other")
         await manager.deleteModel("small")
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("small").path))
+        #expect(manager.errorMessage?.contains("still loading") == true)
         pending?.resume(throwing: CancellationError())
         await loading.value
         await manager.deleteModel("small")
         #expect(!manager.downloadedModels.contains("small"))
+        #expect(manager.errorMessage == nil)
         #expect(manager.loadedModelIdentifierInMemory == "other")
     }
 

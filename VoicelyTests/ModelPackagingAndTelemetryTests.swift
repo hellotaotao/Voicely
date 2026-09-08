@@ -90,11 +90,6 @@ struct ModelPackagingAndTelemetryTests {
         #expect(ModelManager.shouldPrewarmBeforeInitialLoad(redownload: true) == false)
     }
 
-    @Test func modelLoadingFallsBackToPrewarmOnlyAfterDirectLoadFailure() {
-        #expect(ModelManager.shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: false) == true)
-        #expect(ModelManager.shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: true) == false)
-    }
-
     @Test func voiceNoteAveragesCompletedTelemetrySamples() {
         let note = VoiceNote(title: "Telemetry")
         let route = TranscriptionComputeRoute(

@@ -272,9 +272,6 @@ class ModelManager: ObservableObject {
         false
     }
 
-    nonisolated static func shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: Bool) -> Bool {
-        !alreadyPrewarmed
-    }
     
     func loadModel(_ model: String, redownload: Bool = false) async {
         guard !deletingModels.contains(model) else {
@@ -420,8 +417,11 @@ class ModelManager: ObservableObject {
 
     func deleteModel(_ model: String) async {
         // Superseded requests remain protected until their loaders actually return.
-        guard !loadingRequests.values.contains(model),
-              !deletingModels.contains(model),
+        guard !loadingRequests.values.contains(model) else {
+            errorMessage = "This model is still loading. Please try deleting it again when loading finishes."
+            return
+        }
+        guard !deletingModels.contains(model),
               downloadedModels.contains(model) else { return }
 
         errorMessage = nil

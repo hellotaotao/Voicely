@@ -55,4 +55,30 @@ struct TranscriptSnapshotReuseTests {
         #expect(checkpoint.lastFrame == 58 * 16_000)
         #expect(note.transcriptionState == .queued)
     }
+    @Test func extractionFailurePublishesCheckpointBeforeNextSegment() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let store = SegmentedAudioTestSupport.makeStore()
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let service = TranscriptionService()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        transcriber.nextCutFrame = { _, _, target in
+            try? FileManager.default.removeItem(at: url)
+            return target
+        }
+        var observedCheckpoint = false
+        transcriber.shouldStopForBackground = {
+            guard let checkpoint = store.load(for: note.id) else { return false }
+            observedCheckpoint = true
+            #expect(!checkpoint.accumulatedText.isEmpty)
+            #expect(service.transcriptionPreview(for: note.id) == checkpoint.accumulatedText)
+            return true
+        }
+        await transcriber.transcribe(note: note, sourceURL: url)
+        #expect(observedCheckpoint)
+        #expect(note.transcriptionState == .queued)
+    }
 }

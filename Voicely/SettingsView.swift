@@ -411,7 +411,7 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "trash")
-                        Text("Delete Downloaded Model")
+                        Text(modelManager.deletingModels.contains(modelManager.selectedModel) ? "Deleting..." : "Delete Downloaded Model")
                     }
                     .font(.subheadline.weight(.medium))
                     .frame(maxWidth: .infinity)
@@ -422,9 +422,11 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
         }
+        .disabled(modelManager.deletingModels.contains(modelManager.selectedModel))
         .alert("Delete Model", isPresented: $showingModelDeletion) {
             Button("Delete", role: .destructive) {
-                modelManager.deleteModel(modelManager.selectedModel)
+                let model = modelManager.selectedModel
+                Task { await modelManager.deleteModel(model) }
             }
             Button("Cancel", role: .cancel) { }
         } message: {

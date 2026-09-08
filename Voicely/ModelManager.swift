@@ -117,6 +117,7 @@ class ModelManager: ObservableObject {
     @Published var localModels: [String] = []
     @Published private(set) var downloadedModels: [String] = []
     @Published var availableModels: [String] = []
+    @Published private(set) var deletingModels: Set<String> = []
     @Published var selectedModel: String = ModelManager.platformDefaultModel {
         didSet {
             // Save selected model to UserDefaults
@@ -138,13 +139,26 @@ class ModelManager: ObservableObject {
     typealias LoadProgress = @MainActor @Sendable (ModelState, Float) -> Void
     typealias Loader = @MainActor (ModelLoadRequest, @escaping LoadProgress) async throws -> ModelLoadResult
 
+    typealias ModelFileRemoval = @Sendable (URL) throws -> Void
+
+    private let downloadedModelsRoot: URL?
+    private let injectedBundledModelsRoot: URL?
+    private let removeModelFiles: ModelFileRemoval
     private let injectedLoader: Loader?
     private var activeLoad: (id: UUID, request: ModelLoadRequest, task: Task<Void, Never>)?
     private var loadedRequest: ModelLoadRequest?
     private var loadingRequests: [UUID: String] = [:]
 
-    init(loader: Loader? = nil) {
+    init(
+        loader: Loader? = nil,
+        downloadedModelsRoot: URL? = nil,
+        bundledModelsRoot: URL? = nil,
+        removeModelFiles: @escaping ModelFileRemoval = { try FileManager.default.removeItem(at: $0) }
+    ) {
         injectedLoader = loader
+        self.downloadedModelsRoot = downloadedModelsRoot
+        self.injectedBundledModelsRoot = bundledModelsRoot
+        self.removeModelFiles = removeModelFiles
         // Preserve user's previous selection. Apply platform default only when no saved model exists.
         if let savedModel = UserDefaults.standard.string(forKey: .selectedModelKey) {
             if !savedModel.isEmpty {
@@ -204,7 +218,7 @@ class ModelManager: ObservableObject {
             return
         }
         
-        let modelPath = documents.appendingPathComponent(modelStorage).path
+        let modelPath = (downloadedModelsRoot ?? documents.appendingPathComponent(modelStorage)).path
         localModelPath = modelPath
         var models: [String] = []
         
@@ -237,7 +251,7 @@ class ModelManager: ObservableObject {
     
     private var currentLoadedModel: String?
     private var bundledModelsRoot: URL? {
-        Bundle.main.resourceURL
+        injectedBundledModelsRoot ?? Bundle.main.resourceURL
     }
 
     var loadedModelIdentifierInMemory: String? {
@@ -263,6 +277,10 @@ class ModelManager: ObservableObject {
     }
     
     func loadModel(_ model: String, redownload: Bool = false) async {
+        guard !deletingModels.contains(model) else {
+            errorMessage = "Cannot load model while its files are being deleted. Please try again when deletion finishes."
+            return
+        }
         let request = ModelLoadRequest(
             model: model,
             redownload: redownload,
@@ -400,55 +418,47 @@ class ModelManager: ObservableObject {
         }
     }
 
-    func deleteModel(_ model: String) {
-        // Do not delete files while an active request may still be using them.
-        guard !loadingRequests.values.contains(model) else { return }
-        guard downloadedModels.contains(model) else { return }
-        
-        let modelFolder = URL(fileURLWithPath: localModelPath).appendingPathComponent(model)
-        
-        do {
-            try FileManager.default.removeItem(at: modelFolder)
-            if let index = downloadedModels.firstIndex(of: model) {
-                downloadedModels.remove(at: index)
-            }
+    func deleteModel(_ model: String) async {
+        // Superseded requests remain protected until their loaders actually return.
+        guard !loadingRequests.values.contains(model),
+              !deletingModels.contains(model),
+              downloadedModels.contains(model) else { return }
 
-            if !Self.isBundledModel(
-                model,
-                bundledModelsRoot: bundledModelsRoot,
-                directoryName: bundledModelsDirectory
-            ), let index = localModels.firstIndex(of: model) {
-                localModels.remove(at: index)
-            }
-            
+        errorMessage = nil
+        let modelFolder = URL(fileURLWithPath: localModelPath).appendingPathComponent(model)
+        let removal = removeModelFiles
+        deletingModels.insert(model)
+        defer { deletingModels.remove(model) }
+
+        do {
+            // Keep recursive file I/O off the main actor; capture only immutable values.
+            try await Task.detached(priority: .utility) {
+                try removal(modelFolder)
+            }.value
+            downloadedModels.removeAll { $0 == model }
             let stillAvailableAsBuiltIn = Self.isBundledModel(
                 model,
                 bundledModelsRoot: bundledModelsRoot,
                 directoryName: bundledModelsDirectory
             )
-
-            if selectedModel == model || currentLoadedModel == model {
-                // If deleting the currently selected/loaded model, default to an available model
-                if selectedModel == model && !stillAvailableAsBuiltIn && !availableModels.isEmpty {
-                    let newModel = availableModels.first(where: { $0 != model }) ?? Self.platformDefaultModel
-                    selectedModel = newModel // This triggers didSet to persist to UserDefaults
-                    print("Changed selected model to \(newModel) after deletion")
+            if !stillAvailableAsBuiltIn {
+                localModels.removeAll { $0 == model }
+                if selectedModel == model && !availableModels.isEmpty {
+                    selectedModel = availableModels.first(where: { $0 != model }) ?? Self.platformDefaultModel
                 }
-
-                if !stillAvailableAsBuiltIn {
+                // A different model can finish loading while deletion is in flight.
+                if currentLoadedModel == model {
                     modelState = .unloaded
                     whisperKit = nil
                     currentLoadedModel = nil
                     loadedRequest = nil
                 }
             }
-            
-            print("Deleted model: \(model)")
         } catch {
-            print("Error deleting model: \(error)")
+            errorMessage = "Failed to delete model: \(error.localizedDescription)"
         }
     }
-    
+
     private func updateProgressBar(targetProgress: Float, maxTime: TimeInterval, progress: @escaping LoadProgress) async {
         let initialProgress = loadingProgressValue
         let decayConstant = -log(1 - targetProgress) / Float(maxTime)
@@ -486,10 +496,11 @@ class ModelManager: ObservableObject {
     }
     
     func getWhisperKit() -> WhisperKit? {
-        return whisperKit
+        return isLoadedModelBeingDeleted ? nil : whisperKit
     }
 
     func currentModelIdentifier() -> String? {
+        guard !isLoadedModelBeingDeleted else { return nil }
         if let currentLoadedModel {
             return currentLoadedModel
         }
@@ -501,8 +512,12 @@ class ModelManager: ObservableObject {
         return selectedModel
     }
 
+    private var isLoadedModelBeingDeleted: Bool {
+        currentLoadedModel.map { deletingModels.contains($0) } ?? false
+    }
+
     func isModelLoaded() -> Bool {
-        return modelState == .loaded && whisperKit != nil
+        return !isLoadedModelBeingDeleted && modelState == .loaded && whisperKit != nil
     }
     
     func isSelectedModelDownloaded() -> Bool {
@@ -518,7 +533,8 @@ class ModelManager: ObservableObject {
     }
 
     func isModelAvailableOffline(_ model: String) -> Bool {
-        localModels.contains(model) || Self.isBundledModel(
+        guard !deletingModels.contains(model) else { return false }
+        return localModels.contains(model) || Self.isBundledModel(
             model,
             bundledModelsRoot: bundledModelsRoot,
             directoryName: bundledModelsDirectory

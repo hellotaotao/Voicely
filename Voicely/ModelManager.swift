@@ -42,6 +42,23 @@ enum ModelState: CustomStringConvertible {
     }
 }
 
+struct ModelLoadRequest: Equatable {
+    let model: String
+    let redownload: Bool
+    let encoderComputeUnits: MLComputeUnits
+    let decoderComputeUnits: MLComputeUnits
+
+    func matchesLoadedConfiguration(_ other: Self) -> Bool {
+        model == other.model && encoderComputeUnits == other.encoderComputeUnits
+            && decoderComputeUnits == other.decoderComputeUnits
+    }
+}
+
+struct ModelLoadResult {
+    let whisperKit: WhisperKit
+    let sourceKind: LocalModelSourceKind
+}
+
 @MainActor
 class ModelManager: ObservableObject {
     private static let oldIPhoneModelThreshold = 12
@@ -118,7 +135,16 @@ class ModelManager: ObservableObject {
     private var disabledModels: [String] = []
     private let specializationProgressRatio: Float = 0.7
     
-    init() {
+    typealias LoadProgress = @MainActor @Sendable (ModelState, Float) -> Void
+    typealias Loader = @MainActor (ModelLoadRequest, @escaping LoadProgress) async throws -> ModelLoadResult
+
+    private let injectedLoader: Loader?
+    private var activeLoad: (id: UUID, request: ModelLoadRequest, task: Task<Void, Never>)?
+    private var loadedRequest: ModelLoadRequest?
+    private var loadingRequests: [UUID: String] = [:]
+
+    init(loader: Loader? = nil) {
+        injectedLoader = loader
         // Preserve user's previous selection. Apply platform default only when no saved model exists.
         if let savedModel = UserDefaults.standard.string(forKey: .selectedModelKey) {
             if !savedModel.isEmpty {
@@ -237,158 +263,146 @@ class ModelManager: ObservableObject {
     }
     
     func loadModel(_ model: String, redownload: Bool = false) async {
-        print("=== loadModel called ===")
-        print("Loading model: \(model)")
-        print("Device: \(WhisperKit.deviceName())")
-        print("Compute Options - Audio Encoder: \(encoderComputeUnits), Text Decoder: \(decoderComputeUnits)")
-        
-        // Clear any previous error
-        errorMessage = nil
-        
-        // Skip if the same model is already loaded in memory and we're not forcing a redownload
-        // This check is independent of modelState because user might have switched selection
-        // (which sets modelState to .unloaded) but the model is still in memory
-        if !redownload && whisperKit != nil && currentLoadedModel == model {
-            print("Model '\(model)' is already loaded in memory, skipping reload")
-            modelState = .loaded
-            loadingProgressValue = 1.0
+        let request = ModelLoadRequest(
+            model: model,
+            redownload: redownload,
+            encoderComputeUnits: encoderComputeUnits,
+            decoderComputeUnits: decoderComputeUnits
+        )
+        if let activeLoad, activeLoad.request == request {
+            await activeLoad.task.value
             return
         }
-        
+
+        activeLoad?.task.cancel()
+        activeLoad = nil
+        errorMessage = nil
+        if !redownload, whisperKit != nil,
+           let loadedRequest, request.matchesLoadedConfiguration(loadedRequest) {
+            modelState = .loaded
+            loadingProgressValue = 1
+            return
+        }
+
         whisperKit = nil
         currentLoadedModel = nil
+        loadedRequest = nil
         modelState = .loading
-        loadingProgressValue = 0.0
-        
-        do {
-            let computeOptions = ModelComputeOptions(
-                audioEncoderCompute: encoderComputeUnits,
-                textDecoderCompute: decoderComputeUnits
-            )
-
-#if DEBUG
-            let enableVerboseWhisperLogs = UserDefaults.standard.bool(forKey: "whisperVerboseLogging")
-#else
-            let enableVerboseWhisperLogs = false
-#endif
-            
-            let config = WhisperKitConfig(
-                computeOptions: computeOptions,
-                verbose: enableVerboseWhisperLogs,
-                logLevel: {
-#if DEBUG
-                    return enableVerboseWhisperLogs ? .debug : .error
-#else
-                    return .error
-#endif
-                }(),
-                prewarm: false,
-                load: false,
-                download: false
-            )
-            
-            whisperKit = try await WhisperKit(config)
-            
-            guard let whisperKit = whisperKit else {
-                print("ERROR: WhisperKit initialization returned nil")
-                errorMessage = "Failed to initialize WhisperKit"
-                modelState = .unloaded
-                return
+        loadingProgressValue = 0
+        let id = UUID()
+        loadingRequests[id] = model
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.loadingRequests.removeValue(forKey: id) }
+            let progress: LoadProgress = { [weak self] state, value in
+                guard let self, self.activeLoad?.id == id else { return }
+                self.modelState = state
+                self.loadingProgressValue = value
             }
-            
-            var folder: URL?
-            let localSource = Self.preferredLocalModelSource(
-                for: model,
+            do {
+                let result: ModelLoadResult
+                if let loader = self.injectedLoader {
+                    result = try await loader(request, progress)
+                } else {
+                    result = try await self.performLoad(request, progress: progress)
+                }
+                try Task.checkCancellation()
+                guard self.activeLoad?.id == id else { return }
+                self.whisperKit = result.whisperKit
+                self.currentLoadedModel = request.model
+                self.loadedRequest = request
+                if result.sourceKind != .bundled, !self.downloadedModels.contains(request.model) {
+                    self.downloadedModels.append(request.model)
+                }
+                if !self.localModels.contains(request.model) {
+                    self.localModels.append(request.model)
+                }
+                self.loadingProgressValue = 1
+                self.modelState = .loaded
+            } catch {
+                guard self.activeLoad?.id == id else { return }
+                self.errorMessage = error is CancellationError ? nil : "Failed to load model: \(error.localizedDescription)"
+                self.modelState = .unloaded
+                self.loadingProgressValue = 0
+            }
+            if self.activeLoad?.id == id {
+                self.activeLoad = nil
+            }
+        }
+        activeLoad = (id, request, task)
+        await task.value
+    }
+
+    private func performLoad(_ request: ModelLoadRequest, progress: @escaping LoadProgress) async throws -> ModelLoadResult {
+        // Retry within the owning request; recursively calling loadModel would join itself.
+        var redownload = request.redownload
+        while true {
+            try Task.checkCancellation()
+            let computeOptions = ModelComputeOptions(
+                audioEncoderCompute: request.encoderComputeUnits,
+                textDecoderCompute: request.decoderComputeUnits
+            )
+#if DEBUG
+            let verbose = UserDefaults.standard.bool(forKey: "whisperVerboseLogging")
+#else
+            let verbose = false
+#endif
+            let kit = try await WhisperKit(WhisperKitConfig(
+                computeOptions: computeOptions,
+                verbose: verbose,
+                logLevel: verbose ? .debug : .error,
+                prewarm: false, load: false, download: false
+            ))
+            try Task.checkCancellation()
+            let source = Self.preferredLocalModelSource(
+                for: request.model,
                 downloadedModels: downloadedModels,
                 downloadedModelsRootPath: localModelPath,
                 bundledModelsRoot: bundledModelsRoot
             )
-
-            // Check if model is available locally
-            if let localSource, !redownload {
-                folder = localSource.url
-                print("Using \(localSource.kind) model at: \(folder?.path ?? "nil")")
+            let sourceKind: LocalModelSourceKind
+            if let source, !redownload {
+                kit.modelFolder = source.url
+                sourceKind = source.kind
             } else {
-                // Download the model
-                modelState = .downloading
-                print("Downloading model: \(model) from repo: \(repoName)")
-                
-                // Try downloading without device-specific filtering by using the exact model name
+                progress(.downloading, 0)
+                kit.modelFolder = try await WhisperKit.download(variant: request.model, from: repoName) { download in
+                    let value = Float(download.fractionCompleted) * 0.7
+                    Task { @MainActor in progress(.downloading, value) }
+                }
+                sourceKind = .downloaded
+            }
+            try Task.checkCancellation()
+            progress(.loading, specializationProgressRatio)
+            do {
+                try await kit.loadModels()
+                try Task.checkCancellation()
+            } catch {
+                if error is CancellationError { throw error }
+                try Task.checkCancellation()
                 do {
-                    folder = try await WhisperKit.download(variant: model, from: repoName) { [self] progress in
-                        Task { @MainActor in
-                            self.loadingProgressValue = Float(progress.fractionCompleted) * self.specializationProgressRatio
-                        }
-                    }
-                    print("Download succeeded, folder: \(folder?.path ?? "nil")")
+                    try await prewarmModelsForCurrentDevice(kit, progress: progress)
+                    try Task.checkCancellation()
+                    progress(.loading, specializationProgressRatio + 0.9 * (1 - specializationProgressRatio))
+                    try await kit.loadModels()
+                    try Task.checkCancellation()
                 } catch {
-                    print("Download failed with error: \(error)")
-                    // If the model name doesn't work, the error will propagate
+                    if error is CancellationError { throw error }
+                    try Task.checkCancellation()
+                    if !redownload {
+                        redownload = true
+                        continue
+                    }
                     throw error
                 }
             }
-            
-            loadingProgressValue = specializationProgressRatio
-            
-            if let modelFolder = folder {
-                whisperKit.modelFolder = modelFolder
-
-                let resolvedSourceKind: LocalModelSourceKind
-                if let localSource, !redownload {
-                    resolvedSourceKind = localSource.kind
-                } else {
-                    resolvedSourceKind = .downloaded
-                }
-
-                modelState = .loading
-                do {
-                    try await whisperKit.loadModels()
-                } catch {
-                    print("Loading failed before prewarm fallback: \(error.localizedDescription)")
-
-                    guard Self.shouldRetryWithPrewarmAfterLoadFailure(alreadyPrewarmed: false) else {
-                        throw error
-                    }
-
-                    do {
-                        print("Retrying once with prewarm before loading...")
-                        try await prewarmModelsForCurrentDevice(whisperKit)
-                        loadingProgressValue = specializationProgressRatio + 0.9 * (1 - specializationProgressRatio)
-                        modelState = .loading
-                        try await whisperKit.loadModels()
-                    } catch {
-                        if !redownload {
-                            print("Loading failed after prewarm fallback. Retrying with redownload...")
-                            await loadModel(model, redownload: true)
-                            return
-                        }
-                        throw error
-                    }
-                }
-                
-                if !downloadedModels.contains(model), resolvedSourceKind != .bundled {
-                    downloadedModels.append(model)
-                }
-
-                if !localModels.contains(model) {
-                    localModels.append(model)
-                }
-                
-                loadingProgressValue = 1.0
-                modelState = .loaded
-                currentLoadedModel = model
-                
-                print("Model loaded successfully: \(model)")
-            }
-        } catch {
-            print("Failed to load model: \(error)")
-            errorMessage = "Failed to load model: \(error.localizedDescription)"
-            modelState = .unloaded
-            loadingProgressValue = 0.0
+            return ModelLoadResult(whisperKit: kit, sourceKind: sourceKind)
         }
     }
-    
+
     func deleteModel(_ model: String) {
+        // Do not delete files while an active request may still be using them.
+        guard !loadingRequests.values.contains(model) else { return }
         guard downloadedModels.contains(model) else { return }
         
         let modelFolder = URL(fileURLWithPath: localModelPath).appendingPathComponent(model)
@@ -425,6 +439,7 @@ class ModelManager: ObservableObject {
                     modelState = .unloaded
                     whisperKit = nil
                     currentLoadedModel = nil
+                    loadedRequest = nil
                 }
             }
             
@@ -434,7 +449,7 @@ class ModelManager: ObservableObject {
         }
     }
     
-    private func updateProgressBar(targetProgress: Float, maxTime: TimeInterval) async {
+    private func updateProgressBar(targetProgress: Float, maxTime: TimeInterval, progress: @escaping LoadProgress) async {
         let initialProgress = loadingProgressValue
         let decayConstant = -log(1 - targetProgress) / Float(maxTime)
         let startTime = Date()
@@ -445,7 +460,7 @@ class ModelManager: ObservableObject {
             let progressIncrement = (1 - initialProgress) * (1 - decayFactor)
             let currentProgress = initialProgress + progressIncrement
             
-            loadingProgressValue = currentProgress
+            progress(.prewarming, currentProgress)
             
             if currentProgress >= targetProgress {
                 break
@@ -459,10 +474,10 @@ class ModelManager: ObservableObject {
         }
     }
 
-    private func prewarmModelsForCurrentDevice(_ whisperKit: WhisperKit) async throws {
-        modelState = .prewarming
+    private func prewarmModelsForCurrentDevice(_ whisperKit: WhisperKit, progress: @escaping LoadProgress) async throws {
+        progress(.prewarming, specializationProgressRatio)
         let progressTask = Task {
-            await updateProgressBar(targetProgress: 0.9, maxTime: 240)
+            await updateProgressBar(targetProgress: 0.9, maxTime: 240, progress: progress)
         }
         defer {
             progressTask.cancel()

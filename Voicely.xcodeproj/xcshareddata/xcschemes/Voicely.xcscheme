@@ -98,23 +98,5 @@
    <ArchiveAction
       buildConfiguration = "Release"
       revealArchiveInOrganizer = "YES">
-      <PreActions>
-         <ExecutionAction
-            ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
-            <ActionContent
-               title = "Run Script"
-               scriptText = "# Type a script or drag a script file from your workspace to insert its path.&#10;cd &quot;$PROJECT_DIR&quot; || exit 1&#10;echo &quot;[Archive Tagging] cwd=$(pwd)&quot;&#10;TIMESTAMP=$(date +archive-%Y%m%d-%H%M%S)&#10;echo &quot;[Archive Tagging] will tag: $TIMESTAMP&quot;&#10;git tag -a &quot;$TIMESTAMP&quot; -m &quot;Archive from Xcode at $TIMESTAMP&quot;&#10;echo &quot;[Archive Tagging] tag done&quot;&#10;git push origin &quot;$TIMESTAMP&quot;&#10;echo &quot;[Archive Tagging] push done&quot;&#10;">
-               <EnvironmentBuildable>
-                  <BuildableReference
-                     BuildableIdentifier = "primary"
-                     BlueprintIdentifier = "2B1821F52DEB579E00550CD1"
-                     BuildableName = "Voicely.app"
-                     BlueprintName = "Voicely"
-                     ReferencedContainer = "container:Voicely.xcodeproj">
-                  </BuildableReference>
-               </EnvironmentBuildable>
-            </ActionContent>
-         </ExecutionAction>
-      </PreActions>
    </ArchiveAction>
 </Scheme>

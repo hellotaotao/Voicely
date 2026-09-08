@@ -11,6 +11,20 @@ import Combine
 import Foundation
 import os
 
+#if DEBUG
+/// A callback duration comparison, not evidence of a hardware audio overload.
+struct AudioTapTiming {
+    let frameCount: UInt32
+    let sampleRate: Double
+
+    func exceedsBufferPeriod(elapsedNanoseconds: UInt64) -> Bool {
+        guard frameCount > 0, sampleRate.isFinite, sampleRate > 0 else { return false }
+        let periodNanoseconds = Double(frameCount) / sampleRate * 1_000_000_000
+        return Double(elapsedNanoseconds) > periodNanoseconds
+    }
+}
+#endif
+
 struct RecordingStopResult {
     let filePath: String?
     let duration: TimeInterval
@@ -346,7 +360,31 @@ class AudioRecordingService: ObservableObject {
             state.isWritingSuspended = false
         }
 
+        #if DEBUG
+        // Construct the log on the main actor, never lazily inside the audio tap.
+        let tapPerformanceLog = OSLog(subsystem: "com.hellotaotao.Voicely", category: "AudioTapPerformance")
+        #endif
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+            #if DEBUG
+            let measureTap = tapPerformanceLog.signpostsEnabled
+            let signpostID = measureTap ? OSSignpostID(log: tapPerformanceLog) : .invalid
+            let startedAt = measureTap ? DispatchTime.now().uptimeNanoseconds : 0
+            if measureTap {
+                os_signpost(.begin, log: tapPerformanceLog, name: "AudioTap", signpostID: signpostID)
+            }
+            defer {
+                if measureTap {
+                    let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+                    os_signpost(.end, log: tapPerformanceLog, name: "AudioTap", signpostID: signpostID)
+                    let timing = AudioTapTiming(frameCount: buffer.frameLength, sampleRate: buffer.format.sampleRate)
+                    if timing.exceedsBufferPeriod(elapsedNanoseconds: elapsed) {
+                        os_signpost(.event, log: tapPerformanceLog, name: "AudioTapExceededBufferPeriod",
+                                    signpostID: signpostID, "elapsed_ns=%llu frames=%u sample_rate=%f",
+                                    elapsed, buffer.frameLength, buffer.format.sampleRate)
+                    }
+                }
+            }
+            #endif
             guard let mono = Self.mixedDownToMono(buffer) else { return }
             self?.processTapBuffer(mono, inputFormat: monoInputFormat, outputFormat: targetFormat)
         }

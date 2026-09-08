@@ -16,6 +16,8 @@ struct RecordingStopResult {
     let duration: TimeInterval
 
     private let awaitConversion: (@Sendable () async -> Void)?
+    private var resolvePath: (@Sendable () async -> String?)?
+    private var cleanup: (@Sendable () async -> Void)?
 
     init(
         filePath: String?,
@@ -25,6 +27,64 @@ struct RecordingStopResult {
         self.filePath = filePath
         self.duration = duration
         self.awaitConversion = awaitConversion
+    }
+
+    /// Starts conversion without transferring ownership of the PCM source.
+    /// The caller releases that source only after incremental final-flush finishes.
+    static func converting(
+        sourceURL: URL,
+        destinationURL: URL,
+        duration: TimeInterval,
+        convert: @escaping @Sendable (URL, URL) async throws -> Void
+    ) -> RecordingStopResult {
+        let task = Task.detached(priority: .utility) { () -> URL in
+            do {
+                try await convert(sourceURL, destinationURL)
+                let size = try destinationURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size > 0 else { throw CocoaError(.fileWriteUnknown) }
+                return destinationURL
+            } catch {
+                // A failed export can leave an unusable partial destination.
+                try? FileManager.default.removeItem(at: destinationURL)
+                let fallbackURL = destinationURL.deletingPathExtension().appendingPathExtension("caf")
+                do {
+                    try FileManager.default.copyItem(at: sourceURL, to: fallbackURL)
+                    return fallbackURL
+                } catch {
+                    // Never discard the only recording, even if durable storage is unavailable.
+                    return sourceURL
+                }
+            }
+        }
+        var result = RecordingStopResult(
+            filePath: destinationURL.lastPathComponent,
+            duration: duration,
+            awaitConversion: { _ = await task.value }
+        )
+        result.resolvePath = {
+            let resolved = await task.value
+            return resolved == sourceURL ? resolved.path : resolved.lastPathComponent
+        }
+        result.cleanup = {
+            let resolved = await task.value
+            // Preserve the source if conversion and durable fallback both failed.
+            guard resolved != sourceURL,
+                  FileManager.default.fileExists(atPath: resolved.path) else { return }
+            try? FileManager.default.removeItem(at: sourceURL)
+        }
+        return result
+    }
+
+    /// Returns an existing playable path instead of the optimistic M4A filename.
+    func resolvedFilePath() async -> String? {
+        if let resolvePath { return await resolvePath() }
+        await awaitConversion?()
+        return filePath
+    }
+
+    /// Call only after every PCM reader, including final-flush, has finished.
+    func cleanupTemporaryAudio() async {
+        await cleanup?()
     }
 
     func awaitConversionIfNeeded(forIncrementalTranscript transcript: String) async {
@@ -74,8 +134,11 @@ class AudioRecordingService: ObservableObject {
     private let sharedState = OSAllocatedUnfairLock<SharedState>(initialState: SharedState())
 
     private var engine: AVAudioEngine?
-    private nonisolated(unsafe) var audioFile: AVAudioFile?
-    private nonisolated(unsafe) var converter: AVAudioConverter?
+    private struct AudioWriteTargets: @unchecked Sendable {
+        var file: AVAudioFile?
+        var converter: AVAudioConverter?
+    }
+    private let writeTargets = OSAllocatedUnfairLock(initialState: AudioWriteTargets())
     private var recordingTimer: Timer?
     private var pendingM4AURL: URL?
     private var prewarmTask: Task<Void, Never>?
@@ -239,8 +302,7 @@ class AudioRecordingService: ObservableObject {
         }
 
         let m4aURL = CloudStorageManager.shared.generateAudioFilename()
-        let pcmURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voicely_rec_\(Int(Date().timeIntervalSince1970)).caf")
+        let pcmURL = Self.makePCMTemporaryURL()
 
         pendingM4AURL = m4aURL
 
@@ -253,7 +315,8 @@ class AudioRecordingService: ObservableObject {
         )!
 
         do {
-            audioFile = try AVAudioFile(forWriting: pcmURL, settings: targetFormat.settings)
+            let file = try AVAudioFile(forWriting: pcmURL, settings: targetFormat.settings)
+            writeTargets.withLock { $0.file = file }
         } catch {
             debugLog("❌ [AudioRecordingService] Failed to create PCM file: \(error)")
             return nil
@@ -264,7 +327,16 @@ class AudioRecordingService: ObservableObject {
         let inputNode = newEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        // Avoid Catalyst's implicit stereo-to-mono conversion for USB microphones.
+        // Mix channels explicitly; the converter only changes the sample rate.
+        guard let monoInputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: inputFormat.sampleRate, channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: monoInputFormat, to: targetFormat) else {
+            engine = nil
+            writeTargets.withLock { $0 = AudioWriteTargets() }
+            return nil
+        }
+        writeTargets.withLock { $0.converter = converter }
 
         currentPCMFileURL = pcmURL
         sharedState.withLock { state in
@@ -274,7 +346,8 @@ class AudioRecordingService: ObservableObject {
         }
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.processTapBuffer(buffer, inputFormat: inputFormat, outputFormat: targetFormat)
+            guard let mono = Self.mixedDownToMono(buffer) else { return }
+            self?.processTapBuffer(mono, inputFormat: monoInputFormat, outputFormat: targetFormat)
         }
         newEngine.prepare()
 
@@ -284,7 +357,7 @@ class AudioRecordingService: ObservableObject {
             debugLog("❌ [AudioRecordingService] Engine start failed: \(error)")
             inputNode.removeTap(onBus: 0)
             engine = nil
-            audioFile = nil
+            writeTargets.withLock { $0 = AudioWriteTargets() }
             currentPCMFileURL = nil
             return nil
         }
@@ -313,7 +386,8 @@ class AudioRecordingService: ObservableObject {
         eng.stop()
         engine = nil
 
-        audioFile = nil   // Close the write handle
+        // Wait for any in-flight write before closing the file and starting export.
+        writeTargets.withLock { $0 = AudioWriteTargets() }
 
         stopUITimer()
 
@@ -321,7 +395,6 @@ class AudioRecordingService: ObservableObject {
         isPaused = false
 
         let duration = recordingDuration
-        let m4aFilename = pendingM4AURL?.lastPathComponent
 
         #if !os(macOS) && !targetEnvironment(macCatalyst)
         try? audioSession.setActive(false)
@@ -330,34 +403,23 @@ class AudioRecordingService: ObservableObject {
         #endif
         isRecordingSessionPrewarmed = false
 
-        let conversionTask: Task<Void, Never>?
+        let result: RecordingStopResult
         if let pcmURL = currentPCMFileURL, let m4aURL = pendingM4AURL {
-            conversionTask = Task(priority: .utility) { [weak self] in
-                guard let self else { return }
-                do {
-                    try await self.convertCAFToM4A(from: pcmURL, to: m4aURL)
-                    try? FileManager.default.removeItem(at: pcmURL)
-                    debugLog("✅ [AudioRecordingService] M4A conversion complete → \(m4aURL.lastPathComponent)")
-                } catch {
-                    debugLog("❌ [AudioRecordingService] M4A conversion failed: \(error)")
-                    // Keep the CAF file as backup — user's audio is not lost
-                }
-            }
+            result = .converting(
+                sourceURL: pcmURL,
+                destinationURL: m4aURL,
+                duration: duration,
+                convert: Self.convertCAFToM4A
+            )
         } else {
-            conversionTask = nil
+            result = RecordingStopResult(filePath: currentPCMFileURL?.path, duration: duration)
         }
 
         currentPCMFileURL = nil
         pendingM4AURL = nil
 
         debugLog("✅ [AudioRecordingService] Recording stopped. Duration: \(duration)s")
-        return RecordingStopResult(
-            filePath: m4aFilename,
-            duration: duration,
-            awaitConversion: {
-                await conversionTask?.value
-            }
-        )
+        return result
     }
 
     // MARK: Pause / Resume
@@ -435,7 +497,20 @@ class AudioRecordingService: ObservableObject {
         inputFormat: AVAudioFormat,
         outputFormat: AVAudioFormat
     ) {
-        guard let converter else { return }
+        writeTargets.withLock { targets in
+            guard let file = targets.file, let converter = targets.converter else { return }
+            processWritableBuffer(inputBuffer, inputFormat: inputFormat, outputFormat: outputFormat,
+                                  file: file, converter: converter)
+        }
+    }
+
+    private nonisolated func processWritableBuffer(
+        _ inputBuffer: AVAudioPCMBuffer,
+        inputFormat: AVAudioFormat,
+        outputFormat: AVAudioFormat,
+        file: AVAudioFile,
+        converter: AVAudioConverter
+    ) {
         guard inputBuffer.frameLength > 0 else { return }
         guard !sharedState.withLock({ $0.isWritingSuspended }) else { return }
 
@@ -471,7 +546,7 @@ class AudioRecordingService: ObservableObject {
 
         let wroteFrames: AVAudioFramePosition
         do {
-            try audioFile?.write(from: outputBuffer)
+            try file.write(from: outputBuffer)
             wroteFrames = AVAudioFramePosition(outputBuffer.frameLength)
         } catch {
             // Non-fatal: a dropped frame is preferable to a crash on the audio thread
@@ -484,6 +559,29 @@ class AudioRecordingService: ObservableObject {
             state.framePosition += wroteFrames
             state.latestLevel = rms
         }
+    }
+
+    /// Average Float32 channels before sample-rate conversion. Supports both
+    /// planar engine buffers and interleaved input without dropping a channel.
+    nonisolated static func mixedDownToMono(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard buffer.frameLength > 0, buffer.format.channelCount > 0,
+              let source = buffer.floatChannelData else { return nil }
+        if buffer.format.channelCount == 1, !buffer.format.isInterleaved { return buffer }
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: buffer.format.sampleRate, channels: 1, interleaved: false),
+              let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength),
+              let destination = mono.floatChannelData?[0] else { return nil }
+        let frames = vDSP_Length(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        let stride = vDSP_Stride(buffer.format.isInterleaved ? channels : 1)
+        var scale = 1 / Float(channels)
+        vDSP_vsmul(source[0], stride, &scale, destination, 1, frames)
+        for channel in 1..<channels {
+            let input = buffer.format.isInterleaved ? source[0].advanced(by: channel) : source[channel]
+            vDSP_vsma(input, stride, &scale, destination, 1, destination, 1, frames)
+        }
+        mono.frameLength = buffer.frameLength
+        return mono
     }
 
     private nonisolated func computeRMS(_ buffer: AVAudioPCMBuffer) -> Float {
@@ -504,9 +602,13 @@ class AudioRecordingService: ObservableObject {
         recordingDuration = Double(framePosition) / 16000.0
     }
 
+    nonisolated static func makePCMTemporaryURL(now: Date = Date()) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("voicely_rec_\(Int(now.timeIntervalSince1970))_\(UUID().uuidString).caf")
+    }
+
     // MARK: PCM (CAF) → M4A conversion
 
-    private func convertCAFToM4A(from cafURL: URL, to m4aURL: URL) async throws {
+    private nonisolated static func convertCAFToM4A(from cafURL: URL, to m4aURL: URL) async throws {
         let asset = AVURLAsset(url: cafURL)
         guard let exportSession = AVAssetExportSession(
             asset: asset,

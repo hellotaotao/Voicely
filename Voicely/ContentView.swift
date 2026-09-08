@@ -104,6 +104,7 @@ struct ContentView: View {
             resumePendingImports()
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
+            if !AppRuntime.isRunningTests { resumePendingImports() }
             Task { @MainActor in
                 await processQueuedTranscriptionsIfReady()
             }
@@ -198,7 +199,6 @@ struct ContentView: View {
 
             detailPane
         }
-        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
     @ViewBuilder
@@ -250,7 +250,6 @@ struct ContentView: View {
         .task {
             await setupServices()
         }
-        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
     private var splitNavigationView: some View {
@@ -275,7 +274,6 @@ struct ContentView: View {
         } detail: {
             detailPane
         }
-        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
     }
 
     @ToolbarContentBuilder
@@ -363,8 +361,7 @@ struct ContentView: View {
             }
         }
         .background(VoicelyTheme.groupedBackground)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(AccessibilityIdentifiers.Navigation.libraryScreen)
+        // Preserve the identifiers on the recording controls and note rows.
     }
 
     private func recordingControlsBar() -> some View {
@@ -462,7 +459,9 @@ struct ContentView: View {
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                            .disabled(recordingSession.isRecording(note))
                         }
+                        .deleteDisabled(recordingSession.isRecording(note))
                 }
                 .onDelete(perform: deleteNotes)
             }
@@ -812,9 +811,11 @@ struct ContentView: View {
     }
 
     private func deleteNoteAndAudio(_ note: VoiceNote) {
-        if transcriptionService.isLocallyTranscribing(note) {
-            transcriptionService.cancelTranscription(for: note)
-        }
+        guard !recordingSession.isRecording(note) else { return }
+        transcriptionService.discardTranscription(for: note)
+        transcriptionService.segmentProgressStore.deleteRetainedAttempts(for: note.id)
+        transcriptionService.segmentProgressStore.delete(for: note.id)
+        transcriptionService.segmentProgressStore.removeWorkingCopy(for: note.id)
 
         if !note.audioFilePath.isEmpty {
             cloudManager.deleteFile(at: note.audioFilePath)
@@ -1373,6 +1374,18 @@ struct RecordingControls: View {
 
 // MARK: - Voice Note Detail
 
+/// Playback identity excludes transient transcript and progress updates.
+struct AudioPlaybackSelection: Equatable {
+    let noteID: UUID
+    let filePath: String
+
+    init?(noteID: UUID, filePath: String, isRecording: Bool) {
+        guard !isRecording, !filePath.isEmpty else { return nil }
+        self.noteID = noteID
+        self.filePath = filePath
+    }
+}
+
 struct VoiceNoteDetailView: View {
     let note: VoiceNote
     @ObservedObject var audioService: AudioRecordingService
@@ -1386,7 +1399,10 @@ struct VoiceNoteDetailView: View {
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @State private var copyConfirmVisible = false
+    @State private var retainedAttempts: [RetainedTranscriptionAttempt] = []
+    @State private var transcriptionRequestError: String?
     @StateObject private var audioPlayer = AudioPlayerService()
+    @State private var loadedAudioSelection: AudioPlaybackSelection?
 
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -1534,6 +1550,10 @@ struct VoiceNoteDetailView: View {
         return minutes > 0 ? "\(minutes)m \(seconds)s" : "\(seconds)s"
     }
 
+    private var audioPlaybackSelection: AudioPlaybackSelection? {
+        AudioPlaybackSelection(noteID: note.id, filePath: note.audioFilePath, isRecording: isRecordingInProgress)
+    }
+
     private var shouldShowAudioPlayerCard: Bool {
         !note.audioFilePath.isEmpty && !isRecordingInProgress
     }
@@ -1578,6 +1598,14 @@ struct VoiceNoteDetailView: View {
         } message: {
             Text("Please load a model in Settings first to transcribe this recording.")
         }
+        .alert("Could not start transcription", isPresented: Binding(
+            get: { transcriptionRequestError != nil },
+            set: { if !$0 { transcriptionRequestError = nil } }
+        )) {
+            Button("OK", role: .cancel) { transcriptionRequestError = nil }
+        } message: {
+            Text(transcriptionRequestError ?? "")
+        }
         .confirmationDialog(
             "Re-transcribe this note?",
             isPresented: $showingRetranscribeConfirmation,
@@ -1589,13 +1617,47 @@ struct VoiceNoteDetailView: View {
             Text(retranscribeConfirmationMessage)
         }
         .onAppear {
+            refreshRetainedAttempts()
             loadAudioFile()
             editedTitle = note.title
             editedTranscription = note.transcription
+            #if DEBUG
+            if AppRuntime.isRunningTests,
+               let text = ProcessInfo.processInfo.environment["VOICELY_UI_TEST_RETAINED_ATTEMPT"] {
+                let store = transcriptionService.segmentProgressStore
+                store.save(.init(lastFrame: 464_000, totalFrames: 960_000,
+                    accumulatedText: text, failedRanges: [], updatedAt: Date()), for: note.id)
+                try? store.resetProgressPreservingAttempt(for: note.id)
+                refreshRetainedAttempts()
+            }
+            if AppRuntime.isRunningTests,
+               ProcessInfo.processInfo.environment["VOICELY_UI_TEST_IMPORT_RETRY"] == "1" {
+                let source = FileManager.default.temporaryDirectory.appendingPathComponent("retry-\(UUID().uuidString).wav")
+                defer { try? FileManager.default.removeItem(at: source) }
+                try? Data([0]).write(to: source)
+                _ = try? transcriptionService.segmentProgressStore.importWorkingCopy(from: source, for: note.id)
+                note.completeTranscription()
+                note.transcriptionOutcome = .failed
+            }
+            if AppRuntime.isRunningTests,
+               let preview = ProcessInfo.processInfo.environment["VOICELY_UI_TEST_TRANSCRIPT_PREVIEW"] {
+                transcriptionService.beginExternalTranscription(noteID: note.id)
+                transcriptionService.reportExternalPreview(preview, for: note.id)
+            }
+            #endif
+        }
+        .onChange(of: isLocallyTranscribing) { _, active in
+            if !active { refreshRetainedAttempts() }
+        }
+        .onChange(of: note.transcriptionOutcomeRaw) { _, _ in
+            refreshRetainedAttempts()
+        }
+        .onChange(of: audioPlaybackSelection) { _, _ in
+            loadAudioFile()
         }
         .onChange(of: note.id) { _, _ in
+            refreshRetainedAttempts()
             if isEditing { isEditing = false }
-            loadAudioFile()
             editedTitle = note.title
             editedTranscription = note.transcription
         }
@@ -1845,6 +1907,9 @@ struct VoiceNoteDetailView: View {
                         computeTelemetryCard
                     }
                     transcriptionBody
+                    if !retainedAttempts.isEmpty {
+                        retainedAttemptsView
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
@@ -1853,6 +1918,36 @@ struct VoiceNoteDetailView: View {
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionCard)
+    }
+
+    private func refreshRetainedAttempts() {
+        retainedAttempts = transcriptionService.segmentProgressStore.listRetainedAttempts(for: note.id)
+    }
+
+    private var retainedAttemptsView: some View {
+        DisclosureGroup("Saved results from earlier attempts") {
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(retainedAttempts) { attempt in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(attempt.updatedAt, style: .date)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Partial result — kept separately from your transcript")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(attempt.text)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("RetainedAttemptText")
+                        Button("Copy saved result") {
+                            UIPasteboard.general.string = attempt.text
+                        }
+                        .accessibilityIdentifier("CopyRetainedAttempt")
+                    }
+                }
+            }
+            .padding(.top, 8)
+        }
+        .padding(.top, 12)
     }
 
     @ViewBuilder
@@ -2062,6 +2157,21 @@ struct VoiceNoteDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
+                if let preview = transcriptionService.transcriptionPreview(for: note.id), !preview.isEmpty {
+                    Text("Partial transcript — transcription in progress")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(preview)
+                        .font(.body)
+                        .lineSpacing(6)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("TranscriptionPreview")
+                } else if hasVisibleTranscript {
+                    Text(note.transcription)
+                        .font(.body)
+                        .textSelection(.enabled)
+                }
             }
         } else if isRecordingPaused && !hasVisibleTranscript {
             VStack(alignment: .leading, spacing: 10) {
@@ -2119,6 +2229,18 @@ struct VoiceNoteDetailView: View {
                     .foregroundStyle(.secondary)
             }
         } else if hasVisibleTranscript {
+            if note.transcriptionOutcome == .failed {
+                Label("Transcription did not finish successfully. Retained text may be incomplete.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("RetainedTranscriptWarning")
+                if let diagnostic = note.transcriptionLastErrorMessage {
+                    Text(diagnostic)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
             if isLiveUpdatingTranscript {
                 HStack(spacing: 8) {
                     if isRecordingPaused {
@@ -2181,7 +2303,7 @@ struct VoiceNoteDetailView: View {
         } else if note.transcriptionOutcome == .failed {
             VStack(alignment: .leading, spacing: 10) {
                 PillBadge(text: "Couldn't transcribe", systemImage: "arrow.clockwise", variant: .warning)
-                Text("Something went wrong this time. Tap to try again.")
+                Text(note.transcriptionLastErrorMessage ?? "Something went wrong this time. Tap to try again.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Button(action: { requestTranscription() }) {
@@ -2203,9 +2325,11 @@ struct VoiceNoteDetailView: View {
     }
 
     private func loadAudioFile() {
-        if shouldShowAudioPlayerCard {
-            audioPlayer.loadAudio(from: note.audioFilePath, expectedDuration: note.duration)
-        }
+        let selection = audioPlaybackSelection
+        guard selection != loadedAudioSelection else { return }
+        loadedAudioSelection = selection
+        // Loading an empty path also clears the previous player and pending asset.
+        audioPlayer.loadAudio(from: selection?.filePath ?? "", expectedDuration: selection == nil ? 0 : note.duration)
     }
 
     private func toggleEdit() {
@@ -2246,7 +2370,8 @@ struct VoiceNoteDetailView: View {
     }
 
     private func requestTranscription(force: Bool = false, takeOver: Bool = false) {
-        guard !note.audioFilePath.isEmpty else { return }
+        guard !note.audioFilePath.isEmpty
+                || transcriptionService.segmentProgressStore.existingWorkingCopyURL(for: note.id) != nil else { return }
         guard isModelLoaded else {
             showLoadModelPrompt = true
             return
@@ -2257,6 +2382,10 @@ struct VoiceNoteDetailView: View {
                 force: force,
                 takeOver: takeOver
             )
+            refreshRetainedAttempts()
+            if !didStart, let message = note.transcriptionLastErrorMessage {
+                transcriptionRequestError = message
+            }
             if didStart, !isEditing {
                 editedTranscription = note.transcription
             }

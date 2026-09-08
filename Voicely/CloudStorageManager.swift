@@ -508,6 +508,39 @@ class CloudStorageManager: ObservableObject {
         return !fileManager.fileExists(atPath: Self.cloudPlaceholderURL(for: url).path)
     }
 
+    /// Only explicit local absence is terminal; cloud discovery may still be pending.
+    func isAudioPermanentlyMissing(at path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        let isAbsolute = path.hasPrefix("/")
+        guard isAbsolute || (!isCloudEnabled && cloudContainerURL == nil) else { return false }
+        guard let resolvedURL = getFileURL(for: path) else { return false }
+        let url = isAbsolute ? URL(fileURLWithPath: path) : resolvedURL
+        let isCloudPath = url.path.contains("/Mobile Documents/") || cloudContainerURL.map {
+            url.path.hasPrefix($0.path + "/") || url.path == $0.path
+        } == true
+        guard !isCloudPath else { return false }
+        // A moved file (including a cloud placeholder) can still be recovered.
+        if resolvedURL != url,
+           fileManager.fileExists(atPath: resolvedURL.path)
+            || fileManager.fileExists(atPath: Self.cloudPlaceholderURL(for: resolvedURL).path) {
+            return false
+        }
+        for candidate in [url, Self.cloudPlaceholderURL(for: url)] {
+            do {
+                _ = try fileManager.attributesOfItem(atPath: candidate.path)
+                return false
+            } catch {
+                let error = error as NSError
+                // Permission errors and unavailable metadata are not proof of absence.
+                guard error.domain == NSCocoaErrorDomain,
+                      error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError else {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
     static func cloudPlaceholderURL(for url: URL) -> URL {
         url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).icloud")

@@ -46,10 +46,17 @@ final class SegmentedAudioTranscriber {
     }
 
     func transcribe(note: VoiceNote, sourceURL: URL) async {
+        guard !transcriptionService.isLocalRecording(noteID: note.id),
+              !transcriptionService.isDiscarded(noteID: note.id) else { return }
         // Prevent two concurrent runs over the same note (an import racing a
         // scene-activation resume, or repeated resumes corrupting the sidecar).
         guard progressStore.beginTranscribing(note.id) else { return }
         defer { progressStore.endTranscribing(note.id) }
+        while transcriptionService.activeNoteID != nil || transcriptionService.isTranscribing {
+            if Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if Task.isCancelled || transcriptionService.isDiscarded(noteID: note.id) { return }
         // Drop a stale cancellation flag left by a prior, unrelated transcription.
         transcriptionService.clearPendingCancellation()
 
@@ -60,13 +67,12 @@ final class SegmentedAudioTranscriber {
         guard let info = Self.readAudioInfo(sourceURL) else {
             note.completeTranscription()
             if hadExistingTranscript {
-                note.transcriptionOutcome = .transcribed   // keep the previous transcript
+                note.transcriptionOutcome = .failed   // Preserve text, not a success claim.
                 note.markTranscriptionFailure("could not read audio for re-transcription; kept previous transcript")
             } else {
                 note.transcriptionOutcome = .failed
                 note.markTranscriptionFailure("could not read imported audio")
             }
-            progressStore.removeWorkingCopy(for: note.id)
             return
         }
 
@@ -86,12 +92,28 @@ final class SegmentedAudioTranscriber {
 
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
             let outcome = await transcribeSegmentOutcome(sourceURL)
+            if transcriptionService.isDiscarded(noteID: note.id) { return }
+            if transcriptionService.isRunCancelled(noteID: note.id) || Task.isCancelled {
+                pause(note)
+                return
+            }
             finalizeSinglePass(note: note, outcome: outcome, hadExistingTranscript: hadExistingTranscript)
+            if note.transcriptionState != .completed { return }
         } else {
             await transcribeSegmented(note: note, sourceURL: sourceURL, info: info,
                                       hadExistingTranscript: hadExistingTranscript)
             // Backgrounded mid-run: keep the working copy + sidecar for resume.
             if note.transcriptionState != .completed { return }
+        }
+        // Failed imports keep their only local audio for an explicit retry.
+        if note.transcriptionOutcome == .failed {
+            do {
+                try progressStore.archiveProgressIfNeeded(for: note.id)
+            } catch {
+                // Keep the checkpoint so a later retry can archive it safely.
+                note.markTranscriptionFailure("Could not save this attempt separately; its recovery checkpoint has been kept. \(error.localizedDescription)")
+            }
+            return
         }
         progressStore.removeWorkingCopy(for: note.id)
         progressStore.delete(for: note.id)
@@ -102,11 +124,16 @@ final class SegmentedAudioTranscriber {
     func resumePending(notes: [VoiceNote]) async {
         let byID = Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for id in progressStore.listPendingNoteIDs() {
-            guard let note = byID[id],
-                  let workingCopy = progressStore.existingWorkingCopyURL(for: id) else {
-                progressStore.delete(for: id)            // orphan: note gone — clean up
+            guard let note = byID[id] else {
+                progressStore.delete(for: id)
+                progressStore.removeWorkingCopy(for: id)
                 continue
             }
+            // A recording has a checkpoint but no import working copy.
+            guard note.transcriptionState != .completed,
+                  !transcriptionService.isUserPaused(noteID: id),
+                  let workingCopy = progressStore.existingWorkingCopyURL(for: id) else { continue }
+            if Task.isCancelled { return }
             await transcribe(note: note, sourceURL: workingCopy)
         }
     }
@@ -114,6 +141,12 @@ final class SegmentedAudioTranscriber {
     // MARK: - Single pass (≤30 s)
 
     private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome, hadExistingTranscript: Bool) {
+        switch outcome {
+        case .modelUnavailable, .audioUnavailable, .cancelled:
+            pause(note)
+            return
+        default: break
+        }
         if case .transcribed(let result) = outcome {
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
@@ -127,8 +160,8 @@ final class SegmentedAudioTranscriber {
         // No new text produced. If re-transcribing, keep the previous transcript.
         if hadExistingTranscript {
             note.completeTranscription()
-            note.transcriptionOutcome = .transcribed
-            note.markTranscriptionFailure("re-transcription produced no usable text; kept previous transcript")
+            note.transcriptionOutcome = .failed
+            note.markTranscriptionFailure("re-transcription did not complete successfully; kept previous transcript")
             note.clearTransientTranscriptionFlags()
             return
         }
@@ -164,8 +197,14 @@ final class SegmentedAudioTranscriber {
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
 
+        transcriptionService.reportExternalPreview(pieces.joined(separator: "\n"), for: noteID)
         while start < info.totalFrames {
-            if shouldStopForBackground() { return }   // sidecar already persisted; resume later
+            if transcriptionService.isDiscarded(noteID: noteID) { return }
+            if transcriptionService.isRunCancelled(noteID: noteID) || Task.isCancelled {
+                pause(note)
+                return
+            }
+            if shouldStopForBackground() { pause(note); return }   // sidecar already persisted; resume later
 
             let targetFrame = min(start + batchFrames, info.totalFrames)
             let isLastBatch = targetFrame >= info.totalFrames
@@ -177,10 +216,17 @@ final class SegmentedAudioTranscriber {
 
             segmentIndex += 1
             let captured = segmentIndex
-            guard let segmentURL = await Task.detached(priority: .utility, operation: {
+            let extractedURL = await Task.detached(priority: .utility, operation: {
                 IncrementalTranscriptionCoordinator.extractSegment(
                     fileURL: sourceURL, from: start, to: end, segmentIndex: captured)
-            }).value else {
+            }).value
+            if transcriptionService.isDiscarded(noteID: noteID)
+                || transcriptionService.isRunCancelled(noteID: noteID) || Task.isCancelled {
+                if let extractedURL { try? FileManager.default.removeItem(at: extractedURL) }
+                pause(note)
+                return
+            }
+            guard let segmentURL = extractedURL else {
                 // Couldn't read this slice (e.g. an unsupported container) — record
                 // it as failed instead of silently finishing as noSpeech.
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
@@ -194,12 +240,18 @@ final class SegmentedAudioTranscriber {
 
             var outcome = await transcribeSegmentOutcome(segmentURL)
             var retries = 0
-            while case .whisperError = outcome, retries < 2 {
+            while case .whisperError = outcome, retries < 2,
+                  !transcriptionService.isRunCancelled(noteID: noteID), !Task.isCancelled {
                 retries += 1
                 outcome = await transcribeSegmentOutcome(segmentURL)
             }
             try? FileManager.default.removeItem(at: segmentURL)
 
+            if transcriptionService.isDiscarded(noteID: noteID) { return }
+            if transcriptionService.isRunCancelled(noteID: noteID) || Task.isCancelled {
+                pause(note)
+                return
+            }
             switch outcome {
             case .transcribed(let result):
                 if let text = IncrementalTranscriptionCoordinator.sanitizedSegmentText(result.text) {
@@ -210,7 +262,10 @@ final class SegmentedAudioTranscriber {
                 accumulatedDuration += result.duration
             case .noSpeech:
                 break  // silence in this slice — contributes nothing, not an error
-            case .whisperError, .modelUnavailable, .audioUnavailable, .cancelled:
+            case .modelUnavailable, .audioUnavailable, .cancelled:
+                pause(note)
+                return
+            case .whisperError:
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
                 pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
             }
@@ -219,15 +274,16 @@ final class SegmentedAudioTranscriber {
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                      accumulatedText: pieces.joined(separator: "\n"),
                                      failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
+            transcriptionService.reportExternalPreview(pieces.joined(separator: "\n"), for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
 
         // Re-transcription that produced no new text: keep the previous transcript.
-        if hadExistingTranscript, !producedAnyText {
+        if hadExistingTranscript, !producedAnyText || !failedRanges.isEmpty {
             note.completeTranscription()
-            note.transcriptionOutcome = .transcribed
-            note.markTranscriptionFailure("re-transcription produced no usable text; kept previous transcript")
+            note.transcriptionOutcome = .failed
+            note.markTranscriptionFailure("re-transcription did not complete successfully; kept previous transcript")
             note.clearTransientTranscriptionFlags()
             return
         }
@@ -245,6 +301,11 @@ final class SegmentedAudioTranscriber {
             note.transcriptionOutcome = .transcribed
         }
         note.clearTransientTranscriptionFlags()
+    }
+
+    private func pause(_ note: VoiceNote) {
+        guard !transcriptionService.isDiscarded(noteID: note.id) else { return }
+        note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
     }
 
     // MARK: - Audio info & formatting

@@ -64,6 +64,8 @@ final class IncrementalTranscriptionCoordinator {
     /// All transcribed text accumulated so far. Updated after each segment completes.
     private(set) var accumulatedTranscript: String = ""
 
+    private(set) var requiresFullTranscription = false
+
     /// Overridable for testing. When non-nil, used instead of TranscriptionService.
     var transcribeOverride: (@Sendable (String) async -> String?)? = nil
 
@@ -199,6 +201,9 @@ final class IncrementalTranscriptionCoordinator {
                     useVoiceActivityCut: request.useVoiceActivityCut
                 )
             }
+            if !request.useVoiceActivityCut, lastSegmentEndFrame < request.frameEnd {
+                queuePendingSegment(upToFrame: request.frameEnd, useVoiceActivityCut: false)
+            }
             nextRequest = pendingSegmentRequest
         }
     }
@@ -229,8 +234,11 @@ final class IncrementalTranscriptionCoordinator {
             )
         }.value
 
-        guard let segmentURL = extracted else { return }
         lastSegmentEndFrame = endFrame
+        guard let segmentURL = extracted else {
+            requiresFullTranscription = true
+            return
+        }
         defer {
             try? FileManager.default.removeItem(at: segmentURL)
         }
@@ -241,8 +249,15 @@ final class IncrementalTranscriptionCoordinator {
         let textResult: String?
         if let override = transcribeOverride {
             textResult = await override(segmentURL.path)
+            if textResult == nil { requiresFullTranscription = true }
         } else {
-            textResult = await transcriptionService.transcribeAudio(filePath: segmentURL.path)?.text
+            switch await transcriptionService.transcribeAudioOutcome(filePath: segmentURL.path) {
+            case .transcribed(let result): textResult = result.text
+            case .noSpeech: textResult = nil
+            case .modelUnavailable, .audioUnavailable, .whisperError, .cancelled:
+                requiresFullTranscription = true
+                textResult = nil
+            }
         }
 
         if let text = Self.sanitizedSegmentText(textResult) {
@@ -261,7 +276,9 @@ final class IncrementalTranscriptionCoordinator {
         fileURL: URL,
         useVoiceActivityCut: Bool
     ) async -> AVAudioFramePosition? {
-        guard useVoiceActivityCut else { return requestedEndFrame }
+        guard useVoiceActivityCut else {
+            return min(requestedEndFrame, startFrame + max(1, targetIntervalFrames))
+        }
 
         let targetIntervalSeconds = self.targetIntervalSeconds
         let cutFrame = await Task.detached {
@@ -353,28 +370,44 @@ final class IncrementalTranscriptionCoordinator {
         to endFrame: AVAudioFramePosition,
         segmentIndex: Int
     ) -> URL? {
+        guard startFrame >= 0, endFrame > startFrame, endFrame - startFrame <= Int64(UInt32.max) else { return nil }
         let frameCount = AVAudioFrameCount(endFrame - startFrame)
         guard frameCount > 0 else { return nil }
 
+        var temporaryURL: URL?
+        var completed = false
+        defer {
+            if !completed, let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL) }
+        }
         do {
             let sourceFile = try AVAudioFile(forReading: fileURL)
             sourceFile.framePosition = startFrame
 
             guard let buffer = AVAudioPCMBuffer(
                 pcmFormat: sourceFile.processingFormat,
-                frameCapacity: frameCount
+                frameCapacity: min(frameCount, 16_384)
             ) else { return nil }
 
-            try sourceFile.read(into: buffer, frameCount: frameCount)
 
             let segmentURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("voicely_seg_\(segmentIndex).wav")
+                .appendingPathComponent("voicely_seg_\(segmentIndex)_\(UUID().uuidString).wav")
 
+            temporaryURL = segmentURL
             let segmentFile = try AVAudioFile(
                 forWriting: segmentURL,
                 settings: sourceFile.processingFormat.settings
             )
-            try segmentFile.write(from: buffer)
+            var remaining = frameCount
+            while remaining > 0 {
+                try sourceFile.read(into: buffer, frameCount: min(remaining, buffer.frameCapacity))
+                guard buffer.frameLength > 0 else {
+                    try? FileManager.default.removeItem(at: segmentURL)
+                    return nil
+                }
+                try segmentFile.write(from: buffer)
+                remaining -= buffer.frameLength
+            }
+            completed = true
             return segmentURL
         } catch {
             debugLog("⚠️ [IncrementalCoordinator] Segment extraction failed: \(error)")

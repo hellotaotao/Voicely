@@ -9,7 +9,6 @@ import XCTest
 
 final class VoicelyUITests: XCTestCase {
     fileprivate enum ID {
-        static let libraryScreen = "LibraryScreen"
         static let noteLibraryList = "NoteLibraryList"
         static let emptyState = "EmptyLibraryCard"
         static let recordingControls = "RecordingControls"
@@ -29,6 +28,7 @@ final class VoicelyUITests: XCTestCase {
         static let transcriptionCard = "TranscriptionCard"
         static let transcriptionBody = "TranscriptionBody"
         static let transcribeButton = "TranscribeButton"
+        static let transcribeNowButton = "TranscribeNowButton"
         static let retranscribeButton = "RetranscribeButton"
         static let copyTranscriptionButton = "CopyTranscriptionButton"
         static let shareTranscriptionButton = "ShareTranscriptionButton"
@@ -37,6 +37,7 @@ final class VoicelyUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
         addUIInterruptionMonitor(withDescription: "System Alerts") { alert in
             if alert.buttons["Allow"].exists {
                 alert.buttons["Allow"].tap()
@@ -56,7 +57,10 @@ final class VoicelyUITests: XCTestCase {
         seedNoteDuration: TimeInterval? = nil,
         seedNoteTranscription: String? = nil,
         seedNoteTranscriptionModelIdentifier: String? = nil,
-        seedNoteQueuedForTranscription: Bool = false
+        seedNoteQueuedForTranscription: Bool = false,
+        transcriptPreview: String? = nil,
+        failedImport: Bool = false,
+        retainedAttempt: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         let shouldSeedNote = seedNoteTitle != nil
@@ -87,6 +91,15 @@ final class VoicelyUITests: XCTestCase {
         if seedNoteQueuedForTranscription {
             app.launchEnvironment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION_STATE"] = "queued"
         }
+        if let transcriptPreview {
+            app.launchEnvironment["VOICELY_UI_TEST_TRANSCRIPT_PREVIEW"] = transcriptPreview
+        }
+        if failedImport {
+            app.launchEnvironment["VOICELY_UI_TEST_IMPORT_RETRY"] = "1"
+        }
+        if let retainedAttempt {
+            app.launchEnvironment["VOICELY_UI_TEST_RETAINED_ATTEMPT"] = retainedAttempt
+        }
         app.launch()
         app.tap()
         return app
@@ -103,19 +116,17 @@ final class VoicelyUITests: XCTestCase {
     func testLaunchShowsLibraryShell() throws {
         let app = launchApp()
         XCTAssertTrue(app.navigationBars["Voicely"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.element(id: ID.libraryScreen).waitForExistence(timeout: 5))
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).exists)
+        XCTAssertTrue(app.buttons[ID.settingsButton].waitForExistence(timeout: 5))
     }
 
     @MainActor
     func testEmptyLibraryShellShowsPrimaryRecordingPath() throws {
         let app = launchApp()
 
-        XCTAssertTrue(app.element(id: ID.libraryScreen).waitForExistence(timeout: 5))
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).exists)
+        XCTAssertTrue(app.buttons[ID.settingsButton].waitForExistence(timeout: 5))
         XCTAssertTrue(app.element(id: ID.emptyState).waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["No Recordings Yet"].exists)
-        XCTAssertTrue(app.element(id: ID.recordingControls).waitForExistence(timeout: 5))
+        // Assert actionable controls rather than an ancestor container identifier.
         XCTAssertTrue(app.element(id: ID.recordingModelPickerButton).waitForExistence(timeout: 5))
         XCTAssertTrue(app.element(id: ID.recordButton).waitForExistence(timeout: 5))
 
@@ -132,7 +143,7 @@ final class VoicelyUITests: XCTestCase {
         attachScreenshot(named: "Settings Screen", app: app)
 
         app.buttons[ID.settingsDoneButton].firstMatch.tap()
-        XCTAssertTrue(app.element(id: ID.libraryScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[ID.settingsButton].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -189,6 +200,75 @@ final class VoicelyUITests: XCTestCase {
     }
 
     @MainActor
+    func testLandscapeLibraryPreservesControlIdentifiers() throws {
+        let app = launchApp(seedNoteTitle: "Landscape Note")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        XCTAssertTrue(app.buttons[ID.settingsButton].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.element(id: ID.noteRow).waitForExistence(timeout: 5))
+        app.buttons[ID.settingsButton].tap()
+        XCTAssertTrue(app.element(id: ID.settingsScreen).waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testEarlierAttemptCanBeReadWithoutReplacingCurrentTranscript() throws {
+        let original = "The original complete transcript."
+        let retained = "Useful new words from the failed attempt."
+        let app = launchApp(seedNoteTitle: "Saved Attempt", seedNoteTranscription: original,
+                            retainedAttempt: retained)
+        let row = app.element(id: ID.noteRow)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let disclosure = app.buttons["Saved results from earlier attempts"]
+        app.scrollToElement(disclosure)
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        disclosure.tap()
+        let savedText = app.staticTexts["RetainedAttemptText"]
+        app.scrollToElement(savedText)
+        attachScreenshot(named: "Saved Attempt Expanded", app: app)
+        XCTAssertTrue(savedText.waitForExistence(timeout: 5))
+        XCTAssertEqual(savedText.label, retained)
+        XCTAssertTrue(app.staticTexts[original].exists)
+        XCTAssertTrue(app.buttons["CopyRetainedAttempt"].exists)
+        attachScreenshot(named: "Saved Failed Attempt", app: app)
+    }
+
+    @MainActor
+    func testFailedImportRetryReachesModelPromptWithoutAudioPath() throws {
+        let app = launchApp(seedNoteTitle: "Retry Import", failedImport: true)
+        let row = app.element(id: ID.noteRow)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let retry = app.buttons[ID.transcribeNowButton]
+        app.scrollToElement(retry)
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        retry.tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Please load a model in Settings first to transcribe this recording."].exists)
+        attachScreenshot(named: "Failed Import Retry Model Prompt", app: app)
+    }
+
+    @MainActor
+    func testSegmentPreviewIsReadOnlyAndKeepsCopyAction() throws {
+        let title = "Segment Preview"
+        let original = "Original complete transcript remains available."
+        let preview = "The first completed segment appears before the rest."
+        let app = launchApp(seedNoteTitle: title, seedNoteDuration: 83,
+                            seedNoteTranscription: original, transcriptPreview: preview)
+        let row = app.element(id: ID.noteRow)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let previewText = app.staticTexts["TranscriptionPreview"]
+        app.scrollToElement(previewText)
+        XCTAssertTrue(previewText.waitForExistence(timeout: 5))
+        XCTAssertEqual(previewText.label, preview)
+        XCTAssertTrue(app.staticTexts["Partial transcript — transcription in progress"].exists)
+        XCTAssertFalse(app.textViews["TranscriptEditor"].exists)
+        XCTAssertTrue(app.buttons[ID.copyTranscriptionButton].exists)
+        attachScreenshot(named: "Read Only Segment Preview", app: app)
+    }
+
+    @MainActor
     func testDetailPlaybackControlsStayVisuallyBalancedOnCompactWidth() throws {
         let noteTitle = "Balanced Playback Controls"
         let transcript = "A compact detail screen should keep playback and transcription controls readable."
@@ -229,7 +309,6 @@ final class VoicelyUITests: XCTestCase {
             seedNoteAudioPath: "ui-test-seeded-recording.m4a"
         )
 
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons[ID.noteRow].firstMatch.waitForExistence(timeout: 5))
         app.buttons[ID.noteRow].firstMatch.tap()
 
@@ -259,7 +338,6 @@ final class VoicelyUITests: XCTestCase {
             seedNoteQueuedForTranscription: true
         )
 
-        XCTAssertTrue(app.element(id: ID.noteLibraryList).waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons[ID.noteRow].firstMatch.waitForExistence(timeout: 5))
         app.buttons[ID.noteRow].firstMatch.tap()
 
@@ -267,11 +345,13 @@ final class VoicelyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[noteTitle].exists)
         XCTAssertTrue(app.staticTexts["Queued for transcription"].exists)
 
-        let transcribeButton = app.transcribeControl
-        app.scrollToElement(transcribeButton)
-        XCTAssertTrue(transcribeButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(transcribeButton.isEnabled)
-        transcribeButton.tap()
+        // A queued note offers "Transcribe Now" (its own identifier), not the
+        // detail view's generic Transcribe control.
+        let transcribeNow = app.element(id: ID.transcribeNowButton)
+        app.scrollToElement(transcribeNow)
+        XCTAssertTrue(transcribeNow.waitForExistence(timeout: 5))
+        XCTAssertTrue(transcribeNow.isEnabled)
+        transcribeNow.tap()
 
         let modelAlert = app.alerts["Model Not Loaded"]
         XCTAssertTrue(modelAlert.waitForExistence(timeout: 5))

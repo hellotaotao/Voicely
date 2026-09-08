@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import os
 
@@ -12,6 +13,14 @@ struct SegmentedTranscriptionProgress: Codable, Equatable {
     var accumulatedText: String
     var failedRanges: [SegmentFailureRange]
     var updatedAt: Date
+}
+
+struct RetainedTranscriptionAttempt: Codable, Equatable, Identifiable {
+    let id: String
+    let progress: SegmentedTranscriptionProgress
+
+    var text: String { progress.accumulatedText }
+    var updatedAt: Date { progress.updatedAt }
 }
 
 /// Durable on-disk state for in-flight imported-audio transcriptions:
@@ -58,6 +67,64 @@ final class SegmentProgressStore {
         try? fileManager.removeItem(at: sidecarURL(for: id))
     }
 
+    private func retainedAttemptsDirectory(for id: UUID) -> URL {
+        directory.appendingPathComponent("retained-attempts", isDirectory: true)
+            .appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+
+    func listRetainedAttempts(for id: UUID) -> [RetainedTranscriptionAttempt] {
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: retainedAttemptsDirectory(for: id), includingPropertiesForKeys: nil)) ?? []
+        return urls.compactMap { url -> RetainedTranscriptionAttempt? in
+            guard url.pathExtension == "json",
+                  let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(RetainedTranscriptionAttempt.self, from: data)
+        }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Preserve a checkpoint before resetting an attempt. Corrupt checkpoints
+    /// are retained as raw bytes for diagnosis, not presented as readable text.
+    /// Any archive write failure must prevent destructive reset.
+    func archiveProgressIfNeeded(for id: UUID) throws {
+        let source = sidecarURL(for: id)
+        guard fileManager.fileExists(atPath: source.path) else { return }
+        let original = try Data(contentsOf: source)
+        let progress: SegmentedTranscriptionProgress
+        do {
+            progress = try JSONDecoder().decode(SegmentedTranscriptionProgress.self, from: original)
+        } catch {
+            let folder = retainedAttemptsDirectory(for: id)
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+            let key = SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined()
+            try original.write(to: folder.appendingPathComponent(key + ".raw"), options: .atomic)
+            return
+        }
+        guard !progress.accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encoded = try encoder.encode(progress)
+        let key = SHA256.hash(data: encoded).map { String(format: "%02x", $0) }.joined()
+        let folder = retainedAttemptsDirectory(for: id)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let destination = folder.appendingPathComponent(key + ".json")
+        let snapshot = RetainedTranscriptionAttempt(id: key, progress: progress)
+        // Atomic replacement also repairs an interrupted/corrupt previous copy.
+        try encoder.encode(snapshot).write(to: destination, options: .atomic)
+    }
+
+    func resetProgressPreservingAttempt(for id: UUID) throws {
+        try archiveProgressIfNeeded(for: id)
+        let source = sidecarURL(for: id)
+        if fileManager.fileExists(atPath: source.path) {
+            try fileManager.removeItem(at: source)
+        }
+    }
+
+    /// Only explicit note deletion removes retained results, never run cleanup.
+    func deleteRetainedAttempts(for id: UUID) {
+        try? fileManager.removeItem(at: retainedAttemptsDirectory(for: id))
+    }
+
     func workingCopyURL(for id: UUID, fileExtension: String) -> URL {
         let ext = fileExtension.isEmpty ? "audio" : fileExtension
         return directory.appendingPathComponent("\(id.uuidString).\(ext)")
@@ -73,10 +140,9 @@ final class SegmentProgressStore {
 
     func listPendingNoteIDs() -> [UUID] {
         let entries = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
-        return entries.compactMap { name in
-            guard name.hasSuffix(".json") else { return nil }
-            return UUID(uuidString: String(name.dropLast(5)))
-        }
+        return Array(Set(entries.compactMap { name in
+            UUID(uuidString: (name as NSString).deletingPathExtension)
+        }))
     }
 
     /// Copies the shared (security-scoped) source file into the non-synced

@@ -64,4 +64,77 @@ struct SegmentProgressStoreTests {
         store.endTranscribing(id)
         #expect(store.beginTranscribing(id) == true)     // freed, can start again
     }
+    @Test func retainedAttemptsSurviveResetAndSuccessfulCleanupWithoutBecomingPending() throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let id = UUID()
+        let progress = SegmentedTranscriptionProgress(lastFrame: 10, totalFrames: 20,
+            accumulatedText: "Recovered fragment", failedRanges: [], updatedAt: Date())
+        store.save(progress, for: id)
+        try store.archiveProgressIfNeeded(for: id)
+        try store.archiveProgressIfNeeded(for: id)
+        #expect(store.listRetainedAttempts(for: id).count == 1)
+        try store.resetProgressPreservingAttempt(for: id)
+        #expect(store.load(for: id) == nil)
+        #expect(store.existingWorkingCopyURL(for: id) == nil)
+        #expect(store.listPendingNoteIDs().isEmpty)
+        store.delete(for: id)
+        store.removeWorkingCopy(for: id)
+        #expect(store.listRetainedAttempts(for: id).first?.progress == progress)
+        var next = progress
+        next.updatedAt = progress.updatedAt.addingTimeInterval(1)
+        next.accumulatedText = "Another fragment"
+        store.save(next, for: id)
+        try store.resetProgressPreservingAttempt(for: id)
+        #expect(store.listRetainedAttempts(for: id).map(\.text) == ["Another fragment", "Recovered fragment"])
+        store.deleteRetainedAttempts(for: id)
+        #expect(store.listRetainedAttempts(for: id).isEmpty)
+    }
+
+    @Test func archiveWriteFailurePreventsCheckpointReset() throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let id = UUID()
+        let progress = SegmentedTranscriptionProgress(lastFrame: 10, totalFrames: 20,
+            accumulatedText: "Keep this fragment", failedRanges: [], updatedAt: Date())
+        store.save(progress, for: id)
+        // A file where the archive directory belongs deterministically fails writes.
+        try Data([1]).write(to: store.directory.appendingPathComponent("retained-attempts"))
+        #expect(throws: (any Error).self) { try store.resetProgressPreservingAttempt(for: id) }
+        #expect(store.load(for: id) == progress)
+    }
+
+    @Test func malformedCheckpointIsArchivedAsRawBytesBeforeReset() throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let id = UUID()
+        let source = store.directory.appendingPathComponent("\(id.uuidString).json")
+        let original = Data("unreadable checkpoint".utf8)
+        try original.write(to: source)
+        try store.resetProgressPreservingAttempt(for: id)
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        let folder = store.directory.appendingPathComponent("retained-attempts")
+            .appendingPathComponent(id.uuidString)
+        let archives = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        #expect(archives.count == 1)
+        let archive = try #require(archives.first)
+        #expect(archive.pathExtension == "raw")
+        #expect(try Data(contentsOf: archive) == original)
+        #expect(store.listRetainedAttempts(for: id).isEmpty)
+        #expect(store.listPendingNoteIDs().isEmpty)
+        #expect(store.existingWorkingCopyURL(for: id) == nil)
+    }
+
+    @Test func corruptCheckpointArchiveFailureStillPreventsReset() throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let id = UUID()
+        let source = store.directory.appendingPathComponent("\(id.uuidString).json")
+        let original = Data("unreadable checkpoint".utf8)
+        try original.write(to: source)
+        try Data([1]).write(to: store.directory.appendingPathComponent("retained-attempts"))
+        #expect(throws: (any Error).self) { try store.resetProgressPreservingAttempt(for: id) }
+        #expect(try Data(contentsOf: source) == original)
+    }
+
 }

@@ -73,6 +73,25 @@ struct CloudStorageManagerTests {
         #expect(destinationData == sourceData)
     }
 
+    @Test @MainActor func permanentAbsenceRequiresAnExplicitLocalPathWhenCloudEnabled() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let local = root.appendingPathComponent("local")
+        let cloud = root.appendingPathComponent("cloud")
+        try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = CloudStorageManager(testLocalContainerURL: local,
+                                          testCloudContainerURL: cloud, testCloudEnabled: true)
+        #expect(manager.isAudioPermanentlyMissing(at: local.appendingPathComponent("gone.m4a").path))
+        #expect(!manager.isAudioPermanentlyMissing(at: cloud.appendingPathComponent("unknown.m4a").path))
+        #expect(!manager.isAudioPermanentlyMissing(at: "unknown.m4a"))
+        let localManager = CloudStorageManager(testLocalContainerURL: local)
+        #expect(localManager.isAudioPermanentlyMissing(at: "gone.m4a"))
+        let placeholder = CloudStorageManager.cloudPlaceholderURL(for: local.appendingPathComponent("pending.m4a"))
+        try Data().write(to: placeholder)
+        #expect(!localManager.isAudioPermanentlyMissing(at: "pending.m4a"))
+    }
+
     @Test @MainActor func icloudPlaceholderIsNotTreatedAsMissingAudio() throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(

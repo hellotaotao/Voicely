@@ -10,6 +10,29 @@ import Testing
 @testable import Voicely
 
 struct TranscriptionServiceTests {
+    @Test func repeatedWhisperOutputIsNotAcceptedAsSuccess() {
+        let text = "First segment. " + String(repeating: "Claude Code, ", count: 80)
+        if case .whisperError = TranscriptionService.validatedWhisperOutput(text) {} else {
+            Issue.record("Degenerate decoder output must not replace the transcript")
+        }
+    }
+
+    @Test func repeatedUnicodeWhisperOutputIsNotAcceptedAsSuccess() {
+        let text = "First segment. " + String(repeating: "ḕ", count: 80)
+        if case .whisperError = TranscriptionService.validatedWhisperOutput(text) {} else {
+            Issue.record("Repeated Unicode output must be rejected")
+        }
+    }
+
+    @Test func ordinaryWhisperOutputIsPreserved() {
+        let text = "The first meeting starts at three. The second meeting starts at four."
+        if case .text(let result) = TranscriptionService.validatedWhisperOutput(text) {
+            #expect(result == text)
+        } else {
+            Issue.record("Ordinary speech must be preserved")
+        }
+    }
+
     actor TranscriptionGate {
         private var continuation: CheckedContinuation<Void, Never>?
         private var armedContinuation: CheckedContinuation<Void, Never>?
@@ -351,6 +374,49 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionLastErrorMessage == nil)
     }
 
+    @Test @MainActor func failedSinglePassRecoveryKeepsPartialTextWithoutSuccessStatus() async {
+        let outcomes: [RawTranscription] = [.noSpeech, .whisperError("recovery failed")]
+        for outcome in outcomes {
+            let service = makeService(deviceID: "phone")
+            let note = VoiceNote(title: "Partial", audioFilePath: "partial.caf")
+            note.transcription = "Previous partial text"
+            note.transcriptionOriginDeviceID = "phone"
+            note.queueTranscription(at: Date())
+            service.transcribeImpl = { _, _ in outcome }
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(note.transcription == "Previous partial text")
+            #expect(note.transcriptionOutcome == .failed)
+            #expect(note.transcriptionLastErrorMessage != nil)
+        }
+    }
+
+    @Test @MainActor func failedImportKeepsAudioUntilExplicitRetrySucceeds() async throws {
+        let service = makeService(deviceID: "phone")
+        let note = VoiceNote(title: "Import", audioFilePath: "")
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 2)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = service.segmentProgressStore
+        _ = try store.importWorkingCopy(from: url, for: note.id)
+        service.transcribeImpl = { _, _ in .whisperError("failed import") }
+        #expect(await service.requestTranscription(for: note))
+        #expect(note.transcriptionOutcome == .failed)
+        #expect(store.existingWorkingCopyURL(for: note.id) != nil)
+        var calls = 0
+        service.transcribeImpl = { _, _ in calls += 1; return "Recovered import" }
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        await transcriber.resumePending(notes: [note])
+        #expect(calls == 0)
+        // A terminal checkpoint must not let explicit retry skip failed ranges.
+        store.save(.init(lastFrame: 32_000, totalFrames: 32_000, accumulatedText: "old failed fragment",
+            failedRanges: [.init(startFrame: 0, endFrame: 32_000)], updatedAt: Date()), for: note.id)
+        #expect(await service.requestTranscription(for: note))
+        #expect(calls == 1)
+        #expect(note.transcription == "Recovered import")
+        #expect(note.transcriptionOutcome == .transcribed)
+        #expect(store.existingWorkingCopyURL(for: note.id) == nil)
+        #expect(store.load(for: note.id) == nil)
+    }
+
     @Test @MainActor func modelUnavailableKeepsNoteQueuedWithoutFailure() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
@@ -510,6 +576,40 @@ struct TranscriptionServiceTests {
         #expect(secondNote.transcriptionState == .completed)
     }
 
+    @Test @MainActor func pendingQueueWaitsForExternalOwnerInsteadOfSkippingNote() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        let externalID = UUID()
+        service.beginExternalTranscription(noteID: externalID)
+        let note = VoiceNote(title: "Queued", audioFilePath: "queued.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            #expect(service.activeNoteID == note.id)
+            return "Queued result"
+        }
+        var entered = false
+        var returned = false
+        let processing = Task { @MainActor in
+            entered = true
+            await service.processPendingTranscriptions(notes: [note])
+            returned = true
+        }
+        while !entered { await Task.yield() }
+        await Task.yield()
+        #expect(calls == 0)
+        #expect(!returned)
+        #expect(service.activeNoteID == externalID)
+        service.endExternalTranscription(noteID: externalID)
+        await processing.value
+        #expect(returned)
+        #expect(calls == 1)
+        #expect(note.transcription == "Queued result")
+        #expect(note.transcriptionState == .completed)
+    }
+
     @Test @MainActor func ownedClaimedNoteResumesOnCurrentDevice() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
@@ -530,7 +630,7 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionState == .completed)
     }
 
-    @Test @MainActor func migrationCompletesInterruptedLiveRecordingWithTranscript() {
+    @Test @MainActor func migrationRequeuesInterruptedLiveRecordingWithPartialTranscript() {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
 
@@ -549,13 +649,54 @@ struct TranscriptionServiceTests {
         service.migrateLegacyOwnershipIfNeeded(notes: [note])
 
         #expect(note.transcription == "Partial live transcript")
-        #expect(note.transcriptionState == .completed)
+        #expect(note.transcriptionState == .queued)
         #expect(note.isTranscribing == false)
-        #expect(note.pendingTranscription == false)
+        #expect(note.pendingTranscription == true)
         #expect(note.transcriptionProgress == 0.0)
         #expect(note.transcriptionOwnerDeviceID == nil)
         #expect(note.transcriptionAttemptID == nil)
         #expect(note.transcriptionLeaseExpiresAt == nil)
+    }
+
+    @Test @MainActor func liveRecordingAndFinalizationAreExcludedFromQueueAndRecovery() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        let note = VoiceNote(title: "Live", audioFilePath: "live.caf")
+        note.transcriptionOriginDeviceID = "phone"
+        note.claimTranscription(ownerDeviceID: "phone", attemptID: "live",
+            queuedAt: now, leaseExpiresAt: now.addingTimeInterval(300))
+        note.isTranscribing = true
+        service.beginLocalRecording(noteID: note.id)
+        var calls = 0
+        service.transcribeImpl = { _, _ in calls += 1; return "unexpected" }
+        await service.processPendingTranscriptions(notes: [note])
+        #expect(calls == 0)
+        #expect(note.transcriptionAttemptID == "live")
+        #expect(note.isTranscribing)
+        #expect(await service.requestTranscription(for: note, force: true) == false)
+        service.endLocalRecording(noteID: note.id)
+        service.migrateLegacyOwnershipIfNeeded(notes: [note])
+        #expect(note.transcriptionState == .queued)
+    }
+
+    @Test @MainActor func cancelledImportCanBeExplicitlyResumedFromWorkingCopy() async throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        let note = VoiceNote(title: "Import", audioFilePath: "")
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 2)
+        defer { try? FileManager.default.removeItem(at: url) }
+        _ = try service.segmentProgressStore.importWorkingCopy(from: url, for: note.id)
+        service.beginExternalTranscription(noteID: note.id)
+        service.cancelTranscription(for: note)
+        service.endExternalTranscription(noteID: note.id)
+        #expect(service.isUserPaused(noteID: note.id))
+        service.transcribeImpl = { _, _ in "Recovered import" }
+        let accepted = await service.requestTranscription(for: note)
+        #expect(accepted)
+        #expect(!service.isUserPaused(noteID: note.id))
+        #expect(note.transcription == "Recovered import")
+        #expect(note.transcriptionState == .completed)
+        #expect(service.segmentProgressStore.existingWorkingCopyURL(for: note.id) == nil)
     }
 
     @Test @MainActor func migrationNormalizesLegacyFlags() {
@@ -619,6 +760,137 @@ struct TranscriptionServiceTests {
         #expect(service.shouldSegmentTranscription(long))
         #expect(!service.shouldSegmentTranscription(short))
         #expect(!service.shouldSegmentTranscription(noAudio))
+    }
+
+    @Test @MainActor func permanentlyMissingAudioStopsAutomaticRetries() async {
+        for duration in [12.0, 1800.0] {
+            let service = makeService(deviceID: "local")
+            var attempts = 0
+            service.prepareAudioFileForReading = { _ in attempts += 1; return nil }
+            service.transcribeImpl = { _, _ in attempts += 1; return .audioUnavailable }
+            service.isAudioPermanentlyMissing = { _ in true }
+            let note = VoiceNote(title: "Missing", audioFilePath: "missing.m4a")
+            note.duration = duration
+            note.transcription = "Keep existing text"
+            note.transcriptionOriginDeviceID = "local"
+            note.queueTranscription(at: Date())
+
+            await service.processPendingTranscriptions(notes: [note])
+            await service.processPendingTranscriptions(notes: [note])
+
+            #expect(attempts == 1)
+            #expect(note.transcriptionState == .completed)
+            #expect(note.transcriptionOutcome == .failed)
+            #expect(note.transcription == "Keep existing text")
+        }
+    }
+
+    @Test @MainActor func temporarilyUnavailableAudioStaysQueued() async {
+        for duration in [12.0, 1800.0] {
+            let service = makeService(deviceID: "local")
+            var attempts = 0
+            service.prepareAudioFileForReading = { _ in attempts += 1; return nil }
+            service.transcribeImpl = { _, _ in attempts += 1; return .audioUnavailable }
+            service.isAudioPermanentlyMissing = { _ in false }
+            let note = VoiceNote(title: "Downloading", audioFilePath: "cloud.m4a")
+            note.duration = duration
+            note.transcriptionOriginDeviceID = "local"
+            note.queueTranscription(at: Date())
+
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(note.transcriptionState == .queued)
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(note.transcriptionState == .queued)
+            #expect(attempts == 2)
+        }
+    }
+
+    @Test @MainActor func explicitRetryRefreshesExpiredAudioAvailabilityWindow() async {
+        for duration in [12.0, 1800.0] {
+            for takeOver in [false, true] {
+                let now = Date(timeIntervalSince1970: 20_000)
+                let service = makeService(deviceID: "local", now: now)
+                service.prepareAudioFileForReading = { _ in nil }
+                service.transcribeImpl = { _, _ in .audioUnavailable }
+                service.isAudioPermanentlyMissing = { _ in false }
+                let note = VoiceNote(title: "Retry", audioFilePath: "cloud.m4a")
+                note.duration = duration
+                note.transcription = "Keep existing text"
+                note.transcriptionOriginDeviceID = "local"
+                let oldQueueTime = now.addingTimeInterval(-service.audioAvailabilityRetryWindow - 60)
+                if takeOver {
+                    note.claimTranscription(ownerDeviceID: "remote", attemptID: "previous",
+                        queuedAt: oldQueueTime, leaseExpiresAt: now.addingTimeInterval(300))
+                } else {
+                    note.queueTranscription(at: oldQueueTime)
+                    note.completeTranscription()
+                }
+
+                let accepted = await service.requestTranscription(for: note, force: !takeOver, takeOver: takeOver)
+
+                #expect(accepted)
+                #expect(note.transcriptionState == .queued)
+                #expect(note.transcriptionQueuedAt == now)
+                #expect(note.transcriptionOutcome != .failed)
+                #expect(note.transcription == "Keep existing text")
+            }
+        }
+    }
+
+    @Test @MainActor func unknownCloudAudioStopsRetryingAfterPersistedWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let local = root.appendingPathComponent("local")
+        let cloud = root.appendingPathComponent("cloud")
+        try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = CloudStorageManager(testLocalContainerURL: local,
+                                         testCloudContainerURL: cloud, testCloudEnabled: true)
+        #expect(!storage.isAudioPermanentlyMissing(at: "recording.m4a"))
+        for duration in [12.0, 1800.0] {
+            let start = Date(timeIntervalSince1970: 10_000)
+            var now = start
+            let service = makeService(deviceID: "local", now: start)
+            service.nowProvider = { now }
+            var attempts = 0
+            service.prepareAudioFileForReading = { _ in attempts += 1; return nil }
+            service.transcribeImpl = { _, _ in attempts += 1; return .audioUnavailable }
+            service.isAudioPermanentlyMissing = { storage.isAudioPermanentlyMissing(at: $0) }
+            let note = VoiceNote(title: "Unavailable", audioFilePath: "recording.m4a")
+            note.duration = duration
+            note.transcription = "Keep existing text"
+            note.transcriptionOriginDeviceID = "local"
+            note.queueTranscription(at: start)
+
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(note.transcriptionState == .queued)
+            #expect(note.transcriptionQueuedAt == start)
+            now = start.addingTimeInterval(service.audioAvailabilityRetryWindow - 1)
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(note.transcriptionState == .queued)
+            #expect(note.transcriptionQueuedAt == start)
+            now = start.addingTimeInterval(service.audioAvailabilityRetryWindow)
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(note.transcriptionState == .completed)
+            #expect(note.transcriptionOutcome == .failed)
+            #expect(note.transcriptionLastErrorMessage == "Audio is still unavailable. Automatic retries stopped. Check iCloud and retry.")
+            #expect(note.transcription == "Keep existing text")
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(attempts == 3)
+
+            now = start.addingTimeInterval(service.audioAvailabilityRetryWindow + 60)
+            let manualRetryTime = now
+            let didRetry = await service.requestTranscription(for: note)
+            #expect(didRetry)
+            #expect(note.transcriptionState == .queued)
+            #expect(note.transcriptionQueuedAt == manualRetryTime)
+            #expect(attempts == 4)
+            now = manualRetryTime.addingTimeInterval(1)
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(note.transcriptionState == .queued)
+            #expect(note.transcriptionQueuedAt == manualRetryTime)
+            #expect(attempts == 5)
+        }
     }
 
     @MainActor

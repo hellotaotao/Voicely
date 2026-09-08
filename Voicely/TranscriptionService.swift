@@ -59,6 +59,7 @@ class TranscriptionService: ObservableObject {
     @Published var transcriptionProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     @Published private(set) var activeNoteID: UUID?
+    @Published private(set) var previewByNoteID: [UUID: String] = [:]
     @Published private(set) var progressByNoteID: [UUID: Float] = [:]
     @Published private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot = .inactive()
 
@@ -69,6 +70,13 @@ class TranscriptionService: ObservableObject {
     var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
         await TranscriptionService.estimatedAudioDuration(for: filePath)
     }
+    var prepareAudioFileForReading: (String) async -> URL? = { path in
+        await CloudStorageManager.shared.prepareFileForReading(at: path)
+    }
+    var isAudioPermanentlyMissing: (String) -> Bool = { path in
+        CloudStorageManager.shared.isAudioPermanentlyMissing(at: path)
+    }
+    var audioAvailabilityRetryWindow: TimeInterval = 5 * 60
     var leaseDuration: TimeInterval = 5 * 60
     var heartbeatInterval: TimeInterval = 60
     var nonOriginQueueGracePeriod: TimeInterval = 5 * 60
@@ -81,6 +89,10 @@ class TranscriptionService: ObservableObject {
 
     private var currentTranscriptionTask: Task<RawTranscription?, Never>?
     private var cancelRequested = false
+    private var cancelledRunNoteIDs = Set<UUID>()
+    private var localRecordingNoteIDs = Set<UUID>()
+    private var discardedNoteIDs = Set<UUID>()
+    private var userPausedNoteIDs = Set<UUID>()
     private var lastCancellationHandled = false
     private var progressSmoothingTask: Task<Void, Never>?
     private var progressSmoothingTarget: Float = 0.0
@@ -212,7 +224,8 @@ class TranscriptionService: ObservableObject {
             needsReprocessing = false
 
             while let note = dequeueNextPendingTranscription() {
-                while isTranscribing {
+                while isTranscribing || activeNoteID != nil {
+                    if Task.isCancelled { return }
                     try? await Task.sleep(nanoseconds: 300_000_000)
                 }
 
@@ -253,7 +266,9 @@ class TranscriptionService: ObservableObject {
     ) async -> Bool {
         updateEngineStatus()
 
-        guard isWhisperLoaded, !note.audioFilePath.isEmpty else {
+        let workingCopy = segmentProgressStore.existingWorkingCopyURL(for: note.id)
+        guard isWhisperLoaded, !note.audioFilePath.isEmpty || workingCopy != nil,
+              !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
             return false
         }
 
@@ -263,11 +278,28 @@ class TranscriptionService: ObservableObject {
             return false
         }
 
-        if !force, note.transcriptionState == .completed, !note.transcription.isEmpty {
+        if !force, note.transcriptionState == .completed, !note.transcription.isEmpty,
+           note.transcriptionOutcome != .failed {
             return false
         }
 
-        let queuedAt = note.transcriptionQueuedAt ?? nowProvider()
+        if isLocallyTranscribing(note) { return false }
+        if force || note.transcriptionOutcome == .failed {
+            do {
+                try segmentProgressStore.resetProgressPreservingAttempt(for: note.id)
+            } catch {
+                note.markTranscriptionFailure("Could not preserve the previous attempt. Retry was not started; saved progress is unchanged.")
+                return false
+            }
+        }
+        userPausedNoteIDs.remove(note.id)
+        if note.audioFilePath.isEmpty, let workingCopy {
+            await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
+                .transcribe(note: note, sourceURL: workingCopy)
+            return true
+        }
+        let queuedAt = force || takeOver || note.transcriptionOutcome == .failed
+            ? nowProvider() : (note.transcriptionQueuedAt ?? nowProvider())
         note.claimTranscription(
             ownerDeviceID: currentDeviceID,
             attemptID: UUID().uuidString,
@@ -281,9 +313,25 @@ class TranscriptionService: ObservableObject {
 
     func cancelTranscription(for note: VoiceNote) {
         guard activeNoteID == note.id else { return }
+        userPausedNoteIDs.insert(note.id)
         cancelTranscription()
         requeueNote(note, queuedAt: nowProvider())
     }
+
+    func beginLocalRecording(noteID: UUID) { localRecordingNoteIDs.insert(noteID) }
+    func endLocalRecording(noteID: UUID) { localRecordingNoteIDs.remove(noteID) }
+    func isLocalRecording(noteID: UUID) -> Bool { localRecordingNoteIDs.contains(noteID) }
+    func isUserPaused(noteID: UUID) -> Bool { userPausedNoteIDs.contains(noteID) }
+    func isDiscarded(noteID: UUID) -> Bool { discardedNoteIDs.contains(noteID) }
+    func discardTranscription(for note: VoiceNote) {
+        discardedNoteIDs.insert(note.id)
+        if activeNoteID == note.id { cancelTranscription() }
+        pendingTranscriptionQueue.removeValue(forKey: note.id)
+        previewByNoteID.removeValue(forKey: note.id)
+    }
+    func isRunCancelled(noteID: UUID) -> Bool { cancelledRunNoteIDs.contains(noteID) }
+    func transcriptionPreview(for noteID: UUID) -> String? { previewByNoteID[noteID] }
+    func reportExternalPreview(_ text: String, for noteID: UUID) { previewByNoteID[noteID] = text }
 
     func localProgress(for note: VoiceNote) -> Float {
         progressByNoteID[note.id] ?? 0.0
@@ -303,6 +351,7 @@ class TranscriptionService: ObservableObject {
     /// (SegmentedAudioTranscriber) as locally transcribing, so the detail view
     /// shows the same "Transcribing…" state and progress as the in-process path.
     func beginExternalTranscription(noteID: UUID) {
+        cancelledRunNoteIDs.remove(noteID)
         activeNoteID = noteID
         progressByNoteID[noteID] = 0
     }
@@ -312,6 +361,8 @@ class TranscriptionService: ObservableObject {
     }
 
     func endExternalTranscription(noteID: UUID) {
+        cancelledRunNoteIDs.remove(noteID)
+        previewByNoteID.removeValue(forKey: noteID)
         if activeNoteID == noteID { activeNoteID = nil }
         progressByNoteID.removeValue(forKey: noteID)
     }
@@ -391,6 +442,7 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
 
         while isTranscribing {
+            if Task.isCancelled { return .cancelled }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 
@@ -428,13 +480,13 @@ class TranscriptionService: ObservableObject {
             return .cancelled
         }
 
+        if cancelRequested || Task.isCancelled {
+            cancelRequested = false
+            lastCancellationHandled = true
+            return .cancelled
+        }
         switch raw {
         case .text(let rawText):
-            if cancelRequested || Task.isCancelled {
-                cancelRequested = false
-                lastCancellationHandled = true
-                return .cancelled
-            }
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(rawText) else {
                 // Whisper ran but produced nothing usable. Treat it as a real error
                 // to surface for diagnosis — not as a calm "no speech".
@@ -456,6 +508,7 @@ class TranscriptionService: ObservableObject {
         case .whisperError(let diagnostic):
             return .whisperError(diagnostic)
         case .cancelled:
+            lastCancellationHandled = true
             return .cancelled
         }
     }
@@ -476,16 +529,14 @@ class TranscriptionService: ObservableObject {
     func cancelTranscription() {
         print("Cancelling current transcription...")
         cancelRequested = true
+        if let noteID = activeNoteID { cancelledRunNoteIDs.insert(noteID) }
         currentTranscriptionTask?.cancel()
         currentTranscriptionTask = nil
         finishTranscriptionTelemetry()
         stopLeaseHeartbeat()
         resetProgressSmoothing()
-        isTranscribing = false
+        // The owning task releases the engine and note only after decoding exits.
         transcriptionProgress = 0.0
-        if let noteID = activeNoteID {
-            endLocalTranscription(for: noteID)
-        }
     }
 
     func wasTranscriptionCancelled() -> Bool {
@@ -617,7 +668,8 @@ private extension TranscriptionService {
     }
 
     func processingAction(for note: VoiceNote, now: Date) -> ProcessingAction? {
-        guard !note.audioFilePath.isEmpty else {
+        guard !userPausedNoteIDs.contains(note.id) else { return nil }
+        guard !note.audioFilePath.isEmpty, !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
             return nil
         }
 
@@ -684,7 +736,7 @@ private extension TranscriptionService {
             return false
         }
 
-        guard activeNoteID != note.id else {
+        guard activeNoteID != note.id, !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
             return false
         }
 
@@ -694,9 +746,7 @@ private extension TranscriptionService {
             return false
         }
 
-        let hasTranscript = !note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
-        if hasTranscript || note.duration <= 0 || note.audioFilePath.isEmpty {
+        if note.audioFilePath.isEmpty {
             note.completeTranscription()
             note.clearTransientTranscriptionFlags()
         } else {
@@ -748,15 +798,20 @@ private extension TranscriptionService {
     }
 
     func transcribeClaimedNote(_ note: VoiceNote, attemptID: String) async {
-        guard activeNoteID != note.id else {
+        guard activeNoteID != note.id, !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
             return
         }
 
         // Long recordings go through the segmented transcriber (segmented +
         // resumable), same as imports, instead of the whole-file single pass.
         if shouldSegmentTranscription(note) {
-            guard let url = await CloudStorageManager.shared.prepareFileForReading(at: note.audioFilePath) else {
-                requeueNote(note, queuedAt: nowProvider())   // audio not ready — try again later
+            guard let url = await prepareAudioFileForReading(note.audioFilePath) else {
+                if !discardedNoteIDs.contains(note.id),
+                   note.transcriptionOwnerDeviceID == currentDeviceID,
+                   note.transcriptionAttemptID == attemptID,
+                   note.transcriptionState == .claimed {
+                    handleUnavailableAudio(for: note)
+                }
                 return
             }
             await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
@@ -785,7 +840,8 @@ private extension TranscriptionService {
         stopLeaseHeartbeat()
         endLocalTranscription(for: noteID)
 
-        guard note.transcriptionOwnerDeviceID == currentDeviceID,
+        guard !discardedNoteIDs.contains(noteID),
+              note.transcriptionOwnerDeviceID == currentDeviceID,
               note.transcriptionAttemptID == attemptID,
               note.transcriptionState == .claimed else {
             return
@@ -807,7 +863,8 @@ private extension TranscriptionService {
             note.clearTransientTranscriptionFlags()
 
         case .noSpeech:
-            // The whole clip had no speech — finish calmly. This is not an error.
+            // Existing text may be an incomplete live preview, not a proven
+            // complete transcript. A silent retry cannot establish completeness.
             if !hadExistingTranscript {
                 note.transcription = ""
                 note.lastTranscriptionDuration = 0
@@ -815,10 +872,16 @@ private extension TranscriptionService {
                 note.clearTranscriptionTelemetrySummary()
             }
             note.completeTranscription()
-            note.transcriptionOutcome = hadExistingTranscript ? .transcribed : .noSpeech
+            note.transcriptionOutcome = hadExistingTranscript ? .failed : .noSpeech
+            if hadExistingTranscript {
+                note.markTranscriptionFailure("re-transcription produced no speech; kept previous transcript")
+            }
             note.clearTransientTranscriptionFlags()
 
-        case .modelUnavailable, .audioUnavailable, .cancelled:
+        case .audioUnavailable:
+            handleUnavailableAudio(for: note)
+
+        case .modelUnavailable, .cancelled:
             // Nothing to blame the user for: the model isn't loaded yet, the audio
             // isn't downloaded yet, or it was cancelled. Requeue and let it run again
             // automatically once the condition clears (e.g. modelLoadedNotification).
@@ -837,13 +900,14 @@ private extension TranscriptionService {
                 note.clearTranscriptionTelemetrySummary()
             }
             note.completeTranscription()
-            note.transcriptionOutcome = hadExistingTranscript ? .transcribed : .failed
+            note.transcriptionOutcome = .failed
             note.markTranscriptionFailure(diagnostic ?? "transcription error")
             note.clearTransientTranscriptionFlags()
         }
     }
 
     func beginLocalTranscription(for note: VoiceNote, attemptID: String) {
+        cancelledRunNoteIDs.remove(note.id)
         cancelRequested = false
         activeNoteID = note.id
         progressByNoteID[note.id] = 0.0
@@ -858,11 +922,32 @@ private extension TranscriptionService {
     }
 
     func endLocalTranscription(for noteID: UUID) {
+        cancelledRunNoteIDs.remove(noteID)
         if activeNoteID == noteID {
             activeNoteID = nil
         }
         progressByNoteID.removeValue(forKey: noteID)
         transcriptionProgress = 0.0
+    }
+
+    private func handleUnavailableAudio(for note: VoiceNote) {
+        let queuedAt = note.transcriptionQueuedAt ?? nowProvider()
+        let permanentlyMissing = isAudioPermanentlyMissing(note.audioFilePath)
+        if !permanentlyMissing,
+           nowProvider().timeIntervalSince(queuedAt) < audioAvailabilityRetryWindow {
+            // Keep the persisted first queue time so repeated cloud failures cannot
+            // restart the retry window indefinitely, including after app relaunch.
+            requeueNote(note, queuedAt: queuedAt)
+            return
+        }
+        // Timeout means unavailable, not proven missing. Both outcomes preserve
+        // prior text and recovery checkpoints and allow an explicit later retry.
+        note.completeTranscription()
+        note.transcriptionOutcome = .failed
+        note.markTranscriptionFailure(permanentlyMissing
+            ? "Audio file is missing from this device. Restore the audio or import it again to retry."
+            : "Audio is still unavailable. Automatic retries stopped. Check iCloud and retry.")
+        note.clearTransientTranscriptionFlags()
     }
 
     func requeueNote(_ note: VoiceNote, queuedAt: Date) {
@@ -983,7 +1068,7 @@ private extension TranscriptionService {
                 task: .transcribe,
                 language: languageCode,
                 temperature: 0.0,
-                temperatureFallbackCount: 0,
+                temperatureFallbackCount: 3,
                 sampleLength: 224,
                 usePrefillPrompt: true,
                 usePrefillCache: false,
@@ -992,6 +1077,7 @@ private extension TranscriptionService {
                 withoutTimestamps: false,
                 wordTimestamps: false,
                 clipTimestamps: [0.0],
+                compressionRatioThreshold: 2.0,
                 // Incremental segments are pre-cut to ≤29 s by our own VAD;
                 // WhisperKit must treat each input as a single window.
                 chunkingStrategy: ChunkingStrategy.none
@@ -1038,12 +1124,21 @@ private extension TranscriptionService {
                 return .whisperError("empty result")
             }
 
-            return .text(result.text)
+            return Self.validatedWhisperOutput(result.text)
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
             return .whisperError("WhisperKit error: \(error.localizedDescription)")
         }
+    }
+
+    nonisolated internal static func validatedWhisperOutput(_ text: String) -> RawTranscription {
+        // Decoder temperature fallback can exhaust its retries and still return
+        // repetitive text. Reject it before the caller commits a successful result.
+        guard TextUtilities.compressionRatio(of: text) <= 2.0 else {
+            return .whisperError("repetitive output")
+        }
+        return .text(text)
     }
 
     func resetProgressSmoothing() {

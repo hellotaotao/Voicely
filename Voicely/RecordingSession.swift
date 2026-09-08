@@ -5,6 +5,39 @@
 
 import AVFoundation
 import Foundation
+import SwiftData
+import UIKit
+
+/// A finite iOS execution allowance for post-recording persistence and final flush.
+/// Expiration releases the assertion; it does not cancel work or promise continued execution.
+@MainActor
+final class RecordingFinalizationBackgroundTask {
+    private var taskID: UIBackgroundTaskIdentifier = .invalid
+    private let endTask: @MainActor (UIBackgroundTaskIdentifier) -> Void
+
+    init(
+        begin: @MainActor (@escaping @Sendable () -> Void) -> UIBackgroundTaskIdentifier = { expiration in
+            #if targetEnvironment(macCatalyst)
+            return .invalid
+            #else
+            return UIApplication.shared.beginBackgroundTask(withName: "Finalize recording", expirationHandler: expiration)
+            #endif
+        },
+        end: @escaping @MainActor (UIBackgroundTaskIdentifier) -> Void = { UIApplication.shared.endBackgroundTask($0) }
+    ) {
+        endTask = end
+        taskID = begin { [weak self] in
+            Task { @MainActor in self?.end() }
+        }
+    }
+
+    func end() {
+        guard taskID != .invalid else { return }
+        let completedTaskID = taskID
+        taskID = .invalid
+        endTask(completedTaskID)
+    }
+}
 
 /// Abstraction over the audio recorder so the recording-session control logic
 /// can be unit-tested without driving a real `AVAudioEngine`.
@@ -55,6 +88,8 @@ final class RecordingSession: ObservableObject {
     private let audioService: RecordingAudioControlling
     private let transcriptionService: TranscriptionService
 
+    @Published private var finalizingNoteIDs: Set<UUID> = []
+
     private var coordinator: IncrementalTranscriptionCoordinator?
 
     /// Called when a note is created (on start, or — defensively — on stop if no
@@ -87,6 +122,10 @@ final class RecordingSession: ObservableObject {
             isRecording: audioService.isRecording,
             isStarting: isStartingRecording
         )
+    }
+
+    func isRecording(_ note: VoiceNote) -> Bool {
+        currentRecordingNote?.id == note.id || finalizingNoteIDs.contains(note.id)
     }
 
     var canStopRecording: Bool {
@@ -157,6 +196,7 @@ final class RecordingSession: ObservableObject {
         note.isTranscribing = true
         note.transcriptionProgress = 0.0
         currentRecordingNote = note
+        transcriptionService.beginLocalRecording(noteID: note.id)
         recordingStartedAt = Date()
         isStartingRecording = false
         didStart = true
@@ -228,6 +268,7 @@ final class RecordingSession: ObservableObject {
     }
 
     private func finalizeRecording() {
+        let backgroundTask = RecordingFinalizationBackgroundTask()
         let capturedCoordinator = coordinator
         let recordingNote = currentRecordingNote
         coordinator = nil
@@ -236,20 +277,34 @@ final class RecordingSession: ObservableObject {
         isStartingRecording = false
         recordingStartedAt = nil
 
-        let finalFrame = audioService.currentFramePosition
         let stopResult = audioService.stopRecording()
+        let finalFrame = audioService.currentFramePosition
         RecordingLiveActivityController.shared.end(elapsedDuration: stopResult.duration)
 
-        guard let filePath = stopResult.filePath else { return }
+        guard let filePath = stopResult.filePath else {
+            backgroundTask.end()
+            capturedCoordinator?.pause()
+            capturedCoordinator?.transcriptCallback = nil
+            if let recordingNote {
+                recordingNote.completeTranscription()
+                recordingNote.transcriptionOutcome = .failed
+                recordingNote.markTranscriptionFailure("Recording could not be finalized. Please check the saved audio before retrying.")
+                recordingNote.clearTransientTranscriptionFlags()
+                transcriptionService.endLocalRecording(noteID: recordingNote.id)
+            }
+            return
+        }
 
         let note: VoiceNote
         if let recordingNote {
             note = recordingNote
         } else {
             note = makeRecordingNote(filePath: filePath)
+            note.transcriptionOriginDeviceID = transcriptionService.deviceIDProvider()
             onRecordingComplete(note)
         }
 
+        finalizingNoteIDs.insert(note.id)
         note.audioFilePath = filePath
         note.duration = stopResult.duration
         note.isTranscribing = true
@@ -257,6 +312,23 @@ final class RecordingSession: ObservableObject {
         note.transcriptionProgress = 0.0
 
         Task { @MainActor in
+            defer {
+                backgroundTask.end()
+                finalizingNoteIDs.remove(note.id)
+                transcriptionService.endLocalRecording(noteID: note.id)
+            }
+            let assetTask = Task { @MainActor in
+                if let path = await stopResult.resolvedFilePath() {
+                    note.audioFilePath = path
+                    do {
+                        try note.modelContext?.save()
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+                return false
+            }
             let accumulatedTranscript: String
             if let coord = capturedCoordinator {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
@@ -264,10 +336,14 @@ final class RecordingSession: ObservableObject {
                 accumulatedTranscript = ""
             }
 
+            if await assetTask.value {
+                await stopResult.cleanupTemporaryAudio()
+            }
+
             let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(accumulatedTranscript)
             let trimmedTranscript = finalizedTranscript?.text ?? ""
 
-            if !trimmedTranscript.isEmpty {
+            if !trimmedTranscript.isEmpty, capturedCoordinator?.requiresFullTranscription == false {
                 note.transcription = trimmedTranscript
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
@@ -277,8 +353,8 @@ final class RecordingSession: ObservableObject {
                 return
             }
 
-            await stopResult.awaitConversionIfNeeded(forIncrementalTranscript: trimmedTranscript)
-            transcriptionService.configureNewNote(note, shouldStartImmediately: isModelLoaded)
+            transcriptionService.endLocalRecording(noteID: note.id)
+            note.queueTranscription(at: Date())
             if isModelLoaded {
                 await transcriptionService.processPendingTranscriptions(notes: [note])
             }

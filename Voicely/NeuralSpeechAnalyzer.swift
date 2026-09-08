@@ -12,7 +12,7 @@ enum NeuralSpeechAnalyzerError: Error {
 
 enum NeuralSpeechAnalyzer {
     /// EverLog-style conservative VAD gate: only skip audio when neural VAD is confidently silent.
-    /// Any uncertain frame is treated as speech-present so Voicely does not silently drop user speech.
+    /// Confirmed speech passes immediately; uncertain activity must persist briefly.
     private static let speechThreshold = 0.55
     private static let silenceThreshold = 0.40
     private static let minimumSpeechSeconds = 0.25
@@ -67,6 +67,7 @@ enum NeuralSpeechAnalyzer {
         // Samples that don't fill a whole VAD window carry over to the next
         // chunk, so zero-padding happens at most once — at the end of the file.
         var pendingSamples: [Float] = []
+        var uncertainSpeechSeconds: TimeInterval = 0
 
         while sourceFile.framePosition < sourceFile.length {
             inputBuffer.frameLength = 0
@@ -100,14 +101,16 @@ enum NeuralSpeechAnalyzer {
             if usableCount > 0 {
                 let windowedSamples = Array(pendingSamples.prefix(usableCount))
                 pendingSamples.removeFirst(usableCount)
-                if try containsProbableSpeech(in: windowedSamples, detector: detector) {
+                if try containsProbableSpeech(in: windowedSamples, detector: detector,
+                    uncertainSpeechSeconds: &uncertainSpeechSeconds) {
                     return true
                 }
             }
         }
 
         guard !pendingSamples.isEmpty else { return false }
-        return try containsProbableSpeech(in: pendingSamples, detector: detector)
+        return try containsProbableSpeech(in: pendingSamples, detector: detector,
+            uncertainSpeechSeconds: &uncertainSpeechSeconds)
     }
 
     static func containsProbableSpeech(
@@ -117,27 +120,40 @@ enum NeuralSpeechAnalyzer {
         silenceThreshold: Double = Self.silenceThreshold,
         minimumSpeechSeconds: TimeInterval = Self.minimumSpeechSeconds
     ) throws -> Bool {
+        var uncertainSpeechSeconds: TimeInterval = 0
+        return try containsProbableSpeech(in: samples, detector: detector,
+            speechThreshold: speechThreshold, silenceThreshold: silenceThreshold,
+            minimumSpeechSeconds: minimumSpeechSeconds,
+            uncertainSpeechSeconds: &uncertainSpeechSeconds)
+    }
+
+    private static func containsProbableSpeech(
+        in samples: [Float],
+        detector: NeuralVoiceActivityDetecting,
+        speechThreshold: Double = Self.speechThreshold,
+        silenceThreshold: Double = Self.silenceThreshold,
+        minimumSpeechSeconds: TimeInterval = Self.minimumSpeechSeconds,
+        uncertainSpeechSeconds: inout TimeInterval
+    ) throws -> Bool {
         guard !samples.isEmpty else { return false }
 
         let vadFrames = try detector.speechProbabilities(in: samples)
         guard !vadFrames.isEmpty else { return false }
 
-        var confirmedSpeechSeconds: TimeInterval = 0
         let secondsPerSample = 1.0 / Double(SileroNeuralVoiceActivityDetector.sampleRate)
 
         for frame in vadFrames {
             if frame.speechProbability >= speechThreshold {
-                confirmedSpeechSeconds += Double(frame.endFrame - frame.startFrame) * secondsPerSample
-                if confirmedSpeechSeconds >= minimumSpeechSeconds {
-                    return true
-                }
-            } else {
-                confirmedSpeechSeconds = 0
+                return true
             }
 
-            // Conservative skip policy: uncertain frames are not silence, so transcribe them.
+            // Isolated uncertain spikes must not admit an otherwise silent chunk.
+            // Carry the duration across streaming reads so boundaries do not drop speech.
             if frame.speechProbability > silenceThreshold {
-                return true
+                uncertainSpeechSeconds += Double(frame.endFrame - frame.startFrame) * secondsPerSample
+                if uncertainSpeechSeconds >= minimumSpeechSeconds { return true }
+            } else {
+                uncertainSpeechSeconds = 0
             }
         }
 

@@ -469,9 +469,67 @@ struct IncrementalTranscriptionCoordinatorTests {
         let transcript = await stopTask.value
         await segmentTask.value
 
-        #expect(transcript == "segment 1\nsegment 2")
-        #expect(coordinator.accumulatedTranscript == "segment 1\nsegment 2")
-        #expect(await harness.numberOfCalls() == 2)
+        #expect(transcript == "segment 1\nsegment 2\nsegment 3")
+        #expect(coordinator.accumulatedTranscript == "segment 1\nsegment 2\nsegment 3")
+        #expect(await harness.numberOfCalls() == 3)
+    }
+
+    @Test func extractionRejectsTruncatedInputAndUsesUniquePaths() throws {
+        let source = try makeSilentCAF(seconds: 2)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let first = try #require(IncrementalTranscriptionCoordinator.extractSegment(
+            fileURL: source, from: 0, to: 32_000, segmentIndex: 1))
+        let second = try #require(IncrementalTranscriptionCoordinator.extractSegment(
+            fileURL: source, from: 0, to: 32_000, segmentIndex: 1))
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+        #expect(first != second)
+        #expect(try AVAudioFile(forReading: first).length == 32_000)
+        #expect(IncrementalTranscriptionCoordinator.extractSegment(
+            fileURL: source, from: 0, to: 48_000, segmentIndex: 2) == nil)
+        #expect(IncrementalTranscriptionCoordinator.extractSegment(
+            fileURL: source, from: 5, to: 0, segmentIndex: 2) == nil)
+    }
+
+    actor SliceDurationRecorder {
+        private(set) var durations: [Double] = []
+
+        func record(_ path: String) -> String? {
+            guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else { return nil }
+            durations.append(Double(file.length) / file.processingFormat.sampleRate)
+            return "slice \(durations.count)"
+        }
+    }
+
+    @Test @MainActor func finalFlushDrainsBacklogInEngineSizedWindows() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 75)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        let recorder = SliceDurationRecorder()
+        coordinator.transcribeOverride = { @Sendable path in await recorder.record(path) }
+
+        _ = await coordinator.stop(currentFrame: 75 * 16_000)
+
+        let durations = await recorder.durations
+        #expect(durations == [29, 29, 17])
+        #expect(!coordinator.requiresFullTranscription)
+    }
+
+    @Test @MainActor func failedLiveSliceRequiresWholeFileRecoveryDespiteEarlierText() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 40)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        let sequence = TranscriptSequence(["first slice"])
+        coordinator.transcribeOverride = { @Sendable _ in await sequence.next() }
+
+        _ = await coordinator.stop(currentFrame: 40 * 16_000)
+
+        #expect(coordinator.accumulatedTranscript == "first slice")
+        #expect(coordinator.requiresFullTranscription)
     }
 
     @Test @MainActor func stopTranscribesFinalTailShorterThanMinimumChunk() async throws {
@@ -602,11 +660,21 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 16_000), detector: detector) == false)
     }
 
-    @Test func neuralSpeechAnalyzerAcceptsUncertainOrSpeechFrames() throws {
+    @Test func neuralSpeechAnalyzerRequiresSustainedUncertaintyButAcceptsSpeech() throws {
         let uncertainDetector = FakeNeuralVAD(frameProbabilities: [
             (startFrame: 0, endFrame: 576, speechProbability: 0.45)
         ])
-        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 576), detector: uncertainDetector) == true)
+        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 576), detector: uncertainDetector) == false)
+
+        let sustainedDetector = FakeNeuralVAD(frameProbabilities: [
+            (startFrame: 0, endFrame: 4_032, speechProbability: 0.45)
+        ])
+        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 4_032), detector: sustainedDetector))
+
+        let shortSpeechDetector = FakeNeuralVAD(frameProbabilities: [
+            (startFrame: 0, endFrame: 576, speechProbability: 0.9)
+        ])
+        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(in: Array(repeating: 0, count: 576), detector: shortSpeechDetector))
 
         let speechDetector = FakeNeuralVAD(frameProbabilities: Self.makeVADFrames(
             durationSeconds: 0.35,

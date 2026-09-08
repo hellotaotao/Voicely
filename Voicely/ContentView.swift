@@ -670,6 +670,7 @@ struct ContentView: View {
             return
         }
 
+        var unpublishedWorkingCopy: URL?
         do {
             let title = url.deletingPathExtension().lastPathComponent
             // Imported audio is transcribed to text only: keep the file name as
@@ -678,7 +679,9 @@ struct ContentView: View {
             note.titleWasManuallyEdited = true
 
             // Copy only to the non-synced working copy — never into the iCloud store.
-            let workingCopy = try transcriptionService.segmentProgressStore.importWorkingCopy(from: url, for: note.id)
+            let workingCopy = try await transcriptionService.segmentProgressStore.importWorkingCopyAsync(from: url, for: note.id)
+            unpublishedWorkingCopy = workingCopy
+            try Task.checkCancellation()
             // Pre-flight: if AVFoundation can't open it (unsupported codec such
             // as OGG/Opus, or a corrupt file), fail fast with a clear message
             // instead of creating a note that will just end up "failed".
@@ -688,8 +691,12 @@ struct ContentView: View {
                 return
             }
             note.duration = await audioDuration(for: workingCopy)
+            try Task.checkCancellation()
 
             modelContext.insert(note)
+            // The context now owns this note. Retain its recovery file even if
+            // saving fails, since the inserted note may be persisted later.
+            unpublishedWorkingCopy = nil
             try modelContext.save()
             selectedNoteID = note.id
 
@@ -699,7 +706,14 @@ struct ContentView: View {
             guard transcriptionService.isWhisperAvailable() else { return }
             await runImportTranscription { await $0.transcribe(note: note, sourceURL: workingCopy) }
         } catch {
-            inboundAudioImportError = error.localizedDescription
+            if let unpublishedWorkingCopy {
+                await Task.detached(priority: .utility) {
+                    try? FileManager.default.removeItem(at: unpublishedWorkingCopy)
+                }.value
+            }
+            if !(error is CancellationError) {
+                inboundAudioImportError = error.localizedDescription
+            }
         }
     }
 

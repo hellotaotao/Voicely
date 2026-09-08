@@ -56,6 +56,94 @@ struct SegmentProgressStoreTests {
         #expect(store.existingWorkingCopyURL(for: id) == nil)
     }
 
+    @Test @MainActor func asyncImportCopiesBytesOffMainThread() async throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let source = store.directory.appendingPathComponent("source.WAV")
+        let bytes = Data([3, 1, 4, 1, 5])
+        try bytes.write(to: source)
+        let copy = try await store.importWorkingCopyAsync(from: source, for: UUID()) { source, destination in
+            #expect(!Thread.isMainThread)
+            try FileManager.default.copyItem(at: source, to: destination)
+        }
+        #expect(copy.pathExtension == "WAV")
+        #expect(try Data(contentsOf: copy) == bytes)
+    }
+
+    @Test func asyncImportUsesFallbackExtension() async throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let source = store.directory.appendingPathComponent("source")
+        try Data([1]).write(to: source)
+        let copy = try await store.importWorkingCopyAsync(from: source, for: UUID())
+        #expect(copy.pathExtension == "audio")
+    }
+
+    @Test func asyncImportFailureRemovesPartialCopy() async throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let source = store.directory.appendingPathComponent("source.wav")
+        try Data([1]).write(to: source)
+        let id = UUID()
+        await #expect(throws: CocoaError.self) {
+            _ = try await store.importWorkingCopyAsync(from: source, for: id) { _, destination in
+                try Data([2]).write(to: destination)
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+        #expect(store.existingWorkingCopyURL(for: id) == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory.path) == ["source.wav"])
+    }
+
+    @Test func asyncImportMissingSourceLeavesNoWorkingCopy() async throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let id = UUID()
+        let source = store.directory.appendingPathComponent("missing.wav")
+        await #expect(throws: (any Error).self) {
+            _ = try await store.importWorkingCopyAsync(from: source, for: id)
+        }
+        #expect(store.existingWorkingCopyURL(for: id) == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory.path).isEmpty)
+    }
+
+    @Test func cancelledImportDoesNotStartCopy() async throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let source = store.directory.appendingPathComponent("source.wav")
+        try Data([1]).write(to: source)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await store.importWorkingCopyAsync(from: source, for: UUID()) { _, _ in
+                Issue.record("A cancelled import must not start copying")
+            }
+        }
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+    }
+
+    @Test func asyncImportCancellationRemovesCompletedCopy() async throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let source = store.directory.appendingPathComponent("source.wav")
+        try Data([1]).write(to: source)
+        let started = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        let id = UUID()
+        let task = Task {
+            try await store.importWorkingCopyAsync(from: source, for: id) { source, destination in
+                try FileManager.default.copyItem(at: source, to: destination)
+                started.continuation.yield(())
+                release.wait()
+            }
+        }
+        for await _ in started.stream { break }
+        task.cancel()
+        release.signal()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(store.existingWorkingCopyURL(for: id) == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory.path) == ["source.wav"])
+    }
+
     @Test func beginTranscribingIsExclusivePerNote() {
         let store = makeStore()
         let id = UUID()

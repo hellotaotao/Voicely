@@ -145,27 +145,82 @@ final class SegmentProgressStore {
         }))
     }
 
-    /// Copies the shared (security-scoped) source file into the non-synced
-    /// working directory so transcription has a stable, controllable copy.
+    /// Runs coordinated file I/O on a utility worker without sending the store
+    /// or a model object across isolation boundaries.
+    func importWorkingCopyAsync(
+        from sourceURL: URL,
+        for id: UUID,
+        copyOperation: @escaping @Sendable (URL, URL) throws -> Void = { source, destination in
+            try FileManager.default.copyItem(at: source, to: destination)
+        }
+    ) async throws -> URL {
+        try Task.checkCancellation()
+        let destination = workingCopyURL(for: id, fileExtension: sourceURL.pathExtension)
+        let worker = Task.detached(priority: .utility) {
+            try Self.copyWorkingFile(from: sourceURL, to: destination, copyOperation: copyOperation)
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await worker.value
+            // Cancellation can arrive after the worker's final check but before
+            // its result is delivered. Never publish that abandoned import.
+            if Task.isCancelled {
+                await Task.detached(priority: .utility) {
+                    try? FileManager.default.removeItem(at: result)
+                }.value
+                throw CancellationError()
+            }
+            return result
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
+    /// Synchronous entry point for callers already running off the main actor.
     func importWorkingCopy(from sourceURL: URL, for id: UUID) throws -> URL {
+        try Self.copyWorkingFile(
+            from: sourceURL,
+            to: workingCopyURL(for: id, fileExtension: sourceURL.pathExtension)
+        ) { source, destination in
+            try FileManager.default.copyItem(at: source, to: destination)
+        }
+    }
+
+    private static func copyWorkingFile(
+        from sourceURL: URL,
+        to destination: URL,
+        copyOperation: (URL, URL) throws -> Void
+    ) throws -> URL {
+        try Task.checkCancellation()
         let accessed = sourceURL.startAccessingSecurityScopedResource()
         defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
 
-        createDirectoryIfNeeded()
-        let destination = workingCopyURL(for: id, fileExtension: sourceURL.pathExtension)
+        let fileManager = FileManager.default
+        var directory = destination.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? directory.setResourceValues(values)
         try? fileManager.removeItem(at: destination)
 
-        var coordinationError: NSError?
-        var copyError: Error?
-        NSFileCoordinator(filePresenter: nil).coordinate(
-            readingItemAt: sourceURL, options: [.withoutChanges], error: &coordinationError
-        ) { readableURL in
-            do { try fileManager.copyItem(at: readableURL, to: destination) }
-            catch { copyError = error }
+        do {
+            var coordinationError: NSError?
+            var copyError: Error?
+            NSFileCoordinator(filePresenter: nil).coordinate(
+                readingItemAt: sourceURL, options: [.withoutChanges], error: &coordinationError
+            ) { readableURL in
+                do {
+                    try Task.checkCancellation()
+                    try copyOperation(readableURL, destination)
+                } catch { copyError = error }
+            }
+            if let coordinationError { throw coordinationError }
+            if let copyError { throw copyError }
+            try Task.checkCancellation()
+            return destination
+        } catch {
+            try? fileManager.removeItem(at: destination)
+            throw error
         }
-        if let coordinationError { throw coordinationError }
-        if let copyError { throw copyError }
-        return destination
     }
 
     func removeWorkingCopy(for id: UUID) {

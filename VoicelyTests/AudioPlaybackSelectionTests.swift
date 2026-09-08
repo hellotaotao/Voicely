@@ -18,6 +18,17 @@ struct AudioPlaybackSelectionTests {
         #expect(finalizedSelection != stoppedSelection)
     }
 
+    @Test func exportReadinessTriggersSelectionWithoutChangingPersistedPath() {
+        let noteID = UUID()
+        let pending = AudioPlaybackSelection(noteID: noteID, filePath: "note.m4a",
+                                             isRecording: false, isPreparingAudio: true)
+        let ready = AudioPlaybackSelection(noteID: noteID, filePath: "note.m4a",
+                                           isRecording: false, isPreparingAudio: false)
+        #expect(pending == nil)
+        #expect(ready != nil)
+        #expect(pending != ready)
+    }
+
     @Test func unchangedAssetKeepsSelectionAndMissingAudioClearsIt() {
         let noteID = UUID()
         let selection = AudioPlaybackSelection(noteID: noteID, filePath: "same.m4a", isRecording: false)

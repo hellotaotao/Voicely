@@ -546,7 +546,8 @@ struct ContentView: View {
         VoiceNoteDetailView(
             note: note,
             audioService: audioService,
-            showingSettings: $showingSettings
+            showingSettings: $showingSettings,
+            isPreparingAudio: recordingSession.isPreparingAudio(note)
         )
             .environmentObject(transcriptionService)
     }
@@ -1379,8 +1380,8 @@ struct AudioPlaybackSelection: Equatable {
     let noteID: UUID
     let filePath: String
 
-    init?(noteID: UUID, filePath: String, isRecording: Bool) {
-        guard !isRecording, !filePath.isEmpty else { return nil }
+    init?(noteID: UUID, filePath: String, isRecording: Bool, isPreparingAudio: Bool = false) {
+        guard !isRecording, !isPreparingAudio, !filePath.isEmpty else { return nil }
         self.noteID = noteID
         self.filePath = filePath
     }
@@ -1390,6 +1391,7 @@ struct VoiceNoteDetailView: View {
     let note: VoiceNote
     @ObservedObject var audioService: AudioRecordingService
     @Binding var showingSettings: Bool
+    var isPreparingAudio = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
@@ -1551,11 +1553,11 @@ struct VoiceNoteDetailView: View {
     }
 
     private var audioPlaybackSelection: AudioPlaybackSelection? {
-        AudioPlaybackSelection(noteID: note.id, filePath: note.audioFilePath, isRecording: isRecordingInProgress)
+        AudioPlaybackSelection(noteID: note.id, filePath: note.audioFilePath, isRecording: isRecordingInProgress, isPreparingAudio: isPreparingAudio)
     }
 
     private var shouldShowAudioPlayerCard: Bool {
-        !note.audioFilePath.isEmpty && !isRecordingInProgress
+        !note.audioFilePath.isEmpty && !isRecordingInProgress && !isPreparingAudio
     }
 
     var body: some View {
@@ -1564,7 +1566,9 @@ struct VoiceNoteDetailView: View {
                 headerBlock
                 metadataRow
 
-                if shouldShowAudioPlayerCard {
+                if isPreparingAudio {
+                    ProgressView("Preparing audio…")
+                } else if shouldShowAudioPlayerCard {
                     audioPlayerCard
                 }
 

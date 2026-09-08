@@ -166,9 +166,12 @@ struct RecordingSessionTests {
         ) { _, _ in throw CocoaError(.fileWriteUnknown) }
         session.stopRecording()
         #expect(session.isRecording(note))
+        #expect(session.isPreparingAudio(note))
+        #expect(note.audioFilePath == output.lastPathComponent)
         await gate.waitUntilArmed()
         try await waitUntil { note.audioFilePath == fallback.lastPathComponent }
         #expect(note.audioFilePath == fallback.lastPathComponent)
+        #expect(!session.isPreparingAudio(note))
         #expect(session.isRecording(note))
         #expect(FileManager.default.fileExists(atPath: pcmURL.path))
         await gate.resume()

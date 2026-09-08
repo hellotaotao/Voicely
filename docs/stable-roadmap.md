@@ -199,3 +199,34 @@ The original 81.86-second acceptance recording exposed a permissive VAD gate: a 
 The same local sample now skips the uncertain segment while preserving both speech segments. Two retranscriptions in the newly restarted Mac build retained both spoken sentences without repetitive garbage, with the original custom prompt restored. The user confirmed that the hesitation before “four” was actually spoken, not a recognition error. Mac Catalyst and iPhone simulator each passed 198 unit tests across 25 suites. Logs: /tmp/voicely-vad-full-mac.log and /tmp/voicely-vad-full-ios.log. UI tests were not rerun for this delta. The temporary private-audio diagnostic was removed from the repository.
 
 The exact historical segment failure that originally triggered full retranscription remains unidentified. Fresh recording lifecycle acceptance after this delta, quiet-voice coverage, and iPhone device release gates remain separate from this sample-based regression check. The transient audio-unavailable UI message remains unresolved. No TestFlight upload or remote push was performed.
+
+
+# Release stabilization follow-up
+
+## Completed checks
+
+The transient audio-unavailable cause was an optimistic M4A filename exposed before export existed. RecordingStopResult now exposes the existing CAF source until resolvedFilePath returns the durable export. Regression assertions failed before the fix. Mac and iPhone simulator each passed 199 unit tests /25 suites after the fix. Logs: /tmp/voicely-playback-ready-{red,mac,ios}.log.
+
+A restarted Mac build recorded a new 22-second test note at 21:39. The observed post-stop UI no longer displayed Audio file unavailable. Playback started and advanced. This was a silence/background-noise sample, not a speech accuracy test. App exited after testing to stop playback. No iPhone physical-device acceptance or TestFlight upload occurred.
+
+## Claude Opus round 2
+
+Runtime claude-opus-5, requested high effort, subscription, read-only, exit0, no permission denials, structured schema validated. Review completed; reviewer verdict fail due unresolved important findings. F-002 confirmed fixed by text backstop8.0. F-001 native token2.0 and F-003 quiet/intermittent speech remain open; they are static risks, not reproduced physical-device failures. F-004 mono format pairing remains minor test gap. F-005 downgraded after acknowledging old gate already immediately admitted confirmed frames.
+
+New minor findings: F-006 playing CAF during export can be interrupted when the durable path reloads the player; F-007 publishing temporary absolute path may expose a nonportable path through sync. These are not closed by the short local recording test. No third review invoked. Current changes are uncommitted and not pushed. Product release acceptance is not complete.
+
+## Audio readiness correction — supersedes the CAF-first follow-up
+
+Use transient RecordingSession readiness to defer playback until export resolves; persist the portable destination rather than exposing temporary PCM during normal conversion. Release readiness is separate from transcription final flush, so playback need not wait for transcription. Conversion failure still retains durable CAF or the only surviving source.
+
+Mac: 200 tests / 25 suites passed. Live 51-second recording verified pause, resume, Preparing audio, final player, and playback progression to 23 seconds. No speech accuracy claim for this sample. Latest delta has primary verification, not a new Opus approval. Physical iPhone is currently unavailable; old-data upgrade, background/lock, meeting-length completeness and relevant iCloud checks remain release acceptance gates. No commit or upload.
+
+## Acceptance scope update — user authorized
+
+The user explicitly waived physical iPhone testing for this round and requested autonomous Mac testing plus iOS logic inspection. Do not request device connection again or keep physical testing as a blocking gate for this round. This waiver is not evidence that phone hardware or old-data upgrades passed.
+
+Static iOS inspection: Info.plist declares background audio; iOS activates AVAudioSession .record; pause suspends PCM writes while retaining input IO; an interruption finalizes the existing note instead of pretending to continue; a finite UIKit background assertion covers finalization and ends on completion/expiration. Unit tests cover interruption finalization and assertion release. None proves actual lock-screen OS scheduling or device memory behavior. Model inference settings were not changed in this playback correction.
+
+## Final verification for this delta
+
+Mac unit tests: PASS, 200 tests / 25 suites; real recording/pause/resume/export/playback: PASS within the 51-second scope. iOS Simulator build: PASS (/tmp/voicely-readiness-ios-build.log). iOS unit execution: incomplete; both initial and explicit booted-device runs stalled at test startup with no test results, then were interrupted. The test host sample showed an idle application run loop and no XCTest image; this suggests a harness attachment issue, not an observed product assertion failure. Do not substitute the earlier 199-test result for this final delta. git diff --check passed. Phone testing waived explicitly by the user. Final delta remains uncommitted.

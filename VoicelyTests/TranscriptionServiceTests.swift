@@ -10,6 +10,15 @@ import Testing
 @testable import Voicely
 
 struct TranscriptionServiceTests {
+    @Test func ordinaryRepeatedChecklistIsPreserved() {
+        let text = "When recording starts, check the recording status. When recording pauses, check the recording timer. When recording resumes, check the recording timer again. When recording stops, check the recording file. When the recording file opens, check the beginning and the end of the recording."
+        if case .text(let result) = TranscriptionService.validatedWhisperOutput(text) {
+            #expect(result == text)
+        } else {
+            Issue.record("A normal checklist must not be rejected for repeated terminology")
+        }
+    }
+
     @Test func repeatedWhisperOutputIsNotAcceptedAsSuccess() {
         let text = "First segment. " + String(repeating: "Claude Code, ", count: 80)
         if case .whisperError = TranscriptionService.validatedWhisperOutput(text) {} else {

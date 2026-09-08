@@ -89,6 +89,7 @@ final class RecordingSession: ObservableObject {
     private let transcriptionService: TranscriptionService
 
     @Published private var finalizingNoteIDs: Set<UUID> = []
+    @Published private var preparingAudioNoteIDs: Set<UUID> = []
 
     private var coordinator: IncrementalTranscriptionCoordinator?
 
@@ -126,6 +127,10 @@ final class RecordingSession: ObservableObject {
 
     func isRecording(_ note: VoiceNote) -> Bool {
         currentRecordingNote?.id == note.id || finalizingNoteIDs.contains(note.id)
+    }
+
+    func isPreparingAudio(_ note: VoiceNote) -> Bool {
+        preparingAudioNoteIDs.contains(note.id)
     }
 
     var canStopRecording: Bool {
@@ -304,6 +309,7 @@ final class RecordingSession: ObservableObject {
             onRecordingComplete(note)
         }
 
+        preparingAudioNoteIDs.insert(note.id)
         finalizingNoteIDs.insert(note.id)
         note.audioFilePath = filePath
         note.duration = stopResult.duration
@@ -318,6 +324,7 @@ final class RecordingSession: ObservableObject {
                 transcriptionService.endLocalRecording(noteID: note.id)
             }
             let assetTask = Task { @MainActor in
+                defer { preparingAudioNoteIDs.remove(note.id) }
                 if let path = await stopResult.resolvedFilePath() {
                     note.audioFilePath = path
                     do {

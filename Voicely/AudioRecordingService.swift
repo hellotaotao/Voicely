@@ -57,6 +57,7 @@ struct RecordingStopResult {
             }
         }
         var result = RecordingStopResult(
+            // Keep the persisted identity portable while export is pending.
             filePath: destinationURL.lastPathComponent,
             duration: duration,
             awaitConversion: { _ = await task.value }
@@ -75,7 +76,7 @@ struct RecordingStopResult {
         return result
     }
 
-    /// Returns an existing playable path instead of the optimistic M4A filename.
+    /// Returns the durable export path, or the retained source if export failed.
     func resolvedFilePath() async -> String? {
         if let resolvePath { return await resolvePath() }
         await awaitConversion?()

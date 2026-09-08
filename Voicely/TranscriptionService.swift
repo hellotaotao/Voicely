@@ -1134,8 +1134,9 @@ private extension TranscriptionService {
 
     nonisolated internal static func validatedWhisperOutput(_ text: String) -> RawTranscription {
         // Decoder temperature fallback can exhaust its retries and still return
-        // repetitive text. Reject it before the caller commits a successful result.
-        guard TextUtilities.compressionRatio(of: text) <= 2.0 else {
+        // repetitive text. Use a loose backstop, not a normal-speech quality gate:
+        // legitimate repeated terminology can exceed ratios of 2.0 and 2.4.
+        guard TextUtilities.compressionRatio(of: text) <= 8.0 else {
             return .whisperError("repetitive output")
         }
         return .text(text)

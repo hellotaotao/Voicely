@@ -16,6 +16,8 @@ struct RecordingPersistenceTests {
         ) { _, output in
             try bytes.write(to: output)
         }
+        // Persist a portable destination, never the temporary PCM source.
+        #expect(result.filePath == destination.lastPathComponent)
         #expect(await result.resolvedFilePath() == "note.m4a")
         // The final-flush reader can still open PCM after export has completed.
         #expect(try Data(contentsOf: source) == bytes)

@@ -56,7 +56,8 @@ class TranscriptionService: ObservableObject {
 
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
-    @Published var transcriptionProgress: Float = 0.0
+    // Smoothing state is internal; visible note progress publishes separately.
+    var transcriptionProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var previewByNoteID: [UUID: String] = [:]
@@ -331,7 +332,10 @@ class TranscriptionService: ObservableObject {
     }
     func isRunCancelled(noteID: UUID) -> Bool { cancelledRunNoteIDs.contains(noteID) }
     func transcriptionPreview(for noteID: UUID) -> String? { previewByNoteID[noteID] }
-    func reportExternalPreview(_ text: String, for noteID: UUID) { previewByNoteID[noteID] = text }
+    func reportExternalPreview(_ text: String, for noteID: UUID) {
+        guard previewByNoteID[noteID] != text else { return }
+        previewByNoteID[noteID] = text
+    }
 
     func localProgress(for note: VoiceNote) -> Float {
         progressByNoteID[note.id] ?? 0.0
@@ -357,7 +361,9 @@ class TranscriptionService: ObservableObject {
     }
 
     func reportExternalProgress(_ progress: Float, for noteID: UUID) {
-        progressByNoteID[noteID] = min(1, max(0, progress))
+        let clamped = min(1, max(0, progress))
+        guard progressByNoteID[noteID] != clamped else { return }
+        progressByNoteID[noteID] = clamped
     }
 
     func endExternalTranscription(noteID: UUID) {
@@ -826,7 +832,7 @@ private extension TranscriptionService {
 
         let onProgress: (Float) -> Void = { [weak self] value in
             Task { @MainActor in
-                self?.progressByNoteID[noteID] = value
+                self?.reportExternalProgress(value, for: noteID)
             }
         }
 

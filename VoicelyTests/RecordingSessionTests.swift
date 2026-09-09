@@ -127,6 +127,8 @@ struct RecordingSessionTests {
         #expect(note.transcriptionState == .queued)
         transcription.setModelManager(TranscriptionServiceTests.LoadedModelManager())
         var attempts = 0
+        transcription.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        transcription.audioDurationProvider = { _ in 8 }
         transcription.transcribeImpl = { _, _ in attempts += 1; return "Recovered" }
         await transcription.processPendingTranscriptions(notes: [note])
         #expect(attempts == 1)
@@ -205,6 +207,84 @@ struct RecordingSessionTests {
         #expect(note?.transcription == "first slice")
         #expect(note?.transcriptionState == .queued)
         #expect(note?.pendingTranscription == true)
+    }
+
+    @Test(arguments: [false, true])
+    func expiredLiveLeaseCannotCancelFinalFlushOrBlockRecovery(failTail: Bool) async throws {
+        let audio = MockRecordingAudio()
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 40)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        audio.currentPCMFileURL = pcmURL
+        let transcription = TranscriptionService()
+        transcription.deviceIDProvider = { "phone" }
+        let startedAt = Date(timeIntervalSince1970: 10_000)
+        transcription.nowProvider = { startedAt }
+        let session = RecordingSession(audioService: audio, transcriptionService: transcription)
+        let collector = NoteCollector()
+        session.onRecordingComplete = { collector.append($0) }
+        let gate = TranscriptionServiceTests.TranscriptionGate()
+        let sequence = IncrementalTranscriptionCoordinatorTests.TranscriptSequence(["First live segment."])
+        var coordinator: IncrementalTranscriptionCoordinator?
+        session.coordinatorFactory = { url in
+            let created = IncrementalTranscriptionCoordinator(
+                transcriptionService: transcription, recordingFileURL: url)
+            created.transcribeOverride = { @Sendable _ in
+                if let first = await sequence.next() { return first }
+                await gate.wait()
+                return failTail ? nil : "Final live segment."
+            }
+            coordinator = created
+            return created
+        }
+        session.startRecording()
+        try await waitUntil { session.currentRecordingNote != nil }
+        let note = try #require(collector.notes.first)
+        let liveCoordinator = try #require(coordinator)
+        liveCoordinator.pause()
+        await liveCoordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        try #require(note.transcription == "First live segment.")
+
+        // Advance the lease clock without spending six minutes on microphone IO.
+        let expiredAt = startedAt.addingTimeInterval(transcription.leaseDuration + 60)
+        transcription.nowProvider = { expiredAt }
+        #expect(!transcription.shouldShowPendingState(note))
+        transcription.cancelTranscription(for: note)
+        #expect(note.transcriptionState == .claimed)
+        audio.recordingDuration = 40
+        audio.currentFramePosition = 40 * 16_000
+        session.stopRecording()
+        await gate.waitUntilArmed()
+
+        #expect(session.currentRecordingNote == nil)
+        #expect(session.isRecording(note))
+        #expect(transcription.isLocalRecording(noteID: note.id))
+        #expect(!transcription.shouldShowPendingState(note))
+        transcription.cancelTranscription(for: note)
+        #expect(note.transcriptionState == .claimed)
+        #expect(note.isTranscribing)
+        #expect(note.transcription == "First live segment.")
+
+        await gate.resume()
+        try await waitUntil { !session.isRecording(note) }
+        #expect(!transcription.isLocalRecording(noteID: note.id))
+        #expect(!note.isTranscribing)
+        if failTail {
+            #expect(note.transcriptionState == .queued)
+            #expect(note.pendingTranscription)
+            #expect(note.transcription == "First live segment.")
+            transcription.setModelManager(TranscriptionServiceTests.LoadedModelManager())
+            transcription.prepareAudioFileForReading = { _ in pcmURL }
+            transcription.audioDurationProvider = { _ in 40 }
+            transcription.transcribeImpl = { _, _ in "Recovered segment." }
+            await transcription.processPendingTranscriptions(notes: [note])
+            #expect(note.transcriptionState == .completed)
+            #expect(!note.pendingTranscription)
+            #expect(note.transcription.contains("Recovered segment."))
+        } else {
+            #expect(note.transcriptionState == .completed)
+            #expect(!note.pendingTranscription)
+            #expect(note.transcription.contains("Final live segment."))
+        }
     }
 
     @Test func missingStopAssetDoesNotLeaveNoteTranscribing() async throws {

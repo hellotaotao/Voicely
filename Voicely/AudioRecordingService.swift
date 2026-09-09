@@ -260,6 +260,8 @@ class AudioRecordingService: ObservableObject {
     // MARK: Recording Session Prewarm
 
     func prewarmRecordingSessionIfPossible() {
+        // UI/unit fixtures do not need a live input route. Simulator audio RPCs can stall launch.
+        guard !AppRuntime.isRunningTests else { return }
         guard RecordingSessionPrewarmState.shouldStartPrewarm(
             hasPermission: hasPermission,
             isRecording: isRecording,
@@ -448,7 +450,9 @@ class AudioRecordingService: ObservableObject {
                 sourceURL: pcmURL,
                 destinationURL: m4aURL,
                 duration: duration,
-                convert: Self.convertCAFToM4A
+                convert: { @Sendable sourceURL, destinationURL in
+                    try await Self.convertCAFToM4A(from: sourceURL, to: destinationURL)
+                }
             )
         } else {
             result = RecordingStopResult(filePath: currentPCMFileURL?.path, duration: duration)

@@ -58,6 +58,7 @@ final class VoicelyUITests: XCTestCase {
         seedNoteTranscription: String? = nil,
         seedNoteTranscriptionModelIdentifier: String? = nil,
         seedNoteQueuedForTranscription: Bool = false,
+        seedExpiredLiveRecording: Bool = false,
         transcriptPreview: String? = nil,
         failedImport: Bool = false,
         retainedAttempt: String? = nil
@@ -90,6 +91,9 @@ final class VoicelyUITests: XCTestCase {
         }
         if seedNoteQueuedForTranscription {
             app.launchEnvironment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION_STATE"] = "queued"
+        }
+        if seedExpiredLiveRecording {
+            app.launchEnvironment["VOICELY_UI_TEST_EXPIRED_LIVE_RECORDING"] = "1"
         }
         if let transcriptPreview {
             app.launchEnvironment["VOICELY_UI_TEST_TRANSCRIPT_PREVIEW"] = transcriptPreview
@@ -249,6 +253,75 @@ final class VoicelyUITests: XCTestCase {
     }
 
     @MainActor
+    func testQueuedRetryKeepsSavedTranscriptAndCanBeCancelled() throws {
+        let original = "The complete meeting transcript must remain readable."
+        let app = launchApp(seedNoteTitle: "Queued Retry", seedNoteAudioPath: "cloud.m4a",
+            seedNoteTranscription: original, seedNoteQueuedForTranscription: true)
+        let row = app.element(id: ID.noteRow)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let savedText = app.staticTexts[ID.transcriptionBody]
+        app.scrollToElement(savedText)
+        XCTAssertTrue(savedText.waitForExistence(timeout: 5))
+        XCTAssertEqual(savedText.label, original)
+        let cancel = app.buttons["CancelTranscriptionButton"]
+        app.scrollToElement(cancel)
+        XCTAssertTrue(cancel.exists)
+        cancel.tap()
+        XCTAssertTrue(app.staticTexts["Transcription cancelled"].waitForExistence(timeout: 5))
+        XCTAssertEqual(savedText.label, original)
+        attachScreenshot(named: "Cancelled Retry Keeps Original", app: app)
+    }
+
+    @MainActor
+    func testUnknownDurationIsNotPresentedAsZero() throws {
+        let app = launchApp(seedNoteTitle: "Cloud Recording", seedNoteAudioPath: "cloud-only.m4a")
+        let row = app.element(id: ID.noteRow)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        XCTAssertTrue(app.staticTexts["Duration unavailable"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Waveform unavailable"].exists)
+        XCTAssertEqual(app.staticTexts.matching(identifier: ID.audioPlayerCard)
+            .matching(NSPredicate(format: "label == %@", "—")).count, 1)
+        attachScreenshot(named: "Unknown Cloud Duration", app: app)
+    }
+
+    @MainActor
+    func testExpiredLiveRecordingWithTranscriptDoesNotExposeQueueActions() throws {
+        assertExpiredLiveRecording(transcript: "The live meeting transcript remains visible.")
+    }
+
+    @MainActor
+    func testExpiredLiveRecordingWithoutTranscriptDoesNotShowQueued() throws {
+        assertExpiredLiveRecording(transcript: nil)
+    }
+
+    @MainActor
+    private func assertExpiredLiveRecording(transcript: String?) {
+        let app = launchApp(seedNoteTitle: "Long Live Recording", seedNoteAudioPath: "live.m4a",
+            seedNoteTranscription: transcript, seedExpiredLiveRecording: true)
+        let row = app.element(id: ID.noteRow)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        let badge = transcript == nil ? "Recording" : "Live transcript"
+        XCTAssertTrue(row.staticTexts[badge].exists)
+        XCTAssertFalse(row.staticTexts["Queued"].exists)
+        XCTAssertFalse(row.staticTexts["—"].exists)
+        attachScreenshot(named: "Expired Live Recording Row", app: app)
+        row.tap()
+        XCTAssertTrue(app.element(id: ID.noteDetailScreen).waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Queued for transcription"].exists)
+        XCTAssertFalse(app.buttons["CancelTranscriptionButton"].exists)
+        XCTAssertFalse(app.buttons[ID.transcribeNowButton].exists)
+        if let transcript {
+            XCTAssertEqual(app.staticTexts[ID.transcriptionBody].label, transcript)
+            XCTAssertTrue(app.staticTexts["Recording — transcript updates live"].exists)
+        } else {
+            XCTAssertTrue(app.staticTexts["Recording…"].exists)
+        }
+        attachScreenshot(named: "Expired Live Recording Detail", app: app)
+    }
+
+    @MainActor
     func testSegmentPreviewIsReadOnlyAndKeepsCopyAction() throws {
         let title = "Segment Preview"
         let original = "Original complete transcript remains available."
@@ -262,6 +335,9 @@ final class VoicelyUITests: XCTestCase {
         app.scrollToElement(previewText)
         XCTAssertTrue(previewText.waitForExistence(timeout: 5))
         XCTAssertEqual(previewText.label, preview)
+        let savedText = app.staticTexts[ID.transcriptionBody]
+        XCTAssertTrue(savedText.exists)
+        XCTAssertEqual(savedText.label, original)
         XCTAssertTrue(app.staticTexts["Partial transcript — transcription in progress"].exists)
         XCTAssertFalse(app.textViews["TranscriptEditor"].exists)
         XCTAssertTrue(app.buttons[ID.copyTranscriptionButton].exists)

@@ -7,6 +7,7 @@
 
 import Foundation
 import Testing
+import SwiftData
 @testable import Voicely
 
 struct TranscriptionServiceTests {
@@ -272,6 +273,8 @@ struct TranscriptionServiceTests {
         service.setModelManager(modelManager)
         service.deviceIDProvider = { "phone" }
         service.nowProvider = { now }
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        service.audioDurationProvider = { _ in 20 }
         service.transcribeImpl = { _, _ in "Queued result" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
@@ -509,7 +512,7 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionAttemptID == "attempt-b")
     }
 
-    @Test @MainActor func cancellationRequeuesNoteAndClearsOwner() async {
+    @Test @MainActor func cancellationPersistsAndClearsOwner() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         let gate = TranscriptionGate()
@@ -535,8 +538,8 @@ struct TranscriptionServiceTests {
         await gate.resume()
         await task.value
 
-        #expect(note.transcriptionState == .queued)
-        #expect(note.pendingTranscription == true)
+        #expect(note.transcriptionStateRaw == "cancelled")
+        #expect(note.pendingTranscription == false)
         #expect(note.transcriptionOwnerDeviceID == nil)
         #expect(note.transcriptionAttemptID == nil)
         #expect(note.transcriptionLeaseExpiresAt == nil)
@@ -548,7 +551,7 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "phone", now: now)
         let gate = TranscriptionGate()
         service.transcribeImpl = { filePath, _ in
-            if filePath == "first.m4a" {
+            if URL(fileURLWithPath: filePath).lastPathComponent == "first.m4a" {
                 await gate.wait()
                 return "first result"
             }
@@ -688,6 +691,62 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionState == .queued)
     }
 
+    @Test @MainActor func expiredLiveRecordingLeaseDoesNotExposeQueueActions() async {
+        let startedAt = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: startedAt)
+        let note = VoiceNote(title: "Live", audioFilePath: "live.caf")
+        service.configureNewNote(note, shouldStartImmediately: true)
+        note.isTranscribing = true
+        note.transcription = "Live transcript"
+        service.beginLocalRecording(noteID: note.id)
+        let attemptID = note.transcriptionAttemptID
+        let expiredAt = startedAt.addingTimeInterval(service.leaseDuration + 60)
+        service.nowProvider = { expiredAt }
+
+        #expect(!service.shouldShowPendingState(note))
+        #expect(!service.isQueuedForLocalTranscription(note))
+        #expect(await service.requestTranscription(for: note, force: true) == false)
+        service.cancelTranscription(for: note)
+
+        #expect(note.transcriptionState == .claimed)
+        #expect(note.transcriptionAttemptID == attemptID)
+        #expect(note.transcriptionOwnerDeviceID == "phone")
+        #expect(note.isTranscribing)
+        #expect(note.transcription == "Live transcript")
+
+        // Once recording ownership ends, an expired saved-note claim is pending
+        // and can be cancelled normally; the guard must not hide real jobs.
+        service.endLocalRecording(noteID: note.id)
+        #expect(service.shouldShowPendingState(note))
+        service.cancelTranscription(for: note)
+        #expect(note.transcriptionState == .cancelled)
+    }
+
+    @Test @MainActor func cancellingLiveRecordingDoesNotMutateItOrAnotherActiveJob() async {
+        let service = makeService(deviceID: "phone")
+        let gate = TranscriptionGate()
+        service.transcribeImpl = { _, _ in await gate.wait(); return "Saved job completed" }
+        let active = VoiceNote(audioFilePath: "saved.m4a")
+        service.configureNewNote(active, shouldStartImmediately: false)
+        let job = Task { await service.processPendingTranscriptions(notes: [active]) }
+        await gate.waitUntilArmed()
+
+        let recording = VoiceNote(audioFilePath: "live.caf")
+        service.configureNewNote(recording, shouldStartImmediately: true)
+        recording.isTranscribing = true
+        service.beginLocalRecording(noteID: recording.id)
+        service.cancelTranscription(for: recording)
+        #expect(recording.transcriptionState == .claimed)
+        #expect(recording.isTranscribing)
+        #expect(service.activeNoteID == active.id)
+
+        await gate.resume()
+        await job.value
+        #expect(active.transcriptionState == .completed)
+        #expect(active.transcription == "Saved job completed")
+        service.endLocalRecording(noteID: recording.id)
+    }
+
     @Test @MainActor func cancelledImportCanBeExplicitlyResumedFromWorkingCopy() async throws {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
@@ -698,11 +757,11 @@ struct TranscriptionServiceTests {
         service.beginExternalTranscription(noteID: note.id)
         service.cancelTranscription(for: note)
         service.endExternalTranscription(noteID: note.id)
-        #expect(service.isUserPaused(noteID: note.id))
+        #expect(service.isUserPaused(note))
         service.transcribeImpl = { _, _ in "Recovered import" }
         let accepted = await service.requestTranscription(for: note)
         #expect(accepted)
-        #expect(!service.isUserPaused(noteID: note.id))
+        #expect(!service.isUserPaused(note))
         #expect(note.transcription == "Recovered import")
         #expect(note.transcriptionState == .completed)
         #expect(service.segmentProgressStore.existingWorkingCopyURL(for: note.id) == nil)
@@ -761,14 +820,11 @@ struct TranscriptionServiceTests {
         _ = service.segmentProgressStore
     }
 
-    @Test @MainActor func shouldSegmentLongRecordingsWithAudio() {
+    @Test @MainActor func segmentRoutingUsesResolvedAudioDuration() {
         let service = makeService(deviceID: "d")
-        let long = VoiceNote(title: "a", audioFilePath: "a.m4a"); long.duration = 1800
-        let short = VoiceNote(title: "b", audioFilePath: "b.m4a"); short.duration = 12
-        let noAudio = VoiceNote(title: "c", audioFilePath: ""); noAudio.duration = 1800
-        #expect(service.shouldSegmentTranscription(long))
-        #expect(!service.shouldSegmentTranscription(short))
-        #expect(!service.shouldSegmentTranscription(noAudio))
+        #expect(service.shouldSegmentTranscription(audioDuration: 1800))
+        #expect(!service.shouldSegmentTranscription(audioDuration: 30))
+        #expect(!service.shouldSegmentTranscription(audioDuration: 12))
     }
 
     @Test @MainActor func permanentlyMissingAudioStopsAutomaticRetries() async {
@@ -902,6 +958,158 @@ struct TranscriptionServiceTests {
         }
     }
 
+    @Test @MainActor func cancellationDuringTelemetryPreparationDoesNotLaunchDecoder() async {
+        let service = makeService(deviceID: "phone")
+        let gate = TranscriptionGate()
+        var reads = 0
+        var decodes = 0
+        service.audioDurationProvider = { _ in
+            reads += 1
+            if reads == 2 { await gate.wait() }
+            return 12
+        }
+        service.transcribeImpl = { _, _ in decodes += 1; return "Unwanted decode" }
+        let note = VoiceNote(audioFilePath: "audio.m4a", transcription: "Saved text")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: Date())
+        let task = Task { await service.processPendingTranscriptions(notes: [note]) }
+        await gate.waitUntilArmed()
+        service.cancelTranscription(for: note)
+        await gate.resume()
+        await task.value
+        #expect(decodes == 0)
+        #expect(note.transcriptionState == .cancelled)
+        #expect(note.transcription == "Saved text")
+        #expect(!service.isTranscribing)
+    }
+
+    @Test @MainActor func cancellationDuringFilePreparationDoesNotRestartDecode() async {
+        let service = makeService(deviceID: "phone")
+        let gate = TranscriptionGate()
+        service.prepareAudioFileForReading = { path in await gate.wait(); return URL(fileURLWithPath: path) }
+        var decodes = 0
+        service.transcribeImpl = { _, _ in decodes += 1; return "Late result" }
+        let note = VoiceNote(audioFilePath: "cloud.m4a", transcription: "Saved text")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: Date())
+        let task = Task { await service.processPendingTranscriptions(notes: [note]) }
+        await gate.waitUntilArmed()
+        service.cancelTranscription(for: note)
+        await gate.resume()
+        await task.value
+        #expect(decodes == 0)
+        #expect(note.transcriptionState == .cancelled)
+        #expect(note.transcription == "Saved text")
+        #expect(service.activeNoteID == nil)
+    }
+
+    @Test @MainActor func cancellingQueuedNoteDoesNotCancelActiveDecode() async {
+        let service = makeService(deviceID: "phone")
+        let gate = TranscriptionGate()
+        var decodes = 0
+        service.transcribeImpl = { _, _ in decodes += 1; await gate.wait(); return "Active completed" }
+        let active = VoiceNote(audioFilePath: "active.m4a")
+        let queued = VoiceNote(audioFilePath: "queued.m4a", transcription: "Saved queued text")
+        for note in [active, queued] {
+            note.transcriptionOriginDeviceID = "phone"
+            note.queueTranscription(at: Date())
+        }
+        let task = Task { await service.processPendingTranscriptions(notes: [active, queued]) }
+        await gate.waitUntilArmed()
+        service.cancelTranscription(for: queued)
+        await gate.resume()
+        await task.value
+        #expect(decodes == 1)
+        #expect(active.transcription == "Active completed")
+        #expect(queued.transcription == "Saved queued text")
+        #expect(queued.transcriptionState == .cancelled)
+    }
+
+    @Test @MainActor func cancelledQueuedNoteSurvivesStoreReopen() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = Schema([VoiceNote.self])
+        let configuration = ModelConfiguration(schema: schema,
+            url: directory.appendingPathComponent("notes.store"), cloudKitDatabase: .none)
+        do {
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let note = VoiceNote(audioFilePath: "file.m4a", transcription: "Previous complete text")
+            note.transcriptionOriginDeviceID = "phone"
+            note.queueTranscription(at: Date())
+            context.insert(note)
+            try context.save()
+            makeService(deviceID: "phone").cancelTranscription(for: note)
+            // The cancellation action must save, even if the app is killed before autosave.
+        }
+        let reopened = try ModelContainer(for: schema, configurations: [configuration])
+        let note = try #require(try ModelContext(reopened).fetch(FetchDescriptor<VoiceNote>()).first)
+        let freshService = makeService(deviceID: "phone")
+        var calls = 0
+        freshService.transcribeImpl = { _, _ in calls += 1; return "Unexpected replacement" }
+        await freshService.processPendingTranscriptions(notes: [note])
+        #expect(note.transcriptionStateRaw == "cancelled")
+        #expect(!note.pendingTranscription)
+        #expect(note.transcription == "Previous complete text")
+        #expect(calls == 0)
+    }
+
+    @Test @MainActor func cancellingActiveNoteStillDrainsOtherQueuedNotes() async {
+        let service = makeService(deviceID: "phone")
+        let gate = TranscriptionGate()
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            if calls == 1 { await gate.wait(); return "Late replacement" }
+            return "Second completed"
+        }
+        let first = VoiceNote(audioFilePath: "first.m4a", transcription: "Original complete text")
+        let second = VoiceNote(audioFilePath: "second.m4a")
+        for note in [first, second] {
+            note.transcriptionOriginDeviceID = "phone"
+            note.queueTranscription(at: Date())
+        }
+        let task = Task { await service.processPendingTranscriptions(notes: [first, second]) }
+        await gate.waitUntilArmed()
+        service.cancelTranscription(for: first)
+        #expect(service.activeNoteID == first.id)
+        await gate.resume()
+        await task.value
+        #expect(first.transcriptionStateRaw == "cancelled")
+        #expect(first.transcription == "Original complete text")
+        #expect(second.transcription == "Second completed")
+        #expect(calls == 2)
+    }
+
+    @Test @MainActor func realLongAudioWithUnknownOrStaleDurationIsSegmented() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 65)
+        defer { try? FileManager.default.removeItem(at: url) }
+        for metadata in [0.0, 12.0] {
+            let service = makeService(deviceID: "phone")
+            service.prepareAudioFileForReading = { _ in url }
+            service.audioDurationProvider = { path in
+                await TranscriptionService.estimatedAudioDuration(for: path)
+            }
+            var calls = 0
+            service.transcribeImpl = { path, _ in
+                calls += 1
+                let duration = await TranscriptionService.estimatedAudioDuration(for: path)
+                #expect((duration ?? 100) <= 30)
+                return "A complete segment."
+            }
+            let note = VoiceNote(audioFilePath: url.path)
+            note.duration = metadata
+            note.transcriptionOriginDeviceID = "phone"
+            note.queueTranscription(at: Date())
+            await service.processPendingTranscriptions(notes: [note])
+            #expect(calls >= 3)
+            #expect(abs(note.duration - 65) < 0.01)
+            #expect(note.transcriptionState == .completed)
+        }
+    }
+
     @MainActor
     private func makeService(deviceID: String, now: Date = Date()) -> TranscriptionService {
         let service = TranscriptionService()
@@ -910,6 +1118,8 @@ struct TranscriptionServiceTests {
         service.setModelManager(modelManager)
         service.deviceIDProvider = { deviceID }
         service.nowProvider = { now }
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        service.audioDurationProvider = { _ in 20 }
         service.heartbeatInterval = 3600
         return service
     }

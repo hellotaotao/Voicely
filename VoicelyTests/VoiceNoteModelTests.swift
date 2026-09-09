@@ -13,6 +13,31 @@ import Testing
 
 struct VoiceNoteModelTests {
 
+    @Test func durationMetadataRejectsUnknownValuesAndWrongAudioIdentity() {
+        let note = VoiceNote(audioFilePath: "first.caf")
+        for invalid in [0.0, -1, .nan, .infinity] {
+            note.duration = invalid
+            #expect(note.knownDuration == nil)
+        }
+        note.duration = 125
+        note.updateDuration(0, forAudioPath: "first.caf")
+        note.updateDuration(300, forAudioPath: "another.caf")
+        #expect(note.knownDuration == 125)
+        note.updateDuration(180, forAudioPath: "first.caf")
+        #expect(note.knownDuration == 180)
+    }
+
+    @Test @MainActor func cancellationCannotBeRequeuedByLateRecovery() {
+        let note = VoiceNote(audioFilePath: "audio.caf", transcription: "Saved text")
+        note.cancelTranscription()
+        note.queueTranscription(at: Date())
+        note.claimTranscription(ownerDeviceID: "late", attemptID: "late",
+            queuedAt: Date(), leaseExpiresAt: Date())
+        #expect(note.transcriptionState == .cancelled)
+        #expect(!note.pendingTranscription)
+        #expect(note.transcription == "Saved text")
+    }
+
     @Test func voiceNotePersistsInMemoryContainer() throws {
         let schema = Schema([VoiceNote.self])
         let configuration = ModelConfiguration(

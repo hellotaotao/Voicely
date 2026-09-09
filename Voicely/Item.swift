@@ -12,6 +12,7 @@ enum TranscriptionOwnershipState: String {
     case queued
     case claimed
     case completed
+    case cancelled
 }
 
 /// How a finished transcription attempt turned out, so the UI can show the right
@@ -85,7 +86,20 @@ final class VoiceNote {
     }
 }
 
+enum AudioDurationMetadata {
+    static func known(_ duration: TimeInterval) -> TimeInterval? {
+        duration.isFinite && duration > 0 ? duration : nil
+    }
+}
+
 extension VoiceNote {
+    var knownDuration: TimeInterval? { AudioDurationMetadata.known(duration) }
+
+    func updateDuration(_ resolvedDuration: TimeInterval, forAudioPath path: String) {
+        guard audioFilePath == path, let known = AudioDurationMetadata.known(resolvedDuration) else { return }
+        duration = known
+    }
+
     var transcriptionState: TranscriptionOwnershipState? {
         get {
             TranscriptionOwnershipState(rawValue: transcriptionStateRaw)
@@ -156,7 +170,24 @@ extension VoiceNote {
         }
     }
 
+    /// A user cancellation is durable and can only be cleared by an explicit retry.
+    func cancelTranscription() {
+        transcriptionState = .cancelled
+        transcriptionLastErrorMessage = nil
+        transcriptionOwnerDeviceID = nil
+        transcriptionAttemptID = nil
+        transcriptionLeaseExpiresAt = nil
+        clearTransientTranscriptionFlags()
+    }
+
+    func resumeCancelledTranscription(at date: Date) {
+        guard transcriptionState == .cancelled else { return }
+        transcriptionState = .queued
+        queueTranscription(at: date)
+    }
+
     func queueTranscription(at queuedAt: Date) {
+        guard transcriptionState != .cancelled else { return }
         transcriptionState = .queued
         transcriptionQueuedAt = queuedAt
         transcriptionOwnerDeviceID = nil
@@ -173,6 +204,7 @@ extension VoiceNote {
         queuedAt: Date,
         leaseExpiresAt: Date
     ) {
+        guard transcriptionState != .cancelled else { return }
         transcriptionState = .claimed
         transcriptionOwnerDeviceID = ownerDeviceID
         transcriptionAttemptID = attemptID

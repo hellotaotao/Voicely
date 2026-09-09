@@ -276,7 +276,7 @@ struct SegmentedAudioTranscriberTests {
         let checkpoint = try #require(store.load(for: note.id))
         #expect(checkpoint.lastFrame == Int64(29 * 16_000))
         #expect(note.transcription == "Old complete transcript")
-        #expect(note.transcriptionState == .queued)
+        #expect(note.transcriptionStateRaw == "cancelled")
         #expect(service.transcriptionPreview(for: note.id) == nil)
     }
 
@@ -418,10 +418,13 @@ struct SegmentedAudioTranscriberTests {
         }
         await transcriber.transcribe(note: note, sourceURL: copy)
         #expect(calls == 1)
-        #expect(note.transcriptionState == .queued)
-        #expect(service.isUserPaused(noteID: note.id))
+        #expect(note.transcriptionStateRaw == "cancelled")
+        #expect(service.isUserPaused(note))
         #expect(store.existingWorkingCopyURL(for: note.id) != nil)
-        await transcriber.resumePending(notes: [note])
+        let fresh = SegmentedAudioTestSupport.makeTranscriber(store: store,
+            service: TranscriptionService(segmentProgressStore: store))
+        fresh.transcribeSegmentOutcome = { _ in calls += 1; return .cancelled }
+        await fresh.resumePending(notes: [note])
         #expect(calls == 1)
         #expect(service.activeNoteID == nil)
         #expect(store.existingWorkingCopyURL(for: note.id) != nil)

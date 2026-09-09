@@ -7,6 +7,7 @@
 
 import Foundation
 import Testing
+import SwiftData
 @testable import Voicely
 
 struct CloudStorageManagerTests {
@@ -155,6 +156,76 @@ struct CloudStorageManagerTests {
 
         let preparedURL = await prepareTask.value
         #expect(preparedURL?.lastPathComponent == filename)
+    }
+
+    @Test @MainActor func resolvedDurationIsPersistedWithoutPlayback() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let schema = Schema([VoiceNote.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = ModelContext(container)
+        let note = VoiceNote(audioFilePath: url.path)
+        context.insert(note)
+        try context.save()
+        let player = AudioPlayerService()
+        var saved = false
+        player.loadAudio(from: url.path) { duration in
+            note.updateDuration(duration, forAudioPath: url.path)
+            do { try context.save(); saved = true } catch { Issue.record(error) }
+        }
+        for _ in 0..<100 {
+            if saved { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(saved)
+        let reloaded = try #require(try ModelContext(container).fetch(FetchDescriptor<VoiceNote>()).first)
+        #expect(abs(reloaded.duration - 4) < 0.01)
+        #expect(!player.isPlaying)
+        player.loadAudio(from: "")
+    }
+
+    @Test @MainActor func staleDurationResolutionCannotUpdateNewSelection() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let player = AudioPlayerService()
+        let gate = TranscriptionServiceTests.TranscriptionGate()
+        var calls = 0
+        var firstUpdates = 0
+        var secondUpdates = 0
+        player.resolveAudioDuration = { _ in
+            calls += 1
+            if calls == 1 { await gate.wait(); return 999 }
+            return 4
+        }
+        player.loadAudio(from: url.path) { _ in firstUpdates += 1 }
+        await gate.waitUntilArmed()
+        // Even reselecting the same path starts a distinct callback lifetime.
+        player.loadAudio(from: url.path) { _ in secondUpdates += 1 }
+        for _ in 0..<100 {
+            if secondUpdates > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await gate.resume()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(firstUpdates == 0)
+        #expect(secondUpdates == 1)
+        #expect(player.duration == 4)
+        player.loadAudio(from: "")
+    }
+
+    @Test @MainActor func readyAudioResolvesDurationWithoutPlaying() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let player = AudioPlayerService()
+        player.loadAudio(from: url.path)
+        for _ in 0..<100 {
+            if player.duration > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(abs(player.duration - 4) < 0.01)
+        #expect(!player.isPlaying)
+        player.loadAudio(from: "")
     }
 
     @Test @MainActor func missingSelectedAudioShowsUnavailableInsteadOfDownloading() async throws {

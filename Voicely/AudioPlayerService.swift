@@ -285,6 +285,11 @@ class AudioPlayerService: NSObject, ObservableObject {
     private var audioPlayer: AVAudioPlayer?
     private var timer: Timer?
     private var pendingFilePath: String?
+    private var selectionID = UUID()
+    private var onDurationResolved: ((TimeInterval) -> Void)?
+    var resolveAudioDuration: (URL) async -> TimeInterval? = { url in
+        await TranscriptionService.estimatedAudioDuration(for: url.path)
+    }
     private var preloadTask: Task<Void, Never>?
     private var prepareTask: Task<Void, Never>?
     private var waveformTask: Task<Void, Never>?
@@ -353,7 +358,8 @@ class AudioPlayerService: NSObject, ObservableObject {
     }
     
     @MainActor
-    func loadAudio(from filePath: String, expectedDuration: TimeInterval? = nil) {
+    func loadAudio(from filePath: String, expectedDuration: TimeInterval? = nil,
+                   onDurationResolved: ((TimeInterval) -> Void)? = nil) {
         debugLog("🔍 [DEBUG] AudioPlayerService: Loading audio from: \(filePath)")
 
         preloadTask?.cancel()
@@ -361,8 +367,10 @@ class AudioPlayerService: NSObject, ObservableObject {
         waveformTask?.cancel()
         discardLoadedPlayer()
 
+        selectionID = UUID()
+        self.onDurationResolved = onDurationResolved
         pendingFilePath = filePath.isEmpty ? nil : filePath
-        duration = expectedDuration ?? 0
+        duration = expectedDuration.flatMap(AudioDurationMetadata.known) ?? 0
         playbackStatusMessage = nil
         isPreparingAudio = false
         waveformLevels = nil
@@ -380,11 +388,16 @@ class AudioPlayerService: NSObject, ObservableObject {
             }
         }
 
+        let selectionID = selectionID
         preloadTask = Task { @MainActor [weak self] in
-            await self?.prefetchAudioForCurrentSelection(filePath: pendingFilePath)
+            await self?.prefetchAudioForCurrentSelection(filePath: pendingFilePath, selectionID: selectionID)
         }
     }
     
+    func reportMetadataSaveFailure() {
+        playbackStatusMessage = "Audio duration was detected but could not be saved."
+    }
+
     func play() {
         if let player = audioPlayer {
             if !player.isPlaying {
@@ -506,7 +519,7 @@ extension AudioPlayerService: @preconcurrency AVAudioPlayerDelegate {
 
 private extension AudioPlayerService {
     @MainActor
-    func prefetchAudioForCurrentSelection(filePath: String) async {
+    func prefetchAudioForCurrentSelection(filePath: String, selectionID: UUID) async {
         guard pendingFilePath == filePath else { return }
 
         let storageManager = CloudStorageManager.shared
@@ -533,6 +546,7 @@ private extension AudioPlayerService {
 
         if storageManager.isFileReadyForPlayback(at: url) {
             playbackStatusMessage = nil
+            await resolveDurationMetadata(url: url, selectionID: selectionID)
             return
         }
 
@@ -540,25 +554,36 @@ private extension AudioPlayerService {
 
         while !Task.isCancelled, pendingFilePath == filePath {
             try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, self.selectionID == selectionID else { return }
             if storageManager.isFileReadyForPlayback(at: url) {
                 playbackStatusMessage = nil
+                await resolveDurationMetadata(url: url, selectionID: selectionID)
                 return
             }
         }
     }
 
+    func resolveDurationMetadata(url: URL, selectionID: UUID) async {
+        let resolved = await resolveAudioDuration(url)
+        guard !Task.isCancelled, self.selectionID == selectionID,
+              let resolved, let known = AudioDurationMetadata.known(resolved) else { return }
+        duration = known
+        onDurationResolved?(known)
+    }
+
     @MainActor
     func prepareAndPlayCurrentSelection() async {
         guard let filePath = pendingFilePath else { return }
+        let selectionID = selectionID
 
         isPreparingAudio = true
         playbackStatusMessage = "Preparing audio..."
 
         defer {
-            if pendingFilePath == filePath {
+            if self.selectionID == selectionID {
                 isPreparingAudio = false
+                prepareTask = nil
             }
-            prepareTask = nil
         }
 
         guard let url = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
@@ -587,14 +612,17 @@ private extension AudioPlayerService {
             player.rate = playbackRate
 
             audioPlayer = player
-            duration = player.duration
+            playbackStatusMessage = nil
+            if let known = AudioDurationMetadata.known(player.duration) {
+                duration = known
+                onDurationResolved?(known)
+            }
             if let pendingTime = pendingSeekState.consumePendingSeek(preparedDuration: player.duration) {
                 player.currentTime = pendingTime
                 currentTime = pendingTime
             } else {
                 currentTime = 0
             }
-            playbackStatusMessage = nil
 
             debugLog("✅ [DEBUG] AVAudioPlayer created successfully")
             debugLog("🔍 [DEBUG] Audio duration: \(duration) seconds")

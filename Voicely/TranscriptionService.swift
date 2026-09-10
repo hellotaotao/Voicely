@@ -63,7 +63,12 @@ class TranscriptionService: ObservableObject {
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var previewByNoteID: [UUID: String] = [:]
     @Published private(set) var progressByNoteID: [UUID: Float] = [:]
-    @Published private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot = .inactive()
+    // Frequent clock updates belong to the telemetry card, not every service subscriber.
+    let telemetryState = TranscriptionTelemetryState()
+    private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot {
+        get { telemetryState.snapshot }
+        set { telemetryState.update(newValue) }
+    }
 
     var modelManager: ModelManager?
     var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil) }

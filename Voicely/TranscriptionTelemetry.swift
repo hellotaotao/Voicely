@@ -5,6 +5,7 @@
 //  Created by Codex on 5/22/2026.
 //
 
+import Combine
 import CoreML
 import Foundation
 
@@ -135,5 +136,16 @@ struct TranscriptionTelemetrySnapshot: Equatable {
         @unknown default:
             return "Unknown"
         }
+    }
+}
+
+/// A separate observation boundary for per-second telemetry updates.
+@MainActor
+final class TranscriptionTelemetryState: ObservableObject {
+    @Published private(set) var snapshot: TranscriptionTelemetrySnapshot = .inactive()
+
+    func update(_ snapshot: TranscriptionTelemetrySnapshot) {
+        guard self.snapshot != snapshot else { return }
+        self.snapshot = snapshot
     }
 }

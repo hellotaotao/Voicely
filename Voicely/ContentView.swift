@@ -1510,12 +1510,7 @@ struct VoiceNoteDetailView: View {
         isTranscribingHere
     }
 
-    private var currentTelemetrySnapshot: TranscriptionTelemetrySnapshot {
-        let serviceSnapshot = transcriptionService.transcriptionTelemetry
-        if serviceSnapshot.isActive {
-            return serviceSnapshot
-        }
-
+    private var fallbackTelemetrySnapshot: TranscriptionTelemetrySnapshot {
         let modelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
             ?? transcriptionService.modelManager?.selectedModel
         let modelName = modelIdentifier.map(ModelManager.displayName(for:)) ?? "No model"
@@ -1941,7 +1936,10 @@ struct VoiceNoteDetailView: View {
 
                 VStack(alignment: .leading, spacing: shouldShowComputeTelemetry ? 12 : 0) {
                     if shouldShowComputeTelemetry {
-                        computeTelemetryCard
+                        TranscriptionTelemetryCard(
+                            telemetryState: transcriptionService.telemetryState,
+                            fallbackSnapshot: fallbackTelemetrySnapshot
+                        )
                     }
                     transcriptionBody
                     if !retainedAttempts.isEmpty {
@@ -2081,97 +2079,6 @@ struct VoiceNoteDetailView: View {
         default:
             return AccessibilityIdentifiers.Detail.transcribeButton
         }
-    }
-
-    private var computeTelemetryCard: some View {
-        let snapshot = currentTelemetrySnapshot
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "cpu")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(VoicelyTheme.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(snapshot.computeRoute.summary)
-                        .font(.subheadline.weight(.semibold))
-                    Text(snapshot.computeRoute.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                PillBadge(
-                    text: snapshot.isActive ? "Live" : "Selected",
-                    systemImage: snapshot.isActive ? "bolt.fill" : "checkmark.circle",
-                    variant: snapshot.isActive ? .accent : .neutral
-                )
-            }
-
-            HStack(spacing: 8) {
-                telemetryMetric(
-                    title: "Model",
-                    value: snapshot.modelName,
-                    systemImage: "shippingbox"
-                )
-                telemetryMetric(
-                    title: "Time ratio",
-                    value: snapshot.metrics.processingTimeRatioLabel,
-                    systemImage: "gauge.medium"
-                )
-                telemetryMetric(
-                    title: "Speed",
-                    value: snapshot.metrics.speedLabel,
-                    systemImage: "speedometer"
-                )
-            }
-
-            HStack(spacing: 6) {
-                Image(systemName: "thermometer.medium")
-                    .font(.caption)
-                Text("Thermal \(snapshot.thermalStateLabel)")
-                    .font(.caption)
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text("Time ratio is processing time divided by audio duration.")
-                    .font(.caption)
-                    .lineLimit(2)
-            }
-            .foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous)
-                .fill(VoicelyTheme.accentTint(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous)
-                .stroke(VoicelyTheme.accentTint(0.20), lineWidth: 1)
-        )
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.computeTelemetryCard)
-    }
-
-    private func telemetryMetric(title: String, value: String, systemImage: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.caption2)
-                Text(title)
-                    .font(.caption2.weight(.medium))
-            }
-            .foregroundStyle(.secondary)
-
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(VoicelyTheme.surfaceRaised)
-        )
     }
 
     @ViewBuilder
@@ -2390,13 +2297,8 @@ struct VoiceNoteDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptEditor)
         } else {
-            Text(note.transcription)
-                .font(.body)
-                .lineSpacing(6)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
+            SavedTranscriptText(text: note.transcription)
+                .equatable()
         }
     }
 
@@ -2738,4 +2640,116 @@ struct ShareSheet: UIViewControllerRepresentable {
 #Preview {
     ContentView()
         .modelContainer(for: VoiceNote.self, inMemory: true)
+}
+
+private struct TranscriptionTelemetryCard: View {
+    @ObservedObject var telemetryState: TranscriptionTelemetryState
+    let fallbackSnapshot: TranscriptionTelemetrySnapshot
+
+    var body: some View {
+        let snapshot = telemetryState.snapshot.isActive ? telemetryState.snapshot : fallbackSnapshot
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "cpu")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(VoicelyTheme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(snapshot.computeRoute.summary)
+                        .font(.subheadline.weight(.semibold))
+                    Text(snapshot.computeRoute.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                PillBadge(
+                    text: snapshot.isActive ? "Live" : "Selected",
+                    systemImage: snapshot.isActive ? "bolt.fill" : "checkmark.circle",
+                    variant: snapshot.isActive ? .accent : .neutral
+                )
+            }
+
+            HStack(spacing: 8) {
+                telemetryMetric(
+                    title: "Model",
+                    value: snapshot.modelName,
+                    systemImage: "shippingbox"
+                )
+                telemetryMetric(
+                    title: "Time ratio",
+                    value: snapshot.metrics.processingTimeRatioLabel,
+                    systemImage: "gauge.medium"
+                )
+                telemetryMetric(
+                    title: "Speed",
+                    value: snapshot.metrics.speedLabel,
+                    systemImage: "speedometer"
+                )
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "thermometer.medium")
+                    .font(.caption)
+                Text("Thermal \(snapshot.thermalStateLabel)")
+                    .font(.caption)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("Time ratio is processing time divided by audio duration.")
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous)
+                .fill(VoicelyTheme.accentTint(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous)
+                .stroke(VoicelyTheme.accentTint(0.20), lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.computeTelemetryCard)
+    }
+
+    private func telemetryMetric(title: String, value: String, systemImage: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.caption2)
+                Text(title)
+                    .font(.caption2.weight(.medium))
+            }
+            .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(VoicelyTheme.surfaceRaised)
+        )
+    }
+
+}
+
+/// Preserve the long text subtree when unrelated progress or playback state changes.
+struct SavedTranscriptText: View, Equatable {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.body)
+            .lineSpacing(6)
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptionBody)
+    }
 }

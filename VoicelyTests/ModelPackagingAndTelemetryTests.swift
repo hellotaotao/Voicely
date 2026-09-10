@@ -5,12 +5,41 @@
 //  Created by Codex on 5/22/2026.
 //
 
+import Combine
 import CoreML
 import Foundation
 import Testing
 @testable import Voicely
 
 struct ModelPackagingAndTelemetryTests {
+    @MainActor
+    @Test func telemetryUpdatesNotifyOnlyTelemetrySubscribers() {
+        let service = TranscriptionService()
+        var serviceUpdates = 0
+        var telemetryUpdates = 0
+        let serviceSubscription = service.objectWillChange.sink { serviceUpdates += 1 }
+        let telemetrySubscription = service.telemetryState.objectWillChange.sink { telemetryUpdates += 1 }
+        var snapshot = TranscriptionTelemetrySnapshot.inactive()
+        snapshot.isActive = true
+        snapshot.metrics = TranscriptionTelemetryMetrics(elapsedSeconds: 1, audioDurationSeconds: 60)
+
+        service.telemetryState.update(snapshot)
+        snapshot.metrics = TranscriptionTelemetryMetrics(elapsedSeconds: 2, audioDurationSeconds: 60)
+        service.telemetryState.update(snapshot)
+        service.telemetryState.update(snapshot)
+
+        #expect(serviceUpdates == 0)
+        #expect(telemetryUpdates == 2)
+        #expect(service.transcriptionTelemetry == snapshot)
+        withExtendedLifetime((serviceSubscription, telemetrySubscription)) {}
+    }
+
+    @MainActor
+    @Test func savedTranscriptEqualityDependsOnlyOnText() {
+        #expect(SavedTranscriptText(text: "Original transcript") == SavedTranscriptText(text: "Original transcript"))
+        #expect(SavedTranscriptText(text: "Original transcript") != SavedTranscriptText(text: "New transcript"))
+    }
+
     @Test func bundledModelLocationIsPreferredBeforeDownloadedModel() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("voicely-bundled-model-test-")

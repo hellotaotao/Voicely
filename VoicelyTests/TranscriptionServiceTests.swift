@@ -421,7 +421,7 @@ struct TranscriptionServiceTests {
         await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
         #expect(calls == 2)
         #expect(service.telemetryState.snapshot(for: noteID)?.metrics.processedAudioSeconds == 29)
-        #expect(coordinator.requiresFullTranscription)
+        #expect(coordinator.failedSliceCount == 1)
         coordinator.finishTelemetry()
     }
 

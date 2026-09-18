@@ -59,6 +59,7 @@ final class VoicelyUITests: XCTestCase {
         seedNoteTranscriptionModelIdentifier: String? = nil,
         seedNoteQueuedForTranscription: Bool = false,
         seedExpiredLiveRecording: Bool = false,
+        seedFinalizingRecording: Bool = false,
         transcriptPreview: String? = nil,
         failedImport: Bool = false,
         retainedAttempt: String? = nil
@@ -94,6 +95,9 @@ final class VoicelyUITests: XCTestCase {
         }
         if seedExpiredLiveRecording {
             app.launchEnvironment["VOICELY_UI_TEST_EXPIRED_LIVE_RECORDING"] = "1"
+        }
+        if seedFinalizingRecording {
+            app.launchEnvironment["VOICELY_UI_TEST_FINALIZING_RECORDING"] = "1"
         }
         if let transcriptPreview {
             app.launchEnvironment["VOICELY_UI_TEST_TRANSCRIPT_PREVIEW"] = transcriptPreview
@@ -294,6 +298,25 @@ final class VoicelyUITests: XCTestCase {
     @MainActor
     func testExpiredLiveRecordingWithoutTranscriptDoesNotShowQueued() throws {
         assertExpiredLiveRecording(transcript: nil)
+    }
+
+    @MainActor
+    func testStoppedRecordingWithLiveTextShowsFinalizingNotRecording() throws {
+        let transcript = "Live text from the first part of the meeting."
+        let app = launchApp(seedNoteTitle: "Stopped Recording", seedNoteAudioPath: "stopped.m4a",
+            seedNoteDuration: 304, seedNoteTranscription: transcript, seedFinalizingRecording: true)
+        let row = app.element(id: ID.noteRow)
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.staticTexts["Finalizing"].exists)
+        XCTAssertFalse(row.staticTexts["Live transcript"].exists)
+        row.tap()
+        XCTAssertTrue(app.element(id: ID.noteDetailScreen).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Finalizing transcription…"].exists)
+        XCTAssertFalse(app.staticTexts["Recording — transcript updates live"].exists)
+        XCTAssertFalse(app.buttons["CancelTranscriptionButton"].exists)
+        XCTAssertFalse(app.buttons[ID.retranscribeButton].exists)
+        XCTAssertEqual(app.staticTexts[ID.transcriptionBody].label, transcript)
+        attachScreenshot(named: "Finalizing Stopped Recording", app: app)
     }
 
     @MainActor

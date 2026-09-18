@@ -78,6 +78,23 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
     }
 
+    /// Per-call slice results; nil simulates a failed slice. Calls past the
+    /// script fail too.
+    actor ScriptedSliceResults {
+        private var results: [String?]
+        private(set) var calls = 0
+
+        init(_ results: [String?]) {
+            self.results = results
+        }
+
+        func next() -> String? {
+            calls += 1
+            guard !results.isEmpty else { return nil }
+            return results.removeFirst()
+        }
+    }
+
     struct FakeNeuralVAD: NeuralVoiceActivityDetecting {
         let frameProbabilities: [(startFrame: Int, endFrame: Int, speechProbability: Double)]
 
@@ -533,18 +550,64 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(!coordinator.requiresFullTranscription)
     }
 
-    @Test @MainActor func failedLiveSliceRequiresWholeFileRecoveryDespiteEarlierText() async throws {
+    @Test @MainActor func failedLiveSliceIsRetriedAtStopInItsOriginalPosition() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 75)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        // Live: slice 1 succeeds, slice 2 fails. Stop: the tail, then slice 2 again.
+        let script = ScriptedSliceResults(["first", nil, "third", "second"])
+        coordinator.transcribeOverride = { @Sendable _ in await script.next() }
+        var published: [String] = []
+        coordinator.transcriptCallback = { published.append($0) }
+
+        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
+        #expect(coordinator.failedSliceCount == 1)
+        #expect(coordinator.accumulatedTranscript == "first")
+
+        let transcript = await coordinator.stop(currentFrame: 75 * 16_000)
+
+        #expect(transcript == "first\nsecond\nthird")
+        #expect(published.last == "first\nsecond\nthird")
+        #expect(!coordinator.requiresFullTranscription)
+        #expect(coordinator.unrecoveredSliceCount == 0)
+        #expect(coordinator.failedSliceCount == 0)
+        #expect(coordinator.finalizationProgress == 1)
+        #expect(await script.calls == 4)
+    }
+
+    @Test @MainActor func sliceThatKeepsFailingIsMarkedInPlaceInsteadOfWholeFileRecovery() async throws {
         let pcmURL = try makeSilentCAF(seconds: 40)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
-        let sequence = TranscriptSequence(["first slice"])
-        coordinator.transcribeOverride = { @Sendable _ in await sequence.next() }
+        let script = ScriptedSliceResults(["first slice"])
+        coordinator.transcribeOverride = { @Sendable _ in await script.next() }
 
-        _ = await coordinator.stop(currentFrame: 40 * 16_000)
+        let transcript = await coordinator.stop(currentFrame: 40 * 16_000)
 
-        #expect(coordinator.accumulatedTranscript == "first slice")
+        let gap = SegmentedAudioTranscriber.placeholder(forStart: 29 * 16_000, end: 40 * 16_000, sampleRate: 16_000)
+        #expect(transcript == "first slice\n\(gap)")
+        #expect(!coordinator.requiresFullTranscription)
+        #expect(coordinator.unrecoveredSliceCount == 1)
+        #expect(coordinator.finalizationProgress == 1)
+        #expect(await script.calls == 2 + IncrementalTranscriptionCoordinator.finalRetryAttempts)
+    }
+
+    @Test @MainActor func sliceThatCannotBeDecodedStillHandsRecordingToQueue() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 40)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        // No model is loaded, so every attempt reports the model as unavailable.
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+
+        let transcript = await coordinator.stop(currentFrame: 40 * 16_000)
+
+        #expect(transcript.isEmpty)
         #expect(coordinator.requiresFullTranscription)
+        #expect(coordinator.unrecoveredSliceCount == 0)
     }
 
     @Test @MainActor func stopTranscribesFinalTailShorterThanMinimumChunk() async throws {

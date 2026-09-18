@@ -51,7 +51,8 @@ final class SileroNeuralVoiceActivityDetector: NeuralVoiceActivityDetecting {
     /// thread-safe; each detector instance keeps only its own LSTM state.
     private static let sharedModelResult: Result<MLModel, Error> = Result {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .all
+        // Background apps cannot use the GPU; VAD must keep working while the phone is locked.
+        configuration.computeUnits = .cpuAndNeuralEngine
         return try MLModel(contentsOf: locateModelURL(), configuration: configuration)
     }
 

@@ -544,16 +544,21 @@ struct SegmentedAudioTranscriberTests {
         audio.currentFramePosition = 40 * 16_000
         session.stopRecording()
         let stopDeadline = Date().addingTimeInterval(2)
-        while note.transcriptionState != .queued || session.isRecording(note), Date() < stopDeadline {
+        while session.isRecording(note), Date() < stopDeadline {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        #expect(note.transcriptionState == .queued)
+        // The failed tail is retried in place and, still failing, marked as a gap.
+        let partial = "first slice\n" + SegmentedAudioTranscriber.placeholder(
+            forStart: 29 * 16_000, end: 40 * 16_000, sampleRate: 16_000)
         #expect(!session.isRecording(note))
-        #expect(note.transcription == "first slice")
+        #expect(note.transcription == partial)
+        #expect(note.transcriptionState == .completed)
+        #expect(note.transcriptionOutcome == .failed)
+        // A manual re-transcription that fails as well keeps the marked partial text.
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
         transcriber.transcribeSegmentOutcome = { _ in .whisperError("recovery failed") }
         await transcriber.transcribe(note: note, sourceURL: url)
-        #expect(note.transcription == "first slice")
+        #expect(note.transcription == partial)
         #expect(note.transcriptionState == .completed)
         #expect(note.transcriptionOutcome == .failed)
         #expect(note.transcriptionLastErrorMessage != nil)

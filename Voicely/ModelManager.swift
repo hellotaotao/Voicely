@@ -348,14 +348,21 @@ class ModelManager: ObservableObject {
         await task.value
     }
 
+    /// iOS rejects GPU work from background apps, so a locked phone must not route
+    /// the mel spectrogram there (WhisperKit defaults it to CPU+GPU). The stage is
+    /// cheap on the CPU.
+    nonisolated static func computeOptions(encoder: MLComputeUnits, decoder: MLComputeUnits) -> ModelComputeOptions {
+        ModelComputeOptions(melCompute: .cpuOnly, audioEncoderCompute: encoder, textDecoderCompute: decoder)
+    }
+
     private func performLoad(_ request: ModelLoadRequest, progress: @escaping LoadProgress) async throws -> ModelLoadResult {
         // Retry within the owning request; recursively calling loadModel would join itself.
         var redownload = request.redownload
         while true {
             try Task.checkCancellation()
-            let computeOptions = ModelComputeOptions(
-                audioEncoderCompute: request.encoderComputeUnits,
-                textDecoderCompute: request.decoderComputeUnits
+            let computeOptions = Self.computeOptions(
+                encoder: request.encoderComputeUnits,
+                decoder: request.decoderComputeUnits
             )
 #if DEBUG
             let verbose = UserDefaults.standard.bool(forKey: "whisperVerboseLogging")

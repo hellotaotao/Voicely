@@ -39,6 +39,77 @@ final class RecordingFinalizationBackgroundTask {
     }
 }
 
+/// Asks iOS (26+) to keep finalizing a stopped recording after the user leaves
+/// the app, showing system progress. When the system declines or expires the
+/// task, finalization still runs under `RecordingFinalizationBackgroundTask` and
+/// resumes with the app; this type never cancels the work itself.
+@MainActor
+final class RecordingFinalizationContinuation {
+    private let driver: (any ContinuedProcessingDriver)?
+    private let progress: () -> Double
+    private var identifier: String?
+    private var handle: (any ContinuedProcessingHandle)?
+    private var progressTask: Task<Void, Never>?
+    private var isFinished = false
+
+    init(
+        driver: (any ContinuedProcessingDriver)?,
+        title: String,
+        subtitle: String,
+        progress: @escaping () -> Double
+    ) {
+        self.driver = driver
+        self.progress = progress
+        let submitted = driver?.submit(title: title, subtitle: subtitle) { [weak self] handle in
+            guard let self, !self.isFinished else {
+                handle.complete(success: false)
+                return
+            }
+            self.identifier = nil
+            self.handle = handle
+            handle.expirationHandler = { [weak self] in self?.release(success: false) }
+            self.startReportingProgress()
+        }
+        if handle == nil {
+            identifier = submitted
+        }
+    }
+
+    func finish(success: Bool) {
+        isFinished = true
+        if let identifier {
+            driver?.cancel(identifier: identifier)
+        }
+        identifier = nil
+        release(success: success)
+    }
+
+    private func startReportingProgress() {
+        report()
+        progressTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.report()
+            }
+        }
+    }
+
+    private func report() {
+        let value = progress()
+        let clamped = value.isFinite ? min(max(value, 0), 0.99) : 0
+        handle?.update(progress: clamped, subtitle: "\(Int((clamped * 100).rounded(.down)))% transcribed")
+    }
+
+    private func release(success: Bool) {
+        progressTask?.cancel()
+        progressTask = nil
+        handle?.expirationHandler = nil
+        handle?.complete(success: success)
+        handle = nil
+    }
+}
+
 /// Abstraction over the audio recorder so the recording-session control logic
 /// can be unit-tested without driving a real `AVAudioEngine`.
 @MainActor
@@ -102,6 +173,13 @@ final class RecordingSession: ObservableObject {
     var coordinatorFactory: (URL) -> IncrementalTranscriptionCoordinator
 
     var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
+
+    /// Keeps post-recording finalization running after the user leaves the app.
+    var continuedProcessingDriver: (any ContinuedProcessingDriver)? = SystemContinuedProcessingDriver.shared
+
+    /// Below this much remaining audio the finite background task is enough, and
+    /// the system progress UI would only flash.
+    static let continuedProcessingThresholdSeconds: Double = 20
 
     // MARK: Init
 
@@ -321,8 +399,23 @@ final class RecordingSession: ObservableObject {
         note.pendingTranscription = false
         note.transcriptionProgress = 0.0
 
+        // Without a coordinator the whole recording goes through the queue.
+        let remainingSeconds = capturedCoordinator?.remainingAudioSeconds(upTo: finalFrame) ?? .infinity
+        let continuation = RecordingFinalizationContinuation(
+            driver: remainingSeconds >= Self.continuedProcessingThresholdSeconds ? continuedProcessingDriver : nil,
+            title: "Finishing transcription",
+            subtitle: note.title
+        ) { [weak capturedCoordinator, service = transcriptionService] in
+            if let capturedCoordinator, !capturedCoordinator.requiresFullTranscription {
+                return capturedCoordinator.finalizationProgress
+            }
+            // Full recovery runs through the regular queue and reports there.
+            return Double(service.progressByNoteID[note.id] ?? 0)
+        }
+
         Task { @MainActor in
             defer {
+                continuation.finish(success: note.transcriptionState == .completed)
                 backgroundTask.end()
                 finalizingNoteIDs.remove(note.id)
                 transcriptionService.endLocalRecording(noteID: note.id)
@@ -359,6 +452,11 @@ final class RecordingSession: ObservableObject {
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
                 note.completeTranscription()
+                if let unrecovered = capturedCoordinator?.unrecoveredSliceCount, unrecovered > 0 {
+                    // Gaps are marked inline; re-transcribing is an explicit user choice.
+                    note.transcriptionOutcome = .failed
+                    note.markTranscriptionFailure("\(unrecovered) segment(s) failed after retry")
+                }
                 note.clearTransientTranscriptionFlags()
                 return
             }

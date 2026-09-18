@@ -12,6 +12,11 @@ import Testing
 @testable import Voicely
 
 struct ModelPackagingAndTelemetryTests {
+    @Test func melSpectrogramStaysOffTheGPUForLockedScreenTranscription() {
+        let options = ModelManager.computeOptions(encoder: .cpuAndNeuralEngine, decoder: .cpuAndNeuralEngine)
+        #expect(options.melCompute == .cpuOnly)
+    }
+
     @Test @MainActor func telemetrySessionsIsolateNotesAndExcludeLiveIdle() {
         let service = TranscriptionService()
         var now = Date(timeIntervalSince1970: 100)

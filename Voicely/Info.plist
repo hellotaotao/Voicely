@@ -48,8 +48,13 @@
 			<string>au.taotao.voicely.start-recording</string>
 		</dict>
 	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).finalizeRecording.*</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>processing</string>
 		<string>remote-notification</string>
 		<string>audio</string>
 	</array>

@@ -577,6 +577,16 @@ struct ContentView: View {
             audioService.recordingDuration = 360
             audioService.isRecording = true
         }
+        if AppRuntime.isRunningTests,
+           ProcessInfo.processInfo.environment["VOICELY_UI_TEST_FINALIZING_RECORDING"] == "1",
+           let note = voiceNotes.first, !transcriptionService.isLocalRecording(noteID: note.id) {
+            // A stopped recording whose remaining audio is still being transcribed.
+            transcriptionService.beginLocalRecording(noteID: note.id)
+            note.claimTranscription(ownerDeviceID: transcriptionService.deviceIDProvider(),
+                attemptID: "ui-test-finalizing", queuedAt: Date(),
+                leaseExpiresAt: Date().addingTimeInterval(600))
+            note.isTranscribing = true
+        }
         #endif
 
         guard let selectedNoteID else {
@@ -897,17 +907,20 @@ struct VoiceNoteRow: View {
         !note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var isLiveUpdatingTranscript: Bool {
-        note.isTranscribing && hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    private var recordingPhase: RecordingNotePhase {
+        RecordingNotePhase(
+            isTranscribing: note.isTranscribing,
+            duration: note.duration,
+            hasVisibleTranscript: hasVisibleTranscript,
+            isOwnedByTranscriptionJob: isLocallyTranscribing || isAwaitingTranscription || isRemoteTranscribing
+        )
     }
 
-    private var isRecordingInProgress: Bool {
-        note.isTranscribing && note.duration <= 0 && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
-    }
+    private var isLiveUpdatingTranscript: Bool { recordingPhase.isLiveUpdatingTranscript }
 
-    private var isFinalizingTranscription: Bool {
-        note.isTranscribing && note.duration > 0 && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
-    }
+    private var isRecordingInProgress: Bool { recordingPhase.isRecording }
+
+    private var isFinalizingTranscription: Bool { recordingPhase.isFinalizing }
 
     private var previewText: String? {
         let trimmed = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1466,21 +1479,24 @@ struct VoiceNoteDetailView: View {
         !note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var isLiveUpdatingTranscript: Bool {
-        note.isTranscribing && hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
+    private var recordingPhase: RecordingNotePhase {
+        RecordingNotePhase(
+            isTranscribing: note.isTranscribing,
+            duration: note.duration,
+            hasVisibleTranscript: hasVisibleTranscript,
+            isOwnedByTranscriptionJob: isLocallyTranscribing || isAwaitingTranscription || isRemoteTranscribing
+        )
     }
 
-    private var isRecordingInProgress: Bool {
-        note.isTranscribing && note.duration <= 0 && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
-    }
+    private var isLiveUpdatingTranscript: Bool { recordingPhase.isLiveUpdatingTranscript }
+
+    private var isRecordingInProgress: Bool { recordingPhase.isRecording }
 
     private var isRecordingPaused: Bool {
         isRecordingInProgress && audioService.isPaused
     }
 
-    private var isFinalizingTranscription: Bool {
-        note.isTranscribing && note.duration > 0 && !hasVisibleTranscript && !isLocallyTranscribing && !isAwaitingTranscription && !isRemoteTranscribing
-    }
+    private var isFinalizingTranscription: Bool { recordingPhase.isFinalizing }
 
     private var isTranscribingHere: Bool {
         isLocallyTranscribing || isLiveUpdatingTranscript || isRecordingInProgress || isFinalizingTranscription
@@ -2034,7 +2050,8 @@ struct VoiceNoteDetailView: View {
                         requestTranscription()
                     }
                 }
-            } else {
+            } else if !isTranscribingHere {
+                // Requests are refused while this note is recording or transcribing.
                 retranscribeActionButton(title: "Re-transcribe", systemImage: "arrow.clockwise") {
                     showingRetranscribeConfirmation = true
                 }
@@ -2164,7 +2181,7 @@ struct VoiceNoteDetailView: View {
                     Text("Finalizing transcription…")
                         .font(.subheadline.weight(.medium))
                 }
-                Text("Finishing the recording and final transcription segment before saving the transcript.")
+                Text("Recording stopped. Transcribing the remaining audio before saving the transcript.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

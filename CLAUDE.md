@@ -77,6 +77,8 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 - SwiftUI views and services are `@MainActor`
 - Debug logging uses emoji prefixes (`🔍`, `✅`, `❌`, `⚠️`) – gate verbose logs behind `#if DEBUG`
 
-## Known Issues (from AGENTS.md To Do)
+## Roadmap and To Do
 
-See `AGENTS.md` for tracked improvements including: Share Sheet import, real WhisperKit progress callbacks, transcription queue handling, and iCloud download robustness.
+`docs/stable-roadmap.md` is the single source of truth for the release order (phases 一~七), all open tasks, and the verified list of what is already done. If any other document conflicts with it, the roadmap wins. Add new to-dos there, not to `AGENTS.md` or `todo.md`.
+
+Historical execution and verification records live in `docs/roadmap-log.md`.

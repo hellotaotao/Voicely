@@ -37,16 +37,9 @@ If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared 
 - CloudKit/iCloud features are used; avoid checking in secrets or local credentials.
 - Keep `Info.plist` changes minimal and documented in PRs when permissions or entitlements change.
 
-## To Do
-- Validate the new iOS system recording integrations on device: Live Activity / Dynamic Island recording status and the Start Voicely Recording App Shortcut / Action Button assignment path. (`Voicely/RecordingLiveActivityController.swift`, `VoicelyWidgets/`, `Voicely/StartRecordingIntent.swift`, `Voicely/VoicelyDeepLink.swift`)
-- Add meeting-length recording controls as the next major product step: let users choose an auto-stop duration when starting recording, support precise durations such as 30/35/41/60 minutes, show a prominent countdown warning a few minutes before stopping, offer extend/stop-now choices, and later explore smart auto-stop when farewell phrases plus silence indicate the meeting has ended. (`Voicely/ContentView.swift`, `Voicely/AudioRecordingService.swift`, `Voicely/RecordingActivityAttributes.swift`)
-- Explore Apple Watch companion support later: start with Watch as an iPhone recording remote/status surface before considering direct Watch microphone recording and sync. (future watchOS target / WatchConnectivity files)
-- Replace simulated transcription progress with real progress reporting (e.g., integrate WhisperKit callbacks / segment progress) and reflect in UI. (`Voicely/TranscriptionService.swift`, `Voicely/ContentView.swift`)
-- Fix `processPendingTranscriptions` so notes aren't skipped when another transcription is active; wait/retry or queue work. (`Voicely/TranscriptionService.swift`)
-- Ensure the simulated progress task is always cancelled on early exit/error/cancellation. (`Voicely/TranscriptionService.swift`)
-- Wire `showLoadModelPrompt` to prompt users when attempting transcription without a loaded model, and route to Settings. (`Voicely/ContentView.swift`, `Voicely/SettingsView.swift`)
-- Handle iCloud audio downloads more robustly (wait for download completion, retry load, and surface status in the UI). (`Voicely/AudioPlayerService.swift`, `Voicely/ContentView.swift`)
-- Start the metadata query automatically when iCloud is enabled so sync status updates without manual refresh. (`Voicely/CloudStorageManager.swift`)
-- Remove or use `currentRecordingPath` if it serves no purpose. (`Voicely/ContentView.swift`)
-- Add a test for pending transcription processing while a transcription is already in progress. (`VoicelyTests/TranscriptionServiceTests.swift`)
-- Gate verbose debug logging behind `#if DEBUG` to reduce production log noise. (`Voicely/AudioRecordingService.swift`, `Voicely/CloudStorageManager.swift`, `Voicely/AudioPlayerService.swift`, `Voicely/VoicelyApp.swift`)
+## Roadmap and To Do
+
+All roadmap items and open tasks live in a single file: [`docs/stable-roadmap.md`](docs/stable-roadmap.md).
+It is the source of truth — if any other document disagrees with it, the roadmap wins.
+Do not add new to-dos here; add them under section 四 (跨阶段待办) of the roadmap.
+Historical execution and verification records are in [`docs/roadmap-log.md`](docs/roadmap-log.md).

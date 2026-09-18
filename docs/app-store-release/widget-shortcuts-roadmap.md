@@ -1,6 +1,8 @@
 # Voicely Widgets and Shortcuts Roadmap
 
 > Planning only. Do not implement until the product owner approves a specific phase.
+>
+> **Not the current release order.** The phase numbers below are an early topic-specific plan for system entry points. The authoritative roadmap is [`docs/stable-roadmap.md`](../stable-roadmap.md).
 
 ## Goal
 

@@ -197,3 +197,23 @@ static func isEnglishOnly(_ model: String) -> Bool {
 2. 列表 UI 渲染处给 `.en` 追加 `(English Only)`,**不要改 `displayName(for:)` 本体**(它被设置页 / note 标签 / 紧凑 UI 复用,且 `WhisperKitModelsView.swift:119` 会按空格拆 displayName 分行,直接加括号会污染所有 UI 并破坏分行)。涉及 `SettingsView` 的模型 `ForEach` 与 `WhisperKitModelsView`。
 3. **边界**:老用户若已选中/下载了 distil 或 medium.en,过滤后 `addModel(selectedModel)`(`ModelManager.swift:169`)会因 `shouldIncludeModel` 失败而不纳入,触发 `ModelManager.swift:418` 的自动切换。需确认该降级路径平滑(自动切回平台默认或列表第一个),必要时给迁移提示。
 4. 单元测试(`VoicelyTests/`,Swift Testing):覆盖 distil 全系列、medium.en 被移除;tiny/base/small.en(含 `_217MB`)保留且 `isEnglishOnly == true`;`large-v3_turbo`、`medium` 等多语言不被移除且 `isEnglishOnly == false`。
+
+## 0.23.10 录音收尾修复（2026-09-19）
+
+背景与根因见 [stable-roadmap.md](stable-roadmap.md) P-0。本轮先把 0.23.9 的源码补提交（`aaf8002`，与 09-11 上传的 TestFlight 包一致：代码文件修改时间均早于 archive，二进制含 `TranscriptionAudioCoverage`、不含 "Time ratio"），文档整理单独提交（`85cf08f`）。
+
+### 实际变更
+
+- `IncrementalTranscriptionCoordinator`：按段记录 `[startFrame, endFrame)` 与结果；实时失败的段在 `stop()` 时原地重试 `finalRetryAttempts = 2` 次并按原位置拼回；Whisper 仍失败的段写入 `[m:ss–m:ss transcription unavailable]`、计入 `unrecoveredSliceCount`；只有 `.modelUnavailable/.audioUnavailable/.cancelled`/切片读取失败才设 `requiresFullTranscription`。
+- `RecordingSession`：有未恢复段时 note 记为 failed（"N segment(s) failed after retry"），不再整篇排队；收尾剩余音频 ≥ 20 秒时通过 `RecordingFinalizationContinuation` 申请 `BGContinuedProcessingTask`，到期只释放、不取消工作。
+- `ContinuedProcessingTask.swift`：系统驱动，每次用新 UUID 后缀注册（SDK：同一 ID 注册两次会杀进程；continued processing 允许启动后注册）；Info.plist 加 `BGTaskSchedulerPermittedIdentifiers`（`$(PRODUCT_BUNDLE_IDENTIFIER).finalizeRecording.*`）与 `processing`。
+- `RecordingNotePhase`：列表与详情共用的状态判定，停止后（duration > 0）一律为 finalizing。转录中隐藏 Re-transcribe。
+- `ModelManager.computeOptions`：`melCompute = .cpuOnly`（WhisperKit 默认 `.cpuAndGPU`）；Silero VAD 由 `.all` 改为 `.cpuAndNeuralEngine`。
+
+### 验证
+
+- Mac Catalyst 单元测试：266 tests / 32 suites 通过（含真录音回放）。
+- iPhone 17 模拟器：单元 + UI 全量通过，新增 UI 测试 `testStoppedRecordingWithLiveTextShowsFinalizingNotRecording`。
+- generic iOS 真机目标 Release 编译通过（`BGContinuedProcessingTask` 分支只在真机目标编译）。
+- 真录音回放（09-17 会议，303 秒，Mac + `openai_whisper-small`）：三种情形（正常 / 注入 3 段实时失败 / 实时全部失败）均未触发整篇重转，行数一致；措辞差异来自 Whisper 温度回退采样（正常那份里还有 "Thank you for watching. Please subscribe" 幻觉）。有失败原因记录的 9 次运行中 4 次出现 `repetitive output`，都在结尾道别段 4:38–5:04，重试后要么补上、要么标成缺口。单次回放 24–52 秒。
+- 未做：真机锁屏录音、`BGContinuedProcessingTask` 是否真的被系统批准、手机上 large-v3-turbo 的表现。

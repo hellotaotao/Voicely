@@ -4,7 +4,7 @@
 > 其他文档若与本文件冲突，一律以本文件为准。
 > 历史执行/验证记录已剥离到 [roadmap-log.md](roadmap-log.md)，本文件只写"要做什么、做到哪一步"。
 >
-> 状态标记最后核对：**2026-09-13**，逐条按当前 `dev` 分支代码核实，不凭记忆。
+> 状态标记最后核对：**2026-09-13**，逐条按当前 `dev` 分支代码核实，不凭记忆。**2026-09-19** 补记 0.23.9 已提交、0.23.10 录音收尾修复（P-0）与 stash 回退（P-6）。
 
 标记含义：✅ 已完成 · 🚧 进行中 · 🧪 代码就位、真机验收未做 · ⬜ 未开始 · ⚠️ 部分完成
 
@@ -22,7 +22,7 @@
 | ⑥ 预约提醒录音 | 本地通知提醒，点通知打开准备界面 | ⬜ | 无 `UNUserNotificationCenter` 调用 |
 | ⑦ 反馈驱动的增强 | 系统入口完善等 | 🧪 | Live Activity / Shortcut / DeepLink 文件均已存在，真机验收未做 |
 
-**未提交的工作**：工作区有 13 个文件的改动（转录遥测按 note 隔离 + 分段路径接入遥测），对应下方待办 P-1，尚未 commit。
+**版本现状（2026-09-19）**：0.23.9 已于 09-11 上传 TestFlight，当时是从未提交的工作区直接打包的，源码 09-19 补提交为 `aaf8002`。0.23.10 = 录音收尾修复（P-0），待真机验收。0.23.8 起的版本都**不含** 0.23.5–0.23.7 的改动（见 P-6）。
 
 ---
 
@@ -110,11 +110,35 @@ Live Activity / Dynamic Island 录音状态、Start Voicely Recording 快捷指�
 
 不绑定某个阶段编号，按优先级排。原 `todo.md` 与 `AGENTS.md` 的条目已合并至此并逐条核实过。
 
-### P-1 🚧 转录指标：time ratio 与 speed 一直停在 "Measuring"
+### P-0 🧪 录音收尾：一段失败不再整篇重转（0.23.10）
+
+0.23.9 真机现象（09-17 一场 5:04 的会议，锁屏录音）：停止后界面仍写 "Recording — transcript updates live"；退出再进变成从头开始的整篇重转（进度 5%、速度从 1.1× 跳到 2.8×，其实是第二次运行）；取消后列表显示 Queued、详情显示 cancelled。
+
+根因（均早于 0.23.9）：
+- 实时转录任何一段失败（Whisper 报错、复读、取消、模型不可用）都会设 `requiresFullTranscription`，收尾时丢掉已转好的全部文字、整篇重新排队（0.23.2 `6cc7c75` 引入）。
+- 重转沿用手动 re-transcribe 的规则：旧稿一直显示、全部成功才替换，只要有一段失败新结果整个作废（6 月 `72e2c4b`）。
+- 标签判定"有文字就算实时转录中"，"Finalizing" 却要求没有文字，所以收尾阶段永远显示成录音中（5 月 `a015f71`）。
+
+用这场会议的真录音在 Mac 上重放（`RealRecordingReplayTests`，small 模型）：结尾道别那段（4:38–5:04）会让 Whisper 陷入 "Thank you. Bye." 复读，被 `repetitive output` 判为失败，记录了失败原因的 9 次运行里有 4 次出现。放在 0.23.9，这一段就足以触发整篇重转。
+
+0.23.10 的改动：
+- 实时失败的段记下时间范围，停止时原地重试 2 次，按原位置拼回；仍失败则标成 `[m:ss–m:ss transcription unavailable]`，note 记为 failed 并写明段数；只有模型不可用/音频读不到/取消这类"根本没法解码"的情况才走老的整篇排队。
+- 停止后显示 "Finalizing transcription…"；录音中、收尾中、转录中都不显示 Re-transcribe（点了本来也会被拒）。
+- 频谱（WhisperKit 默认 CPU+GPU）和 Silero VAD 不再用 GPU——iOS 后台不允许 GPU。
+- 收尾剩余音频 ≥ 20 秒时申请 iOS 26 `BGContinuedProcessingTask`（系统进度条，锁屏后继续跑）；拿不到就退回原来约 30 秒的 `beginBackgroundTask`。
+
+真机验收（Mac/模拟器测不了锁屏）：
+1. 锁屏录 5 分钟以上的会议，解锁、停止、立刻再锁屏：锁屏上应出现 "Finishing transcription" 进度，回来时稿子完整、没有整篇重转。
+2. 停止后详情页显示 "Finalizing transcription…" 而不是 "Recording"。
+3. 若出现 `[… transcription unavailable]` 标记，记下是哪段、什么内容。
+
+### P-1 ⚠️ 转录指标：time ratio 与 speed 一直停在 "Measuring"
 
 re-transcribe / 整文件转录时这两个值出不来；live transcription 正常。根因是分段路径没接遥测会话。
 
-**当前工作区已在改**：`TranscriptionTelemetry` 增加 `processedAudioSeconds` 与区间合并（`TranscriptionAudioCoverage`），`SegmentedAudioTranscriber` 接入 `telemetrySession`，遥测快照按 `noteID` 隔离避免串台。**未提交。**
+**已随 0.23.9 发出**（`aaf8002`）：`TranscriptionTelemetry` 增加 `processedAudioSeconds` 与区间合并，`SegmentedAudioTranscriber` 接入 `telemetrySession`，遥测快照按 `noteID` 隔离避免串台。
+
+遗留：分段路径（>30 秒，即几乎所有真实录音）转完后不把速度写回 note——`SegmentedAudioTranscriber` 里没有 `recordTranscriptionTelemetry` 调用，re-transcribe 也不清旧统计。结果是长录音重转完成后，速度徽章仍是上一次的数字，模型名却已是新的。
 
 ### P-2 ⬜ 转录完成后指标整块消失 → 改为可折叠
 
@@ -143,6 +167,12 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 若老用户此前手动选中过 distil 或 medium.en：过滤后 `availableModels` 不再含它，但持久化的 `selectedModel` 仍是该值。`deleteModel` 的自动切换只在用户主动删除模型时触发，不覆盖本场景。后果是当前模型标签仍显示该模型、菜单里选不回去，但**不崩溃**，已下载则仍可转录。
 修法：加载模型列表后检测 `isUnsupportedModel(selectedModel)` 并切回 `platformDefaultModel`。
 
+### P-6 ⬜ 0.23.5–0.23.7 的改动还在 stash 里，0.23.8 起的版本都不含
+
+09-10 修卡顿前，按当时的约定把未提交的 0.23.5–0.23.7 改动暂存为 `stash@{0}`（`pre-ui-performance-fix-20260910`），准备真机测完 0.23.8 再放回，但一直没放。内容：手动转录的后台继续处理（`OfflineTranscriptionBackgroundManager`，iOS 26 `BGContinuedProcessingTask`，只管手动触发的已保存音频转录，不管录音）、段内进度显示、诊断面板、外层重试/`unusableOutput` 调整。0.23.7 二进制里有 `OfflineTranscriptionBackground` 符号，0.23.8/0.23.9 没有。
+
+0.23.10 的录音收尾已单独接上 `BGContinuedProcessingTask`（`ContinuedProcessingTask.swift`，思路取自 stash），其余内容要不要放回待定。09-18 只读模拟：放回 0.23.9 工作区有 7 个文件冲突。**不要 drop 这个 stash。**
+
 ---
 
 ## 五、已完成，可从待办中划掉
@@ -169,7 +199,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 ## 六、基线与备份（历史参考）
 
 - 开发分支 `dev`，起点 `6f3681baa2658b1bc774677e421546dee2f10c63`，采用归档后整理的版本配置提交 `6f3681b`。
-- 版本源：`Config/Version.xcconfig`（当前 `0.23.9 (1)`）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
+- 版本源：`Config/Version.xcconfig`（当前 `0.23.10 (1)`）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
 - `old-dev` 保持在 `dea04f11eacb23e1a6a65e9a90f53ceba1a0afa8`，未重置。旧 dev 的未提交修复保存为 stash，由 `backup/pre-r0-20260907` tag 固定引用；本地备份目录 `build/backups/pre-r0-20260907/`（含 `working-tree.tar.gz`、`manifest.json`、`changes.patch`、`history.bundle`，均已校验）。
 
 恢复旧开发状态（工作区干净时）：
@@ -187,7 +217,8 @@ R0 验收剩余未完成项：真实 iPhone 升级后旧音频与文字可读；
 
 ## 七、发布注意
 
-- 基线 scheme 的 Archive pre-action 会自动执行 `git tag` 和 `git push`。首次准备发布前应单独去除这一隐式远端副作用，改为明确、可追溯的发布步骤。
+- 共享 scheme 的 Archive 已没有 pre-action（`16a7c37` 起），archive 不再自动 `git tag`/`git push`。0.23.4–0.23.9 因此都没有 tag；0.23.9 更是从未提交的工作区打的包。以后先 commit 再 archive，版本和提交才对得上。
+- 0.23.10 为 `BGContinuedProcessingTask` 在 `UIBackgroundModes` 里加了 `processing`（与 stash 里的实现一致；SDK 文档只对 `BGProcessingTask` 明确要求它）。首次公开发布前确认它是否必需，不需要就去掉，免得审核追问。
 - 上架材料在 [app-store-release/](app-store-release/)。注意 `release-checklist.md` 里写的 `MARKETING_VERSION = 0.15.3` 已过时，且版本源已迁至 `Config/Version.xcconfig`，以 xcconfig 为准。
 - Voicely 从未正式上架，只发过 TestFlight，下次提交是首次公开发布而非更新。
 - `app-store-release/widget-shortcuts-roadmap.md` 中的 Phase 编号属于早期系统入口专题规划，**不代表本文件的 ①~⑦ 发布顺序**。

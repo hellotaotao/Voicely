@@ -326,7 +326,7 @@ final class VoicelyUITests: XCTestCase {
         let title = "Segment Preview"
         let original = "Original complete transcript remains available."
         let preview = "The first completed segment appears before the rest."
-        let app = launchApp(seedNoteTitle: title, seedNoteDuration: 83,
+        let app = launchApp(seedNoteTitle: title, seedNoteDuration: 900,
                             seedNoteTranscription: original, transcriptPreview: preview)
         let row = app.element(id: ID.noteRow)
         XCTAssertTrue(row.waitForExistence(timeout: 10))
@@ -341,6 +341,10 @@ final class VoicelyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Partial transcript — transcription in progress"].exists)
         XCTAssertFalse(app.textViews["TranscriptEditor"].exists)
         XCTAssertTrue(app.buttons[ID.copyTranscriptionButton].exists)
+        XCTAssertTrue(app.staticTexts["12.0× realtime"].exists)
+        XCTAssertTrue(app.staticTexts["9:00 processed · 0:45 elapsed"].exists)
+        XCTAssertFalse(app.staticTexts["Time ratio"].exists)
+        XCTAssertFalse(app.staticTexts["Unrelated model"].exists)
         attachScreenshot(named: "Read Only Segment Preview", app: app)
     }
 

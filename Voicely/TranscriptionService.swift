@@ -109,8 +109,9 @@ class TranscriptionService: ObservableObject {
     private var pendingTranscriptionOrder: [UUID] = []
     private var pendingTranscriptionOrderSet: Set<UUID> = []
     private var pendingTranscriptionOrderCursor = 0
-    private var telemetryStartedAt: Date?
-    private var telemetryAudioDuration: TimeInterval?
+    private var currentDecodeTelemetrySession: TranscriptionTelemetrySession?
+    private var telemetrySessions: [UUID: TranscriptionTelemetrySession] = [:]
+    private var noteTelemetrySessions: [UUID: UUID] = [:]
     private var telemetryTimerTask: Task<Void, Never>?
 
     init(modelManager: ModelManager? = nil,
@@ -322,7 +323,7 @@ class TranscriptionService: ObservableObject {
         guard !localRecordingNoteIDs.contains(note.id) else { return }
         guard activeNoteID == note.id || note.transcriptionState == .queued || note.transcriptionState == .cancelled
             || (note.transcriptionState == .claimed && note.transcriptionOwnerDeviceID == currentDeviceID) else { return }
-        if activeNoteID == note.id { cancelTranscription() }
+        if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         previewByNoteID.removeValue(forKey: note.id)
         note.cancelTranscription()
@@ -347,7 +348,7 @@ class TranscriptionService: ObservableObject {
     func isDiscarded(noteID: UUID) -> Bool { discardedNoteIDs.contains(noteID) }
     func discardTranscription(for note: VoiceNote) {
         discardedNoteIDs.insert(note.id)
-        if activeNoteID == note.id { cancelTranscription() }
+        if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         previewByNoteID.removeValue(forKey: note.id)
     }
@@ -466,16 +467,21 @@ class TranscriptionService: ObservableObject {
     /// callers can react per cause instead of treating every empty result the same.
     func transcribeAudioOutcome(
         filePath: String,
-        progressCallback: @escaping (Float) -> Void = { _ in }
+        progressCallback: @escaping (Float) -> Void = { _ in },
+        telemetrySession: TranscriptionTelemetrySession? = nil
     ) async -> TranscriptionOutcome {
         updateEngineStatus()
 
+        let pausedForEngine = isTranscribing && telemetrySession?.activeWorkOnly == true
+        if pausedForEngine, let telemetrySession { pauseTelemetryWork(telemetrySession) }
         while isTranscribing {
-            if Task.isCancelled { return .cancelled }
+            if Task.isCancelled || telemetrySession?.isCancelled == true { return .cancelled }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 
+        if pausedForEngine, let telemetrySession { resumeTelemetryWork(telemetrySession) }
         lastCancellationHandled = false
+        if telemetrySession?.isCancelled == true { return .cancelled }
         if cancelRequested {
             cancelRequested = false
             lastCancellationHandled = true
@@ -486,10 +492,14 @@ class TranscriptionService: ObservableObject {
         transcriptionProgress = 0.0
         resetProgressSmoothing()
         let startTime = Date()
+        let ownsTelemetry = telemetrySession == nil
+        let session = telemetrySession ?? beginTelemetrySession()
+        currentDecodeTelemetrySession = session
         defer {
             isTranscribing = false
             currentTranscriptionTask = nil
-            finishTranscriptionTelemetry()
+            if currentDecodeTelemetrySession?.id == session.id { currentDecodeTelemetrySession = nil }
+            if ownsTelemetry { endTelemetrySession(session) }
             resetProgressSmoothing()
             transcriptionProgress = 0.0
         }
@@ -498,9 +508,11 @@ class TranscriptionService: ObservableObject {
             return .modelUnavailable
         }
 
-        await beginTranscriptionTelemetry(filePath: filePath)
+        if ownsTelemetry {
+            setTelemetryAudioDuration(await audioDurationProvider(filePath), session: session)
+        }
         // Cancellation may arrive while reading metadata, before a decode task exists.
-        guard !cancelRequested, !Task.isCancelled else {
+        guard !cancelRequested, !Task.isCancelled, !session.isCancelled else {
             cancelRequested = false
             lastCancellationHandled = true
             return .cancelled
@@ -515,7 +527,7 @@ class TranscriptionService: ObservableObject {
             return .cancelled
         }
 
-        if cancelRequested || Task.isCancelled {
+        if cancelRequested || Task.isCancelled || session.isCancelled {
             cancelRequested = false
             lastCancellationHandled = true
             return .cancelled
@@ -527,6 +539,9 @@ class TranscriptionService: ObservableObject {
                 // to surface for diagnosis — not as a calm "no speech".
                 return .whisperError("blank output")
             }
+            if ownsTelemetry, let duration = session.audioDuration {
+                recordProcessedAudio(start: 0, end: duration, session: session)
+            }
             let elapsed = Date().timeIntervalSince(startTime)
             let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
             return .transcribed(TranscriptionResult(
@@ -535,6 +550,9 @@ class TranscriptionService: ObservableObject {
                 modelIdentifier: modelIdentifier
             ))
         case .noSpeech:
+            if ownsTelemetry, let duration = session.audioDuration {
+                recordProcessedAudio(start: 0, end: duration, session: session)
+            }
             return .noSpeech
         case .modelUnavailable:
             return .modelUnavailable
@@ -561,13 +579,19 @@ class TranscriptionService: ObservableObject {
         return nil
     }
 
+    private func cancelTranscriptionRun(for noteID: UUID) {
+        cancelledRunNoteIDs.insert(noteID)
+        if let id = noteTelemetrySessions[noteID] { telemetrySessions[id]?.isCancelled = true }
+        if currentDecodeTelemetrySession?.noteID == noteID { cancelTranscription() }
+    }
+
     func cancelTranscription() {
         print("Cancelling current transcription...")
         cancelRequested = true
-        if let noteID = activeNoteID { cancelledRunNoteIDs.insert(noteID) }
+        currentDecodeTelemetrySession?.isCancelled = true
+        if let noteID = currentDecodeTelemetrySession?.noteID ?? activeNoteID { cancelledRunNoteIDs.insert(noteID) }
         currentTranscriptionTask?.cancel()
         currentTranscriptionTask = nil
-        finishTranscriptionTelemetry()
         stopLeaseHeartbeat()
         resetProgressSmoothing()
         // The owning task releases the engine and note only after decoding exits.
@@ -613,6 +637,77 @@ class TranscriptionService: ObservableObject {
     }
 }
 
+extension TranscriptionService {
+    func beginTelemetrySession(noteID: UUID? = nil, activeWorkOnly: Bool = false) -> TranscriptionTelemetrySession {
+        let session = TranscriptionTelemetrySession(noteID: noteID, activeWorkOnly: activeWorkOnly, now: nowProvider())
+        if let noteID {
+            if let previous = noteTelemetrySessions[noteID] {
+                telemetrySessions[previous]?.isCancelled = true
+                telemetrySessions.removeValue(forKey: previous)
+            }
+            noteTelemetrySessions[noteID] = session.id
+        }
+        telemetrySessions[session.id] = session
+        refreshTranscriptionTelemetry(session)
+        if telemetryTimerTask == nil {
+            telemetryTimerTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    guard !Task.isCancelled, let self else { break }
+                    for session in self.telemetrySessions.values where session.runningSince != nil {
+                        self.refreshTranscriptionTelemetry(session)
+                    }
+                }
+            }
+        }
+        return session
+    }
+
+    func isTelemetrySessionCurrent(_ session: TranscriptionTelemetrySession) -> Bool {
+        telemetrySessions[session.id] != nil
+    }
+
+    func resumeTelemetryWork(_ session: TranscriptionTelemetrySession) {
+        guard telemetrySessions[session.id] != nil, session.runningSince == nil else { return }
+        session.runningSince = nowProvider()
+        refreshTranscriptionTelemetry(session)
+    }
+
+    func pauseTelemetryWork(_ session: TranscriptionTelemetrySession) {
+        guard telemetrySessions[session.id] != nil else { return }
+        if let started = session.runningSince { session.elapsed += max(0, nowProvider().timeIntervalSince(started)) }
+        session.runningSince = nil
+        refreshTranscriptionTelemetry(session)
+    }
+
+    func setTelemetryAudioDuration(_ duration: TimeInterval?, session: TranscriptionTelemetrySession) {
+        guard telemetrySessions[session.id] != nil else { return }
+        session.audioDuration = duration
+        refreshTranscriptionTelemetry(session)
+    }
+
+    func recordProcessedAudio(start: TimeInterval, end: TimeInterval, session: TranscriptionTelemetrySession) {
+        guard telemetrySessions[session.id] != nil, !session.isCancelled else { return }
+        session.coverage.record(start: start, end: end)
+        refreshTranscriptionTelemetry(session)
+    }
+
+    func endTelemetrySession(_ session: TranscriptionTelemetrySession) {
+        guard telemetrySessions[session.id] != nil else { return }
+        pauseTelemetryWork(session)
+        refreshTranscriptionTelemetry(session, isActive: false)
+        session.isCancelled = true
+        telemetrySessions.removeValue(forKey: session.id)
+        if let noteID = session.noteID, noteTelemetrySessions[noteID] == session.id {
+            noteTelemetrySessions.removeValue(forKey: noteID)
+        }
+        if telemetrySessions.isEmpty {
+            telemetryTimerTask?.cancel()
+            telemetryTimerTask = nil
+        }
+    }
+}
+
 private extension TranscriptionService {
     enum ProcessingAction {
         case claimNew(attemptID: String, queuedAt: Date)
@@ -627,56 +722,20 @@ private extension TranscriptionService {
         modelManager?.isModelLoaded() ?? false
     }
 
-    func beginTranscriptionTelemetry(filePath: String) async {
-        finishTranscriptionTelemetry()
-        telemetryStartedAt = nowProvider()
-        telemetryAudioDuration = await audioDurationProvider(filePath)
-        refreshTranscriptionTelemetry(isActive: true)
-
-        telemetryTimerTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled else {
-                    break
-                }
-                self?.refreshTranscriptionTelemetry(isActive: true)
-            }
-        }
-    }
-
-    func finishTranscriptionTelemetry() {
-        telemetryTimerTask?.cancel()
-        telemetryTimerTask = nil
-
-        guard telemetryStartedAt != nil else {
-            return
-        }
-
-        refreshTranscriptionTelemetry(isActive: false)
-        telemetryStartedAt = nil
-        telemetryAudioDuration = nil
-    }
-
-    func refreshTranscriptionTelemetry(isActive: Bool) {
-        guard let telemetryStartedAt else {
-            transcriptionTelemetry = TranscriptionTelemetrySnapshot.inactive(
-                modelName: currentTelemetryModelName(),
-                computeRoute: currentTelemetryComputeRoute()
-            )
-            return
-        }
-
-        let elapsed = max(0, nowProvider().timeIntervalSince(telemetryStartedAt))
-        transcriptionTelemetry = TranscriptionTelemetrySnapshot(
+    func refreshTranscriptionTelemetry(_ session: TranscriptionTelemetrySession, isActive: Bool = true) {
+        guard telemetrySessions[session.id] != nil else { return }
+        let elapsed = session.elapsed + (session.runningSince.map { max(0, nowProvider().timeIntervalSince($0)) } ?? 0)
+        telemetryState.update(TranscriptionTelemetrySnapshot(
             isActive: isActive,
             modelName: currentTelemetryModelName(),
             computeRoute: currentTelemetryComputeRoute(),
             metrics: TranscriptionTelemetryMetrics(
                 elapsedSeconds: elapsed,
-                audioDurationSeconds: telemetryAudioDuration
+                audioDurationSeconds: session.audioDuration,
+                processedAudioSeconds: session.coverage.processedSeconds
             ),
             thermalState: ProcessInfo.processInfo.thermalState
-        )
+        ), noteID: session.noteID)
     }
 
     func currentTelemetryModelName() -> String {
@@ -837,6 +896,8 @@ private extension TranscriptionService {
         }
 
         beginLocalTranscription(for: note, attemptID: attemptID)
+        let session = beginTelemetrySession(noteID: note.id)
+        defer { endTelemetrySession(session) }
         startLeaseHeartbeat(for: note, attemptID: attemptID)
         defer {
             stopLeaseHeartbeat()
@@ -865,11 +926,12 @@ private extension TranscriptionService {
             return
         }
         note.duration = resolvedDuration
+        setTelemetryAudioDuration(resolvedDuration, session: session)
         if shouldSegmentTranscription(audioDuration: resolvedDuration) {
             stopLeaseHeartbeat()
             endLocalTranscription(for: note.id)
             await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
-                .transcribe(note: note, sourceURL: url)
+                .transcribe(note: note, sourceURL: url, telemetrySession: session)
             return
         }
 
@@ -882,11 +944,11 @@ private extension TranscriptionService {
             }
         }
 
-        var outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress)
+        var outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
 
         // A real Whisper error is often transient — retry once before giving up.
         if case .whisperError = outcome, !wasTranscriptionCancelled() {
-            outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress)
+            outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
         }
 
         stopLeaseHeartbeat()
@@ -906,15 +968,17 @@ private extension TranscriptionService {
 
         switch outcome {
         case .transcribed(let result):
+            recordProcessedAudio(start: 0, end: resolvedDuration, session: session)
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
-            note.recordTranscriptionTelemetry(transcriptionTelemetry)
+            if let snapshot = telemetryState.snapshot(for: note.id) { note.recordTranscriptionTelemetry(snapshot) }
             note.completeTranscription()
             note.transcriptionOutcome = .transcribed
             note.clearTransientTranscriptionFlags()
 
         case .noSpeech:
+            recordProcessedAudio(start: 0, end: resolvedDuration, session: session)
             // Existing text may be an incomplete live preview, not a proven
             // complete transcript. A silent retry cannot establish completeness.
             if !hadExistingTranscript {

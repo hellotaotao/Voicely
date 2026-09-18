@@ -10,10 +10,11 @@ import Foundation
 final class SegmentedAudioTranscriber {
     private let transcriptionService: TranscriptionService
     private let progressStore: SegmentProgressStore
+    private var telemetrySession: TranscriptionTelemetrySession?
     private let nowProvider: () -> Date
 
     /// Per-segment transcription. Defaults to the real service; tests override.
-    var transcribeSegmentOutcome: (URL) async -> TranscriptionOutcome
+    var transcribeSegmentOutcome: (URL) async -> TranscriptionOutcome = { _ in .cancelled }
 
     /// Builds one shared snapshot for a segment checkpoint and its UI preview.
     var joinTranscriptPieces: ([String]) -> String = { $0.joined(separator: "\n") }
@@ -43,12 +44,12 @@ final class SegmentedAudioTranscriber {
         self.transcriptionService = transcriptionService
         self.progressStore = progressStore
         self.nowProvider = nowProvider
-        self.transcribeSegmentOutcome = { url in
-            await transcriptionService.transcribeAudioOutcome(filePath: url.path)
+        self.transcribeSegmentOutcome = { [weak self] url in
+            await transcriptionService.transcribeAudioOutcome(filePath: url.path, telemetrySession: self?.telemetrySession)
         }
     }
 
-    func transcribe(note: VoiceNote, sourceURL: URL) async {
+    func transcribe(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession? = nil) async {
         guard !transcriptionService.isLocalRecording(noteID: note.id),
               !transcriptionService.isDiscarded(noteID: note.id),
               !transcriptionService.isUserPaused(note) else { return }
@@ -64,6 +65,13 @@ final class SegmentedAudioTranscriber {
             || transcriptionService.isUserPaused(note) { return }
         // Drop a stale cancellation flag left by a prior, unrelated transcription.
         transcriptionService.clearPendingCancellation()
+
+        let session = suppliedSession ?? transcriptionService.beginTelemetrySession(noteID: note.id)
+        telemetrySession = session
+        defer {
+            if suppliedSession == nil { transcriptionService.endTelemetrySession(session) }
+            telemetrySession = nil
+        }
 
         // A re-transcription of an existing recording starts with a transcript;
         // an import starts empty. Used to preserve the old text on total failure.
@@ -83,6 +91,7 @@ final class SegmentedAudioTranscriber {
 
         let duration = Double(info.totalFrames) / info.sampleRate
         if duration.isFinite, duration > 0 { note.duration = duration }
+        transcriptionService.setTelemetryAudioDuration(duration, session: session)
 
         // Claim for this device before doing any work.
         let now = nowProvider()
@@ -104,6 +113,11 @@ final class SegmentedAudioTranscriber {
             if transcriptionService.isRunCancelled(noteID: note.id) || transcriptionService.isUserPaused(note) || Task.isCancelled {
                 pause(note)
                 return
+            }
+            switch outcome {
+            case .transcribed, .noSpeech:
+                transcriptionService.recordProcessedAudio(start: 0, end: duration, session: session)
+            default: break
             }
             finalizeSinglePass(note: note, outcome: outcome, hadExistingTranscript: hadExistingTranscript)
             if note.transcriptionState != .completed { return }
@@ -194,6 +208,7 @@ final class SegmentedAudioTranscriber {
     // MARK: - Segmented (>30 s)
 
     private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo, hadExistingTranscript: Bool) async {
+        guard let session = telemetrySession else { return }
         let noteID = note.id
         let batchFrames = Int64(Double(IncrementalTranscriptionTiming.defaultIntervalSeconds) * info.sampleRate)
         let resumed = progressStore.load(for: noteID)
@@ -281,6 +296,12 @@ final class SegmentedAudioTranscriber {
                 pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
             }
 
+            switch outcome {
+            case .transcribed, .noSpeech:
+                transcriptionService.recordProcessedAudio(
+                    start: Double(start) / info.sampleRate, end: Double(end) / info.sampleRate, session: session)
+            default: break
+            }
             start = end
             accumulatedText = joinTranscriptPieces(pieces)
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,

@@ -12,6 +12,35 @@ import Testing
 @testable import Voicely
 
 struct ModelPackagingAndTelemetryTests {
+    @Test @MainActor func telemetrySessionsIsolateNotesAndExcludeLiveIdle() {
+        let service = TranscriptionService()
+        var now = Date(timeIntervalSince1970: 100)
+        service.nowProvider = { now }
+        let liveNote = UUID(), savedNote = UUID()
+        let live = service.beginTelemetrySession(noteID: liveNote, activeWorkOnly: true)
+        let saved = service.beginTelemetrySession(noteID: savedNote)
+        service.resumeTelemetryWork(live)
+        now += 5
+        service.recordProcessedAudio(start: 0, end: 20, session: live)
+        service.pauseTelemetryWork(live)
+        now += 100
+        service.recordProcessedAudio(start: 0, end: 60, session: saved)
+        #expect(service.telemetryState.snapshot(for: liveNote)?.metrics.elapsedSeconds == 5)
+        #expect(service.telemetryState.snapshot(for: savedNote)?.metrics.elapsedSeconds == 105)
+        service.resumeTelemetryWork(live)
+        now += 5
+        service.recordProcessedAudio(start: 20, end: 40, session: live)
+        service.pauseTelemetryWork(live)
+        #expect(service.telemetryState.snapshot(for: liveNote)?.metrics.speedMultiplier == 4)
+        let next = service.beginTelemetrySession(noteID: savedNote)
+        service.endTelemetrySession(saved)
+        service.recordProcessedAudio(start: 0, end: 500, session: saved)
+        #expect(service.telemetryState.snapshot(for: savedNote)?.metrics.processedAudioSeconds == 0)
+        #expect(service.telemetryState.snapshot(for: savedNote)?.isActive == true)
+        service.endTelemetrySession(next)
+        service.endTelemetrySession(live)
+    }
+
     @MainActor
     @Test func telemetryUpdatesNotifyOnlyTelemetrySubscribers() {
         let service = TranscriptionService()
@@ -156,6 +185,27 @@ struct ModelPackagingAndTelemetryTests {
         #expect(note.averageTranscriptionSpeedLabel == "3.0× avg")
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
         #expect(note.transcriptionThermalStateLabel == "Fair")
+    }
+
+    @Test func telemetryMeasuresOnlyCompletedAudio() {
+        let metrics = TranscriptionTelemetryMetrics(
+            elapsedSeconds: 120, audioDurationSeconds: 3600, processedAudioSeconds: 480)
+        #expect(metrics.speedLabel == "4.0× realtime")
+        #expect(metrics.processedDurationLabel == "8:00")
+        #expect(metrics.elapsedDurationLabel == "2:00")
+        let preparing = TranscriptionTelemetryMetrics(
+            elapsedSeconds: 10, audioDurationSeconds: 3600, processedAudioSeconds: 0)
+        #expect(preparing.speedMultiplier == nil)
+    }
+
+    @Test func completedAudioRangesDoNotCountRetriesOrOverlapTwice() {
+        var coverage = TranscriptionAudioCoverage()
+        coverage.record(start: 60, end: 90)
+        coverage.record(start: 60, end: 90)
+        coverage.record(start: 80, end: 110)
+        coverage.record(start: 120, end: 125)
+        coverage.record(start: .nan, end: 140)
+        #expect(coverage.processedSeconds == 55)
     }
 
     @Test func telemetryFormatsRealtimeProcessingRatio() {

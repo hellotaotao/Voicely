@@ -423,6 +423,21 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: segmentURL)
     }
 
+    @Test @MainActor func finishedTelemetryDoesNotRestartDuringFinalFlush() async throws {
+        let url = try makeSilentCAF(seconds: 60)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let service = TranscriptionService()
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
+        coordinator.configureTelemetry(noteID: UUID())
+        coordinator.transcribeOverride = { _ in
+            Issue.record("Ended coordinator must not decode a new segment")
+            return "unexpected"
+        }
+        coordinator.finishTelemetry()
+        let text = await coordinator.stop(currentFrame: 60 * 16_000)
+        #expect(text.isEmpty)
+    }
+
     @Test @MainActor func stopAccumulatesTranscriptFromSegments() async throws {
         let pcmURL = try makeSilentCAF(seconds: 70)
         let service = TranscriptionService()

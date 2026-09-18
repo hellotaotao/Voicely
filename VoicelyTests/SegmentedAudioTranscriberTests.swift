@@ -16,6 +16,63 @@ actor ActiveProbe {
 
 @Suite(.serialized)
 struct SegmentedAudioTranscriberTests {
+    @Test @MainActor func telemetryIncludesPreparationAndRetriesButOnlyNewCompletedAudio() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = SegmentedAudioTestSupport.makeStore()
+        let note = VoiceNote(title: "Resumed", audioFilePath: "")
+        store.save(.init(lastFrame: 29 * 16_000, totalFrames: 70 * 16_000,
+                         accumulatedText: "earlier", failedRanges: [], updatedAt: Date()), for: note.id)
+        let service = TranscriptionService()
+        var now = Date(timeIntervalSince1970: 10_000)
+        service.nowProvider = { now }
+        let transcriber = SegmentedAudioTranscriber(transcriptionService: service, progressStore: store)
+        transcriber.nextCutFrame = { _, _, target in
+            now = now.addingTimeInterval(2)
+            return target
+        }
+        var calls = 0
+        transcriber.transcribeSegmentOutcome = { _ in
+            calls += 1
+            now = now.addingTimeInterval(5)
+            if calls == 1 {
+                #expect(service.transcriptionTelemetry.metrics.speedMultiplier == nil)
+                return .whisperError("retry")
+            }
+            if calls == 3 {
+                #expect(service.transcriptionTelemetry.metrics.processedAudioSeconds == 29)
+                #expect(service.transcriptionTelemetry.metrics.elapsedSeconds == 12)
+            }
+            return .transcribed(.init(text: "new", duration: 5, modelIdentifier: "m"))
+        }
+        await transcriber.transcribe(note: note, sourceURL: url)
+        let metrics = service.transcriptionTelemetry.metrics
+        #expect(calls == 3)
+        #expect(metrics.processedAudioSeconds == 41)
+        #expect(metrics.elapsedSeconds == 17)
+        #expect(metrics.speedMultiplier == 41.0 / 17.0)
+        #expect(!service.transcriptionTelemetry.isActive)
+    }
+
+    @Test @MainActor func failedSegmentsAreNotCountedAsProcessed() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let service = TranscriptionService()
+        let transcriber = SegmentedAudioTranscriber(
+            transcriptionService: service, progressStore: SegmentedAudioTestSupport.makeStore())
+        transcriber.nextCutFrame = { _, _, target in target }
+        var calls = 0
+        transcriber.transcribeSegmentOutcome = { _ in
+            calls += 1
+            return calls <= 3 ? .whisperError("failed") : .noSpeech
+        }
+        let note = VoiceNote(title: "Partial", audioFilePath: "")
+        await transcriber.transcribe(note: note, sourceURL: url)
+        #expect(service.transcriptionTelemetry.metrics.processedAudioSeconds == 11)
+        #expect(note.transcriptionOutcome == .failed)
+        #expect(note.transcriptionTelemetrySampleCount == 0)
+    }
+
     // MARK: Task 3 — short single pass
 
     @Test @MainActor func shortFileSinglePassWritesTextAndNoSidecar() async throws {

@@ -289,6 +289,142 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionState == .completed)
     }
 
+    @Test @MainActor func silentSinglePassCountsProcessedAudioAndPreparation() async {
+        var now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.nowProvider = { now }
+        service.audioDurationProvider = { _ in
+            now = now.addingTimeInterval(2)
+            return 20
+        }
+        service.transcribeImpl = { _, _ in
+            now = now.addingTimeInterval(3)
+            return .noSpeech
+        }
+        let note = VoiceNote(title: "Silence", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+        _ = await service.requestTranscription(for: note)
+        #expect(service.transcriptionTelemetry.metrics.processedAudioSeconds == 20)
+        #expect(service.transcriptionTelemetry.metrics.elapsedSeconds == 5)
+        #expect(service.transcriptionTelemetry.metrics.speedMultiplier == 4)
+        #expect(note.transcriptionOutcome == .noSpeech)
+    }
+
+    @Test @MainActor func liveTelemetryAccumulatesPreparationAndSilenceWithoutIdle() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 90)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var now = Date(timeIntervalSince1970: 100)
+        let service = makeService(deviceID: "phone", now: now)
+        service.nowProvider = { now }
+        let note = VoiceNote(title: "Live")
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
+        coordinator.configureTelemetry(noteID: note.id)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in
+            now += 2
+            return start + 29 * 16_000
+        }
+        coordinator.telemetryCallback = { note.replaceCumulativeTranscriptionTelemetry($0) }
+        service.transcribeImpl = { _, _ in now += 3; return .noSpeech }
+        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.processedAudioSeconds == 29)
+        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.elapsedSeconds == 5)
+        coordinator.pause()
+        now += 300
+        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.elapsedSeconds == 5)
+        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
+        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.processedAudioSeconds == 58)
+        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.elapsedSeconds == 10)
+        #expect(note.transcriptionTelemetrySampleCount == 1)
+        #expect(note.averageTranscriptionSpeedLabel == "5.8× avg")
+        coordinator.finishTelemetry()
+    }
+
+    @Test @MainActor func liveEngineWaitDoesNotChangeAnotherRunsTelemetryOrCountIdle() async {
+        var now = Date(timeIntervalSince1970: 100)
+        let service = makeService(deviceID: "phone", now: now)
+        service.nowProvider = { now }
+        let saved = service.beginTelemetrySession(noteID: UUID())
+        let live = service.beginTelemetrySession(noteID: UUID(), activeWorkOnly: true)
+        let gate = TranscriptionGate()
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            if calls == 1 { await gate.wait() }
+            now += 3
+            return .noSpeech
+        }
+        let first = Task { await service.transcribeAudioOutcome(filePath: "saved", telemetrySession: saved) }
+        await gate.waitUntilArmed()
+        service.resumeTelemetryWork(live)
+        now += 2
+        let second = Task { await service.transcribeAudioOutcome(filePath: "live", telemetrySession: live) }
+        while live.runningSince != nil { await Task.yield() }
+        now += 100
+        await gate.resume()
+        _ = await first.value
+        _ = await second.value
+        service.recordProcessedAudio(start: 0, end: 29, session: live)
+        service.pauseTelemetryWork(live)
+        #expect(service.telemetryState.snapshot(for: live.noteID!)?.metrics.elapsedSeconds == 5)
+        #expect(service.telemetryState.snapshot(for: saved.noteID!)?.metrics.processedAudioSeconds == 0)
+        service.endTelemetrySession(saved)
+        #expect(service.telemetryState.snapshot(for: live.noteID!)?.isActive == true)
+        service.endTelemetrySession(live)
+    }
+
+    @Test @MainActor func cancellingWaitingSavedNoteDoesNotCancelLiveDecodeOrNextRun() async {
+        let service = makeService(deviceID: "phone")
+        let note = VoiceNote(title: "Saved", audioFilePath: "saved.m4a")
+        service.beginExternalTranscription(noteID: note.id)
+        let saved = service.beginTelemetrySession(noteID: note.id)
+        let live = service.beginTelemetrySession(noteID: UUID(), activeWorkOnly: true)
+        let gate = TranscriptionGate()
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            if calls == 1 { await gate.wait() }
+            return .noSpeech
+        }
+        let first = Task { await service.transcribeAudioOutcome(filePath: "live", telemetrySession: live) }
+        await gate.waitUntilArmed()
+        service.cancelTranscription(for: note)
+        #expect(saved.isCancelled)
+        #expect(!live.isCancelled)
+        await gate.resume()
+        let result = await first.value
+        if case .noSpeech = result {} else { Issue.record("Live decode was cancelled by a different note") }
+        service.endTelemetrySession(saved)
+        service.endExternalTranscription(noteID: note.id)
+        let next = service.beginTelemetrySession(noteID: note.id)
+        let nextResult = await service.transcribeAudioOutcome(filePath: "next", telemetrySession: next)
+        if case .noSpeech = nextResult {} else { Issue.record("Previous cancellation leaked into the next run") }
+        service.endTelemetrySession(next)
+        service.endTelemetrySession(live)
+    }
+
+    @Test @MainActor func cancelledLiveChunkPreservesPreviouslyCompletedCoverage() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let service = makeService(deviceID: "phone")
+        let noteID = UUID()
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
+        coordinator.configureTelemetry(noteID: noteID)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            if calls == 2 { service.cancelTranscription() }
+            return .noSpeech
+        }
+        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
+        #expect(calls == 2)
+        #expect(service.telemetryState.snapshot(for: noteID)?.metrics.processedAudioSeconds == 29)
+        #expect(coordinator.requiresFullTranscription)
+        coordinator.finishTelemetry()
+    }
+
     @Test @MainActor func successfulTranscriptionPersistsTelemetrySummaryOnNote() async {
         var now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
@@ -965,7 +1101,7 @@ struct TranscriptionServiceTests {
         var decodes = 0
         service.audioDurationProvider = { _ in
             reads += 1
-            if reads == 2 { await gate.wait() }
+            if reads == 1 { await gate.wait() }
             return 12
         }
         service.transcribeImpl = { _, _ in decodes += 1; return "Unwanted decode" }

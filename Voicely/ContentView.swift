@@ -1675,6 +1675,14 @@ struct VoiceNoteDetailView: View {
                let preview = ProcessInfo.processInfo.environment["VOICELY_UI_TEST_TRANSCRIPT_PREVIEW"] {
                 transcriptionService.beginExternalTranscription(noteID: note.id)
                 transcriptionService.reportExternalPreview(preview, for: note.id)
+                transcriptionService.reportExternalProgress(0.6, for: note.id)
+                var sample = fallbackTelemetrySnapshot
+                sample.isActive = true
+                sample.metrics = TranscriptionTelemetryMetrics(
+                    elapsedSeconds: 45, audioDurationSeconds: 900, processedAudioSeconds: 540)
+                transcriptionService.telemetryState.update(sample, noteID: note.id)
+                // Another note's update must not replace this detail's telemetry.
+                transcriptionService.telemetryState.update(.inactive(modelName: "Unrelated model"), noteID: UUID())
             }
             #endif
         }
@@ -1773,9 +1781,6 @@ struct VoiceNoteDetailView: View {
                 )
                 if let computeLabel = note.transcriptionComputeBadgeLabel {
                     PillBadge(text: computeLabel, systemImage: "cpu", variant: .info)
-                }
-                if let timeRatioLabel = note.averageProcessingTimeRatioLabel {
-                    PillBadge(text: timeRatioLabel, systemImage: "timer", variant: .info)
                 }
                 if let speedLabel = note.averageTranscriptionSpeedLabel {
                     PillBadge(text: speedLabel, systemImage: "speedometer", variant: .info)
@@ -1937,6 +1942,7 @@ struct VoiceNoteDetailView: View {
                 VStack(alignment: .leading, spacing: shouldShowComputeTelemetry ? 12 : 0) {
                     if shouldShowComputeTelemetry {
                         TranscriptionTelemetryCard(
+                            noteID: note.id,
                             telemetryState: transcriptionService.telemetryState,
                             fallbackSnapshot: fallbackTelemetrySnapshot
                         )
@@ -2643,61 +2649,41 @@ struct ShareSheet: UIViewControllerRepresentable {
 }
 
 private struct TranscriptionTelemetryCard: View {
+    let noteID: UUID
     @ObservedObject var telemetryState: TranscriptionTelemetryState
     let fallbackSnapshot: TranscriptionTelemetrySnapshot
 
     var body: some View {
-        let snapshot = telemetryState.snapshot.isActive ? telemetryState.snapshot : fallbackSnapshot
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "cpu")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(VoicelyTheme.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(snapshot.computeRoute.summary)
-                        .font(.subheadline.weight(.semibold))
-                    Text(snapshot.computeRoute.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        let snapshot = telemetryState.snapshot(for: noteID) ?? fallbackSnapshot
+        return VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Average speed").font(.subheadline.weight(.medium))
+                    Spacer(minLength: 8)
+                    Text(snapshot.metrics.speedLabel).font(.subheadline.weight(.semibold))
                 }
-                Spacer(minLength: 8)
-                PillBadge(
-                    text: snapshot.isActive ? "Live" : "Selected",
-                    systemImage: snapshot.isActive ? "bolt.fill" : "checkmark.circle",
-                    variant: snapshot.isActive ? .accent : .neutral
-                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Average speed").font(.subheadline.weight(.medium))
+                    Text(snapshot.metrics.speedLabel).font(.subheadline.weight(.semibold))
+                }
             }
+            .monospacedDigit()
 
-            HStack(spacing: 8) {
-                telemetryMetric(
-                    title: "Model",
-                    value: snapshot.modelName,
-                    systemImage: "shippingbox"
-                )
-                telemetryMetric(
-                    title: "Time ratio",
-                    value: snapshot.metrics.processingTimeRatioLabel,
-                    systemImage: "gauge.medium"
-                )
-                telemetryMetric(
-                    title: "Speed",
-                    value: snapshot.metrics.speedLabel,
-                    systemImage: "speedometer"
-                )
-            }
+            Text("\(snapshot.metrics.processedDurationLabel) processed · \(snapshot.metrics.elapsedDurationLabel) elapsed")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
 
-            HStack(spacing: 6) {
-                Image(systemName: "thermometer.medium")
+            Text("\(snapshot.modelName) · Compute: \(snapshot.computeRoute.compactDescription)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if snapshot.isActive && (snapshot.thermalState == .serious || snapshot.thermalState == .critical) {
+                Label("Device is warm; transcription may slow down.", systemImage: "thermometer.high")
                     .font(.caption)
-                Text("Thermal \(snapshot.thermalStateLabel)")
-                    .font(.caption)
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text("Time ratio is processing time divided by audio duration.")
-                    .font(.caption)
-                    .lineLimit(2)
+                    .foregroundStyle(.secondary)
             }
-            .foregroundStyle(.secondary)
         }
         .padding(12)
         .background(
@@ -2712,30 +2698,6 @@ private struct TranscriptionTelemetryCard: View {
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.computeTelemetryCard)
     }
 
-    private func telemetryMetric(title: String, value: String, systemImage: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.caption2)
-                Text(title)
-                    .font(.caption2.weight(.medium))
-            }
-            .foregroundStyle(.secondary)
-
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(VoicelyTheme.surfaceRaised)
-        )
-    }
 
 }
 

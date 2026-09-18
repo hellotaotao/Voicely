@@ -69,11 +69,34 @@ final class IncrementalTranscriptionCoordinator {
     /// Overridable for testing. When non-nil, used instead of TranscriptionService.
     var transcribeOverride: (@Sendable (String) async -> String?)? = nil
 
+    var resolveVoiceActivityCut: (URL, AVAudioFramePosition, AVAudioFramePosition, Double) async -> AVAudioFramePosition = { url, start, end, seconds in
+        await Task.detached {
+            IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(fileURL: url, startFrame: start, targetFrame: end, targetSegmentSeconds: seconds)
+        }.value
+    }
+
     /// Closure that returns the current number of frames written to the recording file.
     var frameCountProvider: () -> AVAudioFramePosition = { 0 }
 
     /// Optional transcript relay after a segment appends to the accumulated transcript.
     var transcriptCallback: ((String) -> Void)? = nil
+    var telemetryCallback: ((TranscriptionTelemetrySnapshot) -> Void)?
+    private var telemetryFinished = false
+    private var telemetrySession: TranscriptionTelemetrySession?
+
+    func configureTelemetry(noteID: UUID) {
+        finishTelemetry()
+        telemetryFinished = false
+        telemetrySession = transcriptionService.beginTelemetrySession(noteID: noteID, activeWorkOnly: true)
+    }
+
+    func finishTelemetry() {
+        telemetryFinished = true
+        if let session = telemetrySession { transcriptionService.endTelemetrySession(session) }
+        telemetrySession = nil
+        telemetryCallback = nil
+    }
+
 
     // MARK: Private
 
@@ -135,6 +158,7 @@ final class IncrementalTranscriptionCoordinator {
             waitForCompletion: true,
             useVoiceActivityCut: false
         )
+        finishTelemetry()
         return accumulatedTranscript
     }
 
@@ -193,7 +217,7 @@ final class IncrementalTranscriptionCoordinator {
             frameEnd: upToFrame,
             useVoiceActivityCut: useVoiceActivityCut
         )
-        while let request = nextRequest {
+        while let request = nextRequest, !telemetryFinished {
             pendingSegmentRequest = nil
             if request.frameEnd > lastSegmentEndFrame + requiredMinimumSegmentFrames(useVoiceActivityCut: request.useVoiceActivityCut) {
                 await transcribeCurrentSegment(
@@ -212,6 +236,18 @@ final class IncrementalTranscriptionCoordinator {
         upToFrame requestedEndFrame: AVAudioFramePosition,
         useVoiceActivityCut: Bool
     ) async {
+        guard !telemetryFinished else { return }
+        if telemetrySession == nil {
+            telemetrySession = transcriptionService.beginTelemetrySession(activeWorkOnly: true)
+        }
+        guard let session = telemetrySession else { return }
+        transcriptionService.resumeTelemetryWork(session)
+        defer {
+            transcriptionService.pauseTelemetryWork(session)
+            if transcriptionService.isTelemetrySessionCurrent(session), let noteID = session.noteID, let snapshot = transcriptionService.telemetryState.snapshot(for: noteID) {
+                telemetryCallback?(snapshot)
+            }
+        }
         segmentIndex += 1
         let index = segmentIndex
         let startFrame = lastSegmentEndFrame
@@ -247,19 +283,26 @@ final class IncrementalTranscriptionCoordinator {
         // neural VAD gate before invoking Whisper, so checking twice would
         // just double the inference cost per segment.
         let textResult: String?
+        var processed = false
         if let override = transcribeOverride {
             textResult = await override(segmentURL.path)
+            processed = textResult != nil
             if textResult == nil { requiresFullTranscription = true }
         } else {
-            switch await transcriptionService.transcribeAudioOutcome(filePath: segmentURL.path) {
-            case .transcribed(let result): textResult = result.text
-            case .noSpeech: textResult = nil
+            switch await transcriptionService.transcribeAudioOutcome(filePath: segmentURL.path, telemetrySession: session) {
+            case .transcribed(let result): textResult = result.text; processed = true
+            case .noSpeech: textResult = nil; processed = true
             case .modelUnavailable, .audioUnavailable, .whisperError, .cancelled:
                 requiresFullTranscription = true
                 textResult = nil
             }
         }
 
+        if processed && !Task.isCancelled {
+            transcriptionService.recordProcessedAudio(
+                start: Double(startFrame) / recordingSampleRate,
+                end: Double(endFrame) / recordingSampleRate, session: session)
+        }
         if let text = Self.sanitizedSegmentText(textResult) {
             if accumulatedTranscript.isEmpty {
                 accumulatedTranscript = text
@@ -281,14 +324,7 @@ final class IncrementalTranscriptionCoordinator {
         }
 
         let targetIntervalSeconds = self.targetIntervalSeconds
-        let cutFrame = await Task.detached {
-            Self.voiceActivityAwareCutFrame(
-                fileURL: fileURL,
-                startFrame: startFrame,
-                targetFrame: requestedEndFrame,
-                targetSegmentSeconds: Double(targetIntervalSeconds)
-            )
-        }.value
+        let cutFrame = await resolveVoiceActivityCut(fileURL, startFrame, requestedEndFrame, Double(targetIntervalSeconds))
 
         guard cutFrame > startFrame + minimumCutFrames else {
             return nil

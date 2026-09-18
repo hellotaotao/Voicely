@@ -245,6 +245,13 @@ extension VoiceNote {
         pendingTranscription = false
     }
 
+    /// Live snapshots describe the entire run, not independent samples to average.
+    func replaceCumulativeTranscriptionTelemetry(_ snapshot: TranscriptionTelemetrySnapshot) {
+        guard snapshot.metrics.speedMultiplier != nil else { return }
+        clearTranscriptionTelemetrySummary()
+        recordTranscriptionTelemetry(snapshot)
+    }
+
     func recordTranscriptionTelemetry(_ snapshot: TranscriptionTelemetrySnapshot) {
         guard let processingTimeRatioPercent = snapshot.metrics.processingTimeRatioPercent,
               let speedMultiplier = snapshot.metrics.speedMultiplier else {

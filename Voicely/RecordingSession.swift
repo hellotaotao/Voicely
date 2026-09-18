@@ -209,6 +209,10 @@ final class RecordingSession: ObservableObject {
         RecordingLiveActivityController.shared.start(recordingID: note.id, title: note.title)
 
         let coord = coordinatorFactory(pcmURL)
+        coord.configureTelemetry(noteID: note.id)
+        coord.telemetryCallback = { [weak note] snapshot in
+            note?.replaceCumulativeTranscriptionTelemetry(snapshot)
+        }
         coord.frameCountProvider = { [weak audioService] in
             audioService?.currentFramePosition ?? 0
         }
@@ -221,7 +225,6 @@ final class RecordingSession: ObservableObject {
             note.transcriptionModelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
                 ?? self.transcriptionService.modelManager?.selectedModel
             note.transcriptionLastErrorMessage = nil
-            note.recordTranscriptionTelemetry(self.transcriptionService.transcriptionTelemetry)
         }
         coordinator = coord
         registerLiveActivityControls()
@@ -289,6 +292,7 @@ final class RecordingSession: ObservableObject {
         guard let filePath = stopResult.filePath else {
             backgroundTask.end()
             capturedCoordinator?.pause()
+            capturedCoordinator?.finishTelemetry()
             capturedCoordinator?.transcriptCallback = nil
             if let recordingNote {
                 recordingNote.completeTranscription()
@@ -354,7 +358,6 @@ final class RecordingSession: ObservableObject {
                 note.transcription = trimmedTranscript
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
-                note.recordTranscriptionTelemetry(transcriptionService.transcriptionTelemetry)
                 note.completeTranscription()
                 note.clearTransientTranscriptionFlags()
                 return

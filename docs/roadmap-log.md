@@ -217,3 +217,11 @@ static func isEnglishOnly(_ model: String) -> Bool {
 - generic iOS 真机目标 Release 编译通过（`BGContinuedProcessingTask` 分支只在真机目标编译）。
 - 真录音回放（09-17 会议，303 秒，Mac + `openai_whisper-small`）：三种情形（正常 / 注入 3 段实时失败 / 实时全部失败）均未触发整篇重转，行数一致；措辞差异来自 Whisper 温度回退采样（正常那份里还有 "Thank you for watching. Please subscribe" 幻觉）。有失败原因记录的 9 次运行中 4 次出现 `repetitive output`，都在结尾道别段 4:38–5:04，重试后要么补上、要么标成缺口。单次回放 24–52 秒。
 - 未做：真机锁屏录音、`BGContinuedProcessingTask` 是否真的被系统批准、手机上 large-v3-turbo 的表现。
+
+## 0.23.10 (2) 音频会话移出主线程（2026-09-19）
+
+- 起因：真机调试时 Xcode 线程性能检查报 `AudioRecordingService.swift:523` 的 `setActive(true)` 有卡死风险；另有编译警告 `AVAudioPlayerDelegate` 上的 `@preconcurrency` 无效（新 SDK 已把该协议标为 `NS_SWIFT_UI_ACTOR`）。
+- 建议的异步 `activate(options:completionHandler:)` 在 iOS 上要 27.0，工程最低 17.6，所以改为 `AudioSessionActivation`：一个串行队列执行所有 `setCategory`/`setActive`，激活用 `perform` 等待，停用用 `enqueue` 不等待；同一队列保证停用不会晚于后来的激活执行。
+- `AudioRecordingService.startRecording()` 改为 `async`；预热用令牌防止被开始录音取代后再改状态。`AudioPlayerService.play()` 用请求令牌，激活期间暂停/停止/换选择则不再开始播放。
+- 恢复录音在引擎被打断后的重新激活仍是同步（锁屏控件需要立即得到结果，且只在前台可用）。
+- 验证：Mac Catalyst 单元测试 268 通过（新增 `AudioSessionActivationTests`：队列不在主线程、先停用后激活的顺序、错误回传）；iPhone 17 模拟器单元 268 + UI 22 通过。

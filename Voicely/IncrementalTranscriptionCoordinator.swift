@@ -94,13 +94,15 @@ final class IncrementalTranscriptionCoordinator {
     static let finalRetryAttempts = 2
 
     /// Audio still to transcribe if the recording stops at `frame`: the part live
-    /// transcription has not reached plus slices that failed live.
+    /// transcription has not reached, the slice being transcribed, and slices
+    /// that failed live.
     func remainingAudioSeconds(upTo frame: AVAudioFramePosition) -> Double {
         let failedFrames = slices.reduce(AVAudioFramePosition(0)) { total, slice in
             slice.failure == nil ? total : total + (slice.endFrame - slice.startFrame)
         }
+        let inFlightFrames = inFlightSlice.map { $0.end - $0.start } ?? 0
         let unreachedFrames = max(0, frame - lastSegmentEndFrame)
-        return Double(unreachedFrames + failedFrames) / recordingSampleRate
+        return Double(unreachedFrames + inFlightFrames + failedFrames) / recordingSampleRate
     }
 
     /// Overridable for testing. When non-nil, used instead of TranscriptionService.
@@ -198,6 +200,9 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     private var slices: [LiveSlice] = []
+    /// The live slice being transcribed right now. `lastSegmentEndFrame` already
+    /// covers it, but it joins `slices` only once transcription returns.
+    private var inFlightSlice: (start: AVAudioFramePosition, end: AVAudioFramePosition)?
     private var finalFrame: AVAudioFramePosition?
 
     private var targetIntervalFrames: AVAudioFramePosition {
@@ -332,7 +337,9 @@ final class IncrementalTranscriptionCoordinator {
             }
 
             lastSegmentEndFrame = endFrame
+            inFlightSlice = (startFrame, endFrame)
             let result = await transcribeSlice(from: startFrame, to: endFrame, session: session)
+            inFlightSlice = nil
             slices.append(LiveSlice(startFrame: startFrame, endFrame: endFrame, result: result))
             if case .text = result {
                 transcriptCallback?(accumulatedTranscript)

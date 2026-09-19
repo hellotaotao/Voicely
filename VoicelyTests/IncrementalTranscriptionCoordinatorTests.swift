@@ -578,6 +578,26 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(await script.calls == 4)
     }
 
+    @Test @MainActor func remainingAudioIncludesTheSliceStillBeingTranscribed() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 40)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        let harness = SegmentTranscriptionHarness()
+        coordinator.transcribeOverride = { @Sendable path in await harness.transcribe(path) }
+
+        let live = Task { @MainActor in await coordinator.transcribeSegment(upToFrame: 30 * 16_000) }
+        await harness.waitForCallCount(1)
+
+        // The 29 s slice is still in flight when recording stops at 31 s.
+        #expect(coordinator.remainingAudioSeconds(upTo: 31 * 16_000) == 31)
+
+        await harness.resumeFirstCall()
+        await live.value
+        #expect(coordinator.remainingAudioSeconds(upTo: 31 * 16_000) == 2)
+    }
+
     @Test @MainActor func sliceThatKeepsFailingIsMarkedInPlaceInsteadOfWholeFileRecovery() async throws {
         let pcmURL = try makeSilentCAF(seconds: 40)
         defer { try? FileManager.default.removeItem(at: pcmURL) }

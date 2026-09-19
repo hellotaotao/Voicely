@@ -327,6 +327,43 @@ struct RecordingSessionTests {
         #expect(driver.handle.completions == [false])
     }
 
+    @Test func stoppingWhileASliceIsInFlightRequestsContinuedProcessing() async throws {
+        let driver = FakeContinuedProcessingDriver()
+        let (session, audio, collector) = makeSession()
+        session.continuedProcessingDriver = driver
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 31)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        audio.currentPCMFileURL = pcmURL
+        let harness = IncrementalTranscriptionCoordinatorTests.SegmentTranscriptionHarness()
+        var coordinator: IncrementalTranscriptionCoordinator?
+        session.coordinatorFactory = { url in
+            let created = IncrementalTranscriptionCoordinator(
+                transcriptionService: TranscriptionService(), recordingFileURL: url)
+            created.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+            created.transcribeOverride = { @Sendable path in await harness.transcribe(path) }
+            coordinator = created
+            return created
+        }
+        session.startRecording()
+        try await waitUntil { session.currentRecordingNote != nil }
+        let note = try #require(collector.notes.first)
+        let liveCoordinator = try #require(coordinator)
+        liveCoordinator.pause()
+        let live = Task { @MainActor in await liveCoordinator.transcribeSegment(upToFrame: 30 * 16_000) }
+        await harness.waitForCallCount(1)
+
+        // Only 2 s were never reached, but the 29 s slice in flight still has to finish.
+        audio.recordingDuration = 31
+        audio.currentFramePosition = 31 * 16_000
+        session.stopRecording()
+        #expect(driver.submissions.count == 1)
+
+        await harness.resumeFirstCall()
+        await live.value
+        try await waitUntil { !session.isRecording(note) }
+        #expect(note.transcription == "segment 1\nsegment 2")
+    }
+
     @Test func shortFinalizationDoesNotRequestContinuedProcessing() async throws {
         let driver = FakeContinuedProcessingDriver()
         let script = IncrementalTranscriptionCoordinatorTests.ScriptedSliceResults(["short tail"])

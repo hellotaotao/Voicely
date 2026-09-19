@@ -127,9 +127,10 @@ Live Activity / Dynamic Island 录音状态、Start Voicely Recording 快捷指�
 - 频谱（WhisperKit 默认 CPU+GPU）和 Silero VAD 不再用 GPU——iOS 后台不允许 GPU。
 - 收尾剩余音频 ≥ 20 秒时申请 iOS 26 `BGContinuedProcessingTask`（系统进度条，锁屏后继续跑）；拿不到就退回原来约 30 秒的 `beginBackgroundTask`。
 - 0.23.10 (2) 另含：音频会话的激活/停用从主线程移到一个串行队列（Xcode 报 `AVAudioSession Hang Risk`；异步激活 API 要 iOS 27，最低支持 17.6 用不了），录音预热、开始录音、播放都在队列上等待激活，停止和暂停时的停用排队执行；恢复录音那条少见路径仍同步。删除 `AVAudioPlayerDelegate` 上多余的 `@preconcurrency`。
+- 0.23.10 (3) 另含：停止时的剩余量把正在转录、尚未完成的分片算进去（原来漏算，实时转录跟得上时几乎总是低于 20 秒门槛，不会申请后台继续处理）。门槛和转录/重试/取消逻辑不变。
 
 真机验收（Mac/模拟器测不了锁屏）：
-1. 锁屏录 5 分钟以上的会议，解锁、停止、立刻再锁屏：锁屏上应出现 "Finishing transcription" 进度，回来时稿子完整、没有整篇重转。
+1. 锁屏录 5 分钟以上的会议，解锁、停止、立刻再锁屏：回来时稿子完整、没有整篇重转。锁屏上**不一定**出现 "Finishing transcription" 进度——只有停止时剩余音频（没转到的 + 正在转的 + 实时失败待重试的）≥ 20 秒、且系统接受申请时才会出现；否则靠 iOS 给的有限后台时间（通常约 30 秒，不保证）。
 2. 停止后详情页显示 "Finalizing transcription…" 而不是 "Recording"。
 3. 若出现 `[… transcription unavailable]` 标记，记下是哪段、什么内容。
 
@@ -200,7 +201,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 ## 六、基线与备份（历史参考）
 
 - 开发分支 `dev`，起点 `6f3681baa2658b1bc774677e421546dee2f10c63`，采用归档后整理的版本配置提交 `6f3681b`。
-- 版本源：`Config/Version.xcconfig`（当前 `0.23.10 (2)`）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
+- 版本源：`Config/Version.xcconfig`（当前 `0.23.10 (3)`）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
 - `old-dev` 保持在 `dea04f11eacb23e1a6a65e9a90f53ceba1a0afa8`，未重置。旧 dev 的未提交修复保存为 stash，由 `backup/pre-r0-20260907` tag 固定引用；本地备份目录 `build/backups/pre-r0-20260907/`（含 `working-tree.tar.gz`、`manifest.json`、`changes.patch`、`history.bundle`，均已校验）。
 
 恢复旧开发状态（工作区干净时）：

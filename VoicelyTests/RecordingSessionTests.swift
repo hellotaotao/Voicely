@@ -63,7 +63,7 @@ struct RecordingSessionTests {
         private(set) var startCount = 0
         private(set) var stopCount = 0
 
-        func startRecording() -> String? {
+        func startRecording() async -> String? {
             startCount += 1
             isRecording = true
             isPaused = false

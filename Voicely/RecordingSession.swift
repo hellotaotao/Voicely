@@ -121,7 +121,7 @@ protocol RecordingAudioControlling: AnyObject {
     var currentPCMFileURL: URL? { get }
     var currentFramePosition: AVAudioFramePosition { get }
 
-    func startRecording() -> String?
+    func startRecording() async -> String?
     func stopRecording() -> RecordingStopResult
     func pauseRecording()
     @discardableResult func resumeRecording() -> Bool
@@ -243,7 +243,7 @@ final class RecordingSession: ObservableObject {
             await Task.yield()
             try? await Task.sleep(nanoseconds: 30_000_000)
             guard isStartingRecording else { return }
-            beginRecordingAfterFeedback()
+            await beginRecordingAfterFeedback()
         }
     }
 
@@ -259,7 +259,7 @@ final class RecordingSession: ObservableObject {
         startRecording()
     }
 
-    private func beginRecordingAfterFeedback() {
+    private func beginRecordingAfterFeedback() async {
         var didStart = false
         defer {
             if !didStart {
@@ -268,7 +268,7 @@ final class RecordingSession: ObservableObject {
             }
         }
 
-        guard let filePath = audioService.startRecording() else { return }
+        guard let filePath = await audioService.startRecording() else { return }
         guard let pcmURL = audioService.currentPCMFileURL else {
             _ = audioService.stopRecording()
             return

@@ -292,6 +292,9 @@ class AudioPlayerService: NSObject, ObservableObject {
     }
     private var preloadTask: Task<Void, Never>?
     private var prepareTask: Task<Void, Never>?
+    /// The latest play request on a prepared player; pause and stop clear it so a
+    /// play that is still waiting for the audio session does not start afterwards.
+    private var pendingPlayRequest: UUID?
     private var waveformTask: Task<Void, Never>?
     private var pendingSeekState = PendingSeekState()
     private static var waveformCache: [String: [Double]] = [:]
@@ -308,7 +311,6 @@ class AudioPlayerService: NSObject, ObservableObject {
         }
     }
     #if !os(macOS) || targetEnvironment(macCatalyst)
-    private let audioSession = AVAudioSession.sharedInstance()
     private var isAudioSessionActive = false
     #endif
     
@@ -316,7 +318,7 @@ class AudioPlayerService: NSObject, ObservableObject {
         super.init()
     }
     
-    private func activateAudioSessionIfNeeded() -> Bool {
+    private func activateAudioSessionIfNeeded() async -> Bool {
         #if os(macOS) && !targetEnvironment(macCatalyst)
         return true
         #else
@@ -324,15 +326,14 @@ class AudioPlayerService: NSObject, ObservableObject {
             return true
         }
 
-        debugLog("🔍 [DEBUG] AudioPlayerService: Setting up audio session for playback...")
+        debugLog("🔍 [DEBUG] AudioPlayerService: Activating audio session for playback...")
         do {
-            debugLog("🔍 [DEBUG] Setting category to .playback, mode: .default")
-            try audioSession.setCategory(.playback, mode: .default)
-            debugLog("🔍 [DEBUG] Activating audio session...")
-            try audioSession.setActive(true)
+            try await AudioSessionActivation.perform { session in
+                try session.setCategory(.playback, mode: .default)
+                try session.setActive(true)
+            }
             isAudioSessionActive = true
             debugLog("✅ [DEBUG] Audio playback session activated successfully")
-            debugLog("🔍 [DEBUG] Audio session category: \(audioSession.category)")
             return true
         } catch {
             debugLog("❌ [DEBUG] Failed to setup audio session: \(error)")
@@ -348,12 +349,8 @@ class AudioPlayerService: NSObject, ObservableObject {
             return
         }
 
-        do {
-            try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-            isAudioSessionActive = false
-        } catch {
-            debugLog("❌ [DEBUG] Failed to deactivate audio session: \(error)")
-        }
+        isAudioSessionActive = false
+        AudioSessionActivation.enqueue { try $0.setActive(false, options: .notifyOthersOnDeactivation) }
         #endif
     }
     
@@ -400,18 +397,26 @@ class AudioPlayerService: NSObject, ObservableObject {
 
     func play() {
         if let player = audioPlayer {
-            if !player.isPlaying {
-                guard activateAudioSessionIfNeeded() else {
-                    playbackStatusMessage = "Couldn't start audio playback."
+            guard !player.isPlaying else { return }
+            let request = UUID()
+            pendingPlayRequest = request
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let activated = await self.activateAudioSessionIfNeeded()
+                // Pause, stop or another selection while the session was activating wins.
+                guard self.pendingPlayRequest == request, self.audioPlayer === player, !player.isPlaying else { return }
+                self.pendingPlayRequest = nil
+                guard activated else {
+                    self.playbackStatusMessage = "Couldn't start audio playback."
                     return
                 }
 
                 if player.play() {
-                    isPlaying = true
-                    startTimer()
+                    self.isPlaying = true
+                    self.startTimer()
                 } else {
-                    playbackStatusMessage = "Couldn't start audio playback."
-                    deactivateAudioSessionIfNeeded()
+                    self.playbackStatusMessage = "Couldn't start audio playback."
+                    self.deactivateAudioSessionIfNeeded()
                 }
             }
             return
@@ -427,6 +432,7 @@ class AudioPlayerService: NSObject, ObservableObject {
     }
     
     func pause() {
+        pendingPlayRequest = nil
         audioPlayer?.pause()
         isPlaying = false
         stopTimer()
@@ -491,6 +497,7 @@ class AudioPlayerService: NSObject, ObservableObject {
     }
     
     func stop() {
+        pendingPlayRequest = nil
         audioPlayer?.stop()
         isPlaying = false
         currentTime = 0
@@ -508,7 +515,7 @@ class AudioPlayerService: NSObject, ObservableObject {
     }
 }
 
-extension AudioPlayerService: @preconcurrency AVAudioPlayerDelegate {
+extension AudioPlayerService: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         isPlaying = false
         currentTime = 0
@@ -598,10 +605,11 @@ private extension AudioPlayerService {
         }
 
         guard !Task.isCancelled, pendingFilePath == filePath else { return }
-        guard activateAudioSessionIfNeeded() else {
+        guard await activateAudioSessionIfNeeded() else {
             playbackStatusMessage = "Couldn't start audio playback."
             return
         }
+        guard !Task.isCancelled, pendingFilePath == filePath else { return }
 
         do {
             debugLog("🔍 [DEBUG] Creating AVAudioPlayer...")
@@ -679,6 +687,7 @@ private extension AudioPlayerService {
 
     @MainActor
     func discardLoadedPlayer() {
+        pendingPlayRequest = nil
         audioPlayer?.stop()
         audioPlayer = nil
         isPlaying = false

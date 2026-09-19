@@ -157,6 +157,9 @@ class AudioRecordingService: ObservableObject {
     private var recordingTimer: Timer?
     private var pendingM4AURL: URL?
     private var prewarmTask: Task<Void, Never>?
+    /// Identifies the current prewarm, which can still be finishing session work
+    /// after `startRecording` has taken over.
+    private var prewarmToken: UUID?
     private var isRecordingSessionPrewarmed = false
 
     #if !os(macOS) || targetEnvironment(macCatalyst)
@@ -273,6 +276,8 @@ class AudioRecordingService: ObservableObject {
 
         isPreparingRecordingSession = true
         prewarmTask?.cancel()
+        let token = UUID()
+        prewarmToken = token
         prewarmTask = Task { @MainActor [weak self] in
             await Task.yield()
             try? await Task.sleep(nanoseconds: 150_000_000)
@@ -281,16 +286,23 @@ class AudioRecordingService: ObservableObject {
             }
 
             defer {
-                self.isPreparingRecordingSession = false
-                self.prewarmTask = nil
+                if self.prewarmToken == token {
+                    self.isPreparingRecordingSession = false
+                    self.prewarmTask = nil
+                    self.prewarmToken = nil
+                }
             }
 
             do {
-                try self.prepareRecordingSessionForCapture()
-                self.warmInputRoute()
+                try await AudioSessionActivation.perform { session in
+                    try Self.configureForCapture(session)
+                    Self.warmInputRoute()
+                }
+                guard !Task.isCancelled, self.prewarmToken == token else { return }
                 self.isRecordingSessionPrewarmed = true
                 debugLog("✅ [AudioRecordingService] Recording session prewarmed")
             } catch {
+                guard self.prewarmToken == token else { return }
                 self.isRecordingSessionPrewarmed = false
                 debugLog("⚠️ [AudioRecordingService] Recording session prewarm failed: \(error)")
             }
@@ -300,7 +312,7 @@ class AudioRecordingService: ObservableObject {
     // MARK: Start Recording
 
     /// Starts recording. Returns the M4A filename (last path component) for cross-device compat.
-    func startRecording() -> String? {
+    func startRecording() async -> String? {
         guard hasPermission else {
             checkPermission()
             return nil
@@ -308,15 +320,17 @@ class AudioRecordingService: ObservableObject {
 
         prewarmTask?.cancel()
         prewarmTask = nil
+        prewarmToken = nil
         isPreparingRecordingSession = false
 
         do {
-            try prepareRecordingSessionForCapture()
+            try await AudioSessionActivation.perform { try Self.configureForCapture($0) }
             isRecordingSessionPrewarmed = false
         } catch {
             debugLog("❌ [AudioRecordingService] Audio session setup failed: \(error)")
             return nil
         }
+        guard !isRecording else { return nil }
 
         let m4aURL = CloudStorageManager.shared.generateAudioFilename()
         let pcmURL = Self.makePCMTemporaryURL()
@@ -438,9 +452,9 @@ class AudioRecordingService: ObservableObject {
         let duration = recordingDuration
 
         #if !os(macOS) && !targetEnvironment(macCatalyst)
-        try? audioSession.setActive(false)
+        AudioSessionActivation.enqueue { try $0.setActive(false) }
         #elseif targetEnvironment(macCatalyst)
-        try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        AudioSessionActivation.enqueue { try $0.setActive(false, options: .notifyOthersOnDeactivation) }
         #endif
         isRecordingSessionPrewarmed = false
 
@@ -483,9 +497,10 @@ class AudioRecordingService: ObservableObject {
         guard isRecording, isPaused, let eng = engine else { return false }
         if !eng.isRunning {
             // Engine actually stopped (e.g. after an interruption) — needs a
-            // real IO restart, which only works in the foreground.
+            // real IO restart, which only works in the foreground. This rare path
+            // stays synchronous because lock-screen controls need an immediate answer.
             do {
-                try prepareRecordingSessionForCapture()
+                try Self.configureForCapture(audioSession)
                 try eng.start()
             } catch {
                 debugLog("❌ [AudioRecordingService] Resume failed: \(error)")
@@ -517,18 +532,18 @@ class AudioRecordingService: ObservableObject {
 
     // MARK: Private helpers
 
-    private func prepareRecordingSessionForCapture() throws {
+    private nonisolated static func configureForCapture(_ session: AVAudioSession) throws {
         #if !os(macOS) && !targetEnvironment(macCatalyst)
-        try audioSession.setCategory(.record, mode: .default)
-        try audioSession.setActive(true)
+        try session.setCategory(.record, mode: .default)
+        try session.setActive(true)
         #elseif targetEnvironment(macCatalyst)
-        try audioSession.setCategory(.playAndRecord, mode: .default,
-                                     options: [.defaultToSpeaker, .allowBluetoothHFP])
-        try audioSession.setActive(true)
+        try session.setCategory(.playAndRecord, mode: .default,
+                                options: [.defaultToSpeaker, .allowBluetoothHFP])
+        try session.setActive(true)
         #endif
     }
 
-    private func warmInputRoute() {
+    private nonisolated static func warmInputRoute() {
         let warmupEngine = AVAudioEngine()
         _ = warmupEngine.inputNode.outputFormat(forBus: 0)
         warmupEngine.prepare()

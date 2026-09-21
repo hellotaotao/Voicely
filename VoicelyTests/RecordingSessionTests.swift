@@ -233,7 +233,7 @@ struct RecordingSessionTests {
         #expect(note.transcription == "first slice\n\(gap)")
         #expect(note.transcriptionState == .completed)
         #expect(note.transcriptionOutcome == .failed)
-        #expect(note.transcriptionLastErrorMessage == "1 segment(s) failed after retry")
+        #expect(note.transcriptionLastErrorMessage == "1 segment(s) failed after retry: unknown error ×1")
         #expect(!note.pendingTranscription)
         #expect(!note.isTranscribing)
     }

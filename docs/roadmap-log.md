@@ -257,3 +257,33 @@ xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,id=91A95B97-1254
 xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' -archivePath '/Users/tao/Library/Developer/Xcode/Archives/2026-09-20/Voicely 0.23.10 (4).xcarchive' archive
 codesign --verify --deep --strict --verbose=2 '/Users/tao/Library/Developer/Xcode/Archives/2026-09-20/Voicely 0.23.10 (4).xcarchive/Products/Applications/Voicely.app'
 ```
+
+## 0.23.11 (1) prompt 回声与收尾修复（2026-09-21）
+
+用户 0.23.10 (3) TestFlight 真机报告：长录音实时转录正常，停止后 "Finalizing" 迟迟不完成，锁屏后系统弹 "Finalization failed"；重转录报 63 分钟 22 段、40 多分钟 9 段 `failed after retry`。用户确认自定义 prompt 非空，并同意幻觉与 prompt 相关，但明确**不接受清空 prompt 作为解决方案**。
+
+定位（读代码 + git history，未做真机复现）：
+
+- "Finalizing" 状态、收尾重试、continued-processing task、"N segment(s) failed after retry" 的实时版本，全部由 0.23.10 `b8c8e91` 引入；0.23.9 及更早的 `stop()` 只刷尾巴，所以从未出现这个状态。分段失败本身不是它造成的——重转录路径的同名信息可追到 6 月 `54463ee`。
+- 回退 `b8c8e91` 会回到"一段失败就整篇重来"，对 63 分钟录音严格更差，已排除。
+- 失败分片的可疑来源是自定义 prompt 被 prefill 进每个 ~29 秒分片：安静分片上 Whisper 吐回 prompt 并复读，压缩比 > 8.0 判 `repetitive output`。11%–17% 的稳定比例支持这个解释，但**未经真机日志实锤**——Release 构建的 `debugLog` 是 `#if DEBUG`，且分段路径当时只保留失败计数、丢掉 diagnostic。
+
+改动：
+
+- `transcribeWithWhisper`：prompt 的失败模式下沉到解码器。首遍判定为 prompt 回声（归一化后抠掉 prompt 剩 ≤2 字符）或复读时，去掉 `promptTokens` 再解一遍；第二遍可用即采用，仍复读才 `repetitive output`，两遍都无可懂内容则 `noSpeech`。
+- `IncrementalTranscriptionCoordinator.finalRetryAttempts` 2 → 1。
+- `SegmentFailureRange` 增加可选 `reason`（旧 sidecar 仍可解码）；`SegmentedAudioTranscriber.failureSummary(for:)` 按原因分组计数，实时路径和重转录路径共用。
+- `RecordingSession.recoverInterruptedFinalizations(in:)`，在 `setupServices` 调用：清理被杀在收尾中途、`isTranscribing` 残留为 true 的 note，保留已有文字并标记收尾被中断。
+
+一处**没有**改：重转录部分失败时保留旧稿、把新结果存成 retained attempt。最初误判为"丢弃一小时好文字"并改掉，三个既有测试（`reTranscribePartialSuccessKeepsCompleteOriginal` 等）挡住了——新文字其实存进了 retained attempts 并在详情页可见。已回退该改动，并补一条测试固定这个行为。
+
+验证：新增 4 个测试文件共 16 项（prompt 回声分类、失败原因汇总、旧 sidecar 兼容、收尾中断回收、重转录保留旧稿）。Mac Catalyst 297 tests / 37 suites 通过；iPhone 17 / iOS 26.2 模拟器 297 tests / 37 suites 通过（首两次失败是模拟器问题：`test runner hung before establishing connection`、诊断收集 600 秒超时、`immediateStopIsIgnoredOnFreshRecording` 在 1.0 秒防误停窗口上的负载相关 flake；`simctl shutdown all` 后重跑 24.6 秒全绿）。iOS Simulator 与 Mac Catalyst Debug 构建均成功。
+
+未做：未 commit、未 archive、未上传 TestFlight。prompt 回声那条路径需要真实模型才能端到端验证，当前只有分类函数的单元测试。
+
+验证命令：
+
+```sh
+xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -only-testing:VoicelyTests test
+xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,id=91A95B97-1254-429D-ADE2-D3375DDDD228' -parallel-testing-enabled NO -only-testing:VoicelyTests test
+```

@@ -1293,7 +1293,7 @@ private extension TranscriptionService {
             updateProgressOnMain(0.06)
             updateProgressOnMain(0.1)
 
-            var decodeOptions = DecodingOptions(
+            let baseDecodeOptions = DecodingOptions(
                 task: .transcribe,
                 language: languageCode,
                 temperature: 0.0,
@@ -1312,48 +1312,87 @@ private extension TranscriptionService {
                 chunkingStrategy: ChunkingStrategy.none
             )
 
+            let promptTokens: [Int]?
             if !customPrompt.isEmpty, let tokenizer = whisperKit.tokenizer {
                 let promptText = " " + customPrompt.trimmingCharacters(in: .whitespaces)
-                decodeOptions.promptTokens = tokenizer.encode(text: promptText)
+                promptTokens = tokenizer.encode(text: promptText)
                 print("Using custom prompt: \(customPrompt)")
+            } else {
+                promptTokens = nil
             }
 
             // Whisper invokes this once per decoded token; only hop to the
             // main actor when the fraction moved enough to be visible.
             let lastReportedFraction = OSAllocatedUnfairLock<Float>(initialState: 0)
-            let transcriptionResults = try await whisperKit.transcribe(
-                audioPath: audioPath,
-                decodeOptions: decodeOptions
-            ) { [weak self] _ in
-                guard let self else { return nil }
-                if self.cancelRequested || Task.isCancelled {
-                    return false
-                }
-                let fraction = Float(whisperKit.progress.fractionCompleted)
-                let shouldPublish = lastReportedFraction.withLock { last in
-                    guard fraction >= last + 0.01 || fraction >= 1.0 else { return false }
-                    last = fraction
-                    return true
-                }
-                if shouldPublish {
-                    Task { @MainActor in
-                        updateProgressOnMain(fraction)
+            let decode: (Bool) async throws -> String? = { [weak self] usePrompt in
+                var decodeOptions = baseDecodeOptions
+                decodeOptions.promptTokens = usePrompt ? promptTokens : nil
+                let results = try await whisperKit.transcribe(
+                    audioPath: audioPath,
+                    decodeOptions: decodeOptions
+                ) { _ in
+                    guard let self else { return nil }
+                    if self.cancelRequested || Task.isCancelled {
+                        return false
                     }
+                    let fraction = Float(whisperKit.progress.fractionCompleted)
+                    let shouldPublish = lastReportedFraction.withLock { last in
+                        guard fraction >= last + 0.01 || fraction >= 1.0 else { return false }
+                        last = fraction
+                        return true
+                    }
+                    if shouldPublish {
+                        Task { @MainActor in
+                            updateProgressOnMain(fraction)
+                        }
+                    }
+                    return nil
                 }
-                return nil
+                return results.first?.text
             }
 
+            let firstPassText = try await decode(promptTokens != nil)
             updateProgressOnMain(1.0)
 
             if cancelRequested || Task.isCancelled {
                 return .cancelled
             }
 
-            guard let result = transcriptionResults.first else {
+            guard let firstPassText else {
                 return .whisperError("empty result")
             }
 
-            return Self.validatedWhisperOutput(result.text)
+            // Without a prompt there is nothing left to vary, so one pass decides.
+            guard promptTokens != nil else {
+                return Self.validatedWhisperOutput(firstPassText)
+            }
+
+            switch Self.promptedOutputVerdict(for: firstPassText, prompt: customPrompt) {
+            case .usable:
+                return .text(firstPassText)
+            case .promptEcho, .degenerate:
+                // Both outcomes are what the conditioning prompt does to a slice
+                // with little intelligible speech: Whisper hands the prompt back,
+                // often on a loop. The prompt is the only input we can change, so
+                // decode once more without it instead of repeating the same pass.
+                print("Segment output looks prompt-driven; decoding again without the custom prompt")
+                let promptFreeText = try await decode(false)
+                if cancelRequested || Task.isCancelled {
+                    return .cancelled
+                }
+                guard let promptFreeText else {
+                    return .whisperError("empty result")
+                }
+                if case .degenerate = Self.promptedOutputVerdict(for: promptFreeText, prompt: "") {
+                    return .whisperError("repetitive output")
+                }
+                guard TranscriptSanitizer.cleanedTranscript(promptFreeText) != nil else {
+                    // Nothing intelligible with or without the prompt. This slice is
+                    // noise, not a decoder failure, and must not fail the whole note.
+                    return .noSpeech
+                }
+                return .text(promptFreeText)
+            }
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
@@ -1400,14 +1439,54 @@ private extension TranscriptionService {
 }
 
 extension TranscriptionService {
+    /// Loose backstop, not a normal-speech quality gate: legitimate repeated
+    /// terminology can exceed ratios of 2.0 and 2.4.
+    static let repetitionCompressionLimit: Float = 8.0
+
     nonisolated static func validatedWhisperOutput(_ text: String) -> RawTranscription {
         // Decoder temperature fallback can exhaust its retries and still return
-        // repetitive text. Use a loose backstop, not a normal-speech quality gate:
-        // legitimate repeated terminology can exceed ratios of 2.0 and 2.4.
-        guard TextUtilities.compressionRatio(of: text) <= 8.0 else {
+        // repetitive text.
+        guard TextUtilities.compressionRatio(of: text) <= repetitionCompressionLimit else {
             return .whisperError("repetitive output")
         }
         return .text(text)
+    }
+
+    /// Why a prompted pass produced nothing usable. Separating a prompt echo from
+    /// a genuine decoder loop is what makes one more pass worth running.
+    enum PromptedOutputVerdict: Equatable {
+        case usable
+        /// The conditioning prompt handed back instead of speech.
+        case promptEcho
+        /// Repetition that survived the decoder's own temperature fallback.
+        case degenerate
+    }
+
+    nonisolated static func promptedOutputVerdict(for text: String, prompt: String) -> PromptedOutputVerdict {
+        if isPromptEcho(text, prompt: prompt) { return .promptEcho }
+        if TextUtilities.compressionRatio(of: text) > repetitionCompressionLimit { return .degenerate }
+        return .usable
+    }
+
+    /// True when striking every copy of the prompt out of the output leaves
+    /// nothing behind. Whisper regurgitates `promptTokens` on slices with no
+    /// intelligible speech — a pause, page turns, distant room noise — and that
+    /// is the user's own prompt coming back, not a transcript.
+    nonisolated static func isPromptEcho(_ text: String, prompt: String) -> Bool {
+        let normalizedPrompt = normalizedForEchoComparison(prompt)
+        // Too short a prompt matches ordinary speech by accident.
+        guard normalizedPrompt.count >= 4 else { return false }
+        let normalizedText = normalizedForEchoComparison(text)
+        guard !normalizedText.isEmpty else { return false }
+        let remainder = normalizedText.replacingOccurrences(of: normalizedPrompt, with: "")
+        return remainder.count <= 2
+    }
+
+    nonisolated static func normalizedForEchoComparison(_ text: String) -> String {
+        let scalars = text.lowercased().unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0)
+        }
+        return String(String.UnicodeScalarView(scalars))
     }
 
     func annotatedText(for result: TranscriptionResult) -> String {

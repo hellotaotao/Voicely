@@ -337,6 +337,33 @@ final class RecordingSession: ObservableObject {
         }
     }
 
+    // MARK: Recovery
+
+    /// Clears notes left mid-finalization by an app that iOS suspended and then
+    /// killed. Live slices live only in the coordinator's memory, so nothing can
+    /// resume them; the note keeps the text the live pass already wrote and stops
+    /// claiming to be busy. Without this it shows "Finalizing" forever, because
+    /// `isTranscribing` is persisted and no other code path clears it.
+    /// Re-transcribing stays the user's explicit choice.
+    func recoverInterruptedFinalizations(in notes: [VoiceNote]) {
+        for note in notes where note.isTranscribing && note.duration > 0 {
+            guard currentRecordingNote?.id != note.id,
+                  !finalizingNoteIDs.contains(note.id),
+                  !note.isAwaitingTranscription,
+                  !transcriptionService.isLocalRecording(noteID: note.id),
+                  !transcriptionService.ownsSavedTranscription(noteID: note.id),
+                  transcriptionService.activeNoteID != note.id else { continue }
+
+            note.completeTranscription()
+            note.transcriptionOutcome = .failed
+            note.markTranscriptionFailure(
+                "Finalizing was interrupted before it finished. The text below stops where the recording was transcribed live — re-transcribe to fill in the rest."
+            )
+            note.clearTransientTranscriptionFlags()
+            try? note.modelContext?.save()
+        }
+    }
+
     // MARK: Stop
 
     func stopRecording() {
@@ -452,10 +479,10 @@ final class RecordingSession: ObservableObject {
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
                 note.completeTranscription()
-                if let unrecovered = capturedCoordinator?.unrecoveredSliceCount, unrecovered > 0 {
+                if let unrecovered = capturedCoordinator?.unrecoveredSliceRanges, !unrecovered.isEmpty {
                     // Gaps are marked inline; re-transcribing is an explicit user choice.
                     note.transcriptionOutcome = .failed
-                    note.markTranscriptionFailure("\(unrecovered) segment(s) failed after retry")
+                    note.markTranscriptionFailure(SegmentedAudioTranscriber.failureSummary(for: unrecovered))
                 }
                 note.clearTransientTranscriptionFlags()
                 return

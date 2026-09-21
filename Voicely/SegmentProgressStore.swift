@@ -5,6 +5,9 @@ import os
 struct SegmentFailureRange: Codable, Equatable {
     var startFrame: Int64
     var endFrame: Int64
+    /// Whisper's own diagnostic for this slice. Optional so sidecars written
+    /// before the reason was recorded still decode.
+    var reason: String?
 }
 
 struct SegmentedTranscriptionProgress: Codable, Equatable {

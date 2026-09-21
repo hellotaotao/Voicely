@@ -75,6 +75,10 @@ final class IncrementalTranscriptionCoordinator {
     /// is a visible "[m:ss–m:ss transcription unavailable]" marker.
     private(set) var unrecoveredSliceCount = 0
 
+    /// One entry per unrecovered slice, carrying Whisper's diagnostic so the note
+    /// can name the cause. Release builds have no debug log to fall back on.
+    private(set) var unrecoveredSliceRanges: [SegmentFailureRange] = []
+
     /// Live slices that failed and are retried when the recording stops.
     var failedSliceCount: Int {
         slices.reduce(0) { $0 + ($1.failure == nil ? 0 : 1) }
@@ -91,7 +95,10 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     /// Attempts per failed slice after recording stops, on top of the live attempt.
-    static let finalRetryAttempts = 2
+    /// One is enough: the decoder already retries a prompt-driven failure without
+    /// the prompt, and everything past that is the same audio through the same
+    /// model at temperature 0 — identical output, minutes of extra work at stop.
+    static let finalRetryAttempts = 1
 
     /// Audio still to transcribe if the recording stops at `frame`: the part live
     /// transcription has not reached, the slice being transcribed, and slices
@@ -160,7 +167,8 @@ final class IncrementalTranscriptionCoordinator {
 
     private enum SliceFailure: Equatable {
         /// Whisper ran and failed; a retry may succeed, otherwise the gap is marked.
-        case transcription
+        /// Carries Whisper's diagnostic so the note can name the cause later.
+        case transcription(String?)
         /// The slice could not be decoded at all right now.
         case unavailable
     }
@@ -393,7 +401,7 @@ final class IncrementalTranscriptionCoordinator {
             if let text = await override(sliceURL.path) {
                 result = Self.sanitizedSegmentText(text).map(SliceResult.text) ?? .silent
             } else {
-                result = .failed(.transcription)
+                result = .failed(.transcription(nil))
             }
         } else {
             switch await transcriptionService.transcribeAudioOutcome(filePath: sliceURL.path, telemetrySession: session) {
@@ -401,8 +409,8 @@ final class IncrementalTranscriptionCoordinator {
                 result = Self.sanitizedSegmentText(transcription.text).map(SliceResult.text) ?? .silent
             case .noSpeech:
                 result = .silent
-            case .whisperError:
-                result = .failed(.transcription)
+            case .whisperError(let diagnostic):
+                result = .failed(.transcription(diagnostic))
             case .modelUnavailable, .audioUnavailable, .cancelled:
                 result = .failed(.unavailable)
             }
@@ -427,7 +435,7 @@ final class IncrementalTranscriptionCoordinator {
             for _ in 0..<Self.finalRetryAttempts {
                 guard !telemetryFinished else { return }
                 let slice = slices[index]
-                var result = SliceResult.failed(slice.failure ?? .transcription)
+                var result = SliceResult.failed(slice.failure ?? .transcription(nil))
                 await performSliceWork { session in
                     result = await transcribeSlice(from: slice.startFrame, to: slice.endFrame, session: session)
                 }
@@ -446,10 +454,16 @@ final class IncrementalTranscriptionCoordinator {
     /// could not be decoded at all hands the recording to the regular queue.
     private func settleRemainingFailures() {
         unrecoveredSliceCount = 0
+        unrecoveredSliceRanges = []
         for index in slices.indices {
             switch slices[index].failure {
-            case .transcription:
+            case .transcription(let diagnostic):
                 unrecoveredSliceCount += 1
+                unrecoveredSliceRanges.append(SegmentFailureRange(
+                    startFrame: slices[index].startFrame,
+                    endFrame: slices[index].endFrame,
+                    reason: diagnostic
+                ))
                 slices[index].text = SegmentedAudioTranscriber.placeholder(
                     forStart: slices[index].startFrame,
                     end: slices[index].endFrame,

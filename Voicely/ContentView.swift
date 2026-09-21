@@ -636,6 +636,7 @@ struct ContentView: View {
         transcriptionService.setModelManager(modelManager)
         await modelManager.fetchModels(includeRemote: false)
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
+        recordingSession.recoverInterruptedFinalizations(in: voiceNotes)
 
         if cloudManager.isCloudEnabled {
             await cloudManager.migrateLocalFilesToCloudIfNeeded()

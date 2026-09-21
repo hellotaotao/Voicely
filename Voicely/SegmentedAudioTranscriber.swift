@@ -256,7 +256,8 @@ final class SegmentedAudioTranscriber {
             guard let segmentURL = extractedURL else {
                 // Couldn't read this slice (e.g. an unsupported container) — record
                 // it as failed instead of silently finishing as noSpeech.
-                failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
+                failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end,
+                                                        reason: "could not read slice"))
                 pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
                 start = end
                 accumulatedText = joinTranscriptPieces(pieces)
@@ -294,8 +295,9 @@ final class SegmentedAudioTranscriber {
             case .modelUnavailable, .audioUnavailable, .cancelled:
                 pause(note)
                 return
-            case .whisperError:
-                failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end))
+            case .whisperError(let diagnostic):
+                failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end,
+                                                        reason: diagnostic))
                 pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
             }
 
@@ -316,6 +318,8 @@ final class SegmentedAudioTranscriber {
         }
 
         // Re-transcription that produced no new text: keep the previous transcript.
+        // A partial run is not lost — it is archived as a retained attempt the
+        // detail view can show.
         if hadExistingTranscript, !producedAnyText || !failedRanges.isEmpty {
             note.completeTranscription()
             note.transcriptionOutcome = .failed
@@ -330,7 +334,7 @@ final class SegmentedAudioTranscriber {
         note.completeTranscription()
         if !failedRanges.isEmpty {
             note.transcriptionOutcome = .failed
-            note.markTranscriptionFailure("\(failedRanges.count) segment(s) failed after retry")
+            note.markTranscriptionFailure(Self.failureSummary(for: failedRanges))
         } else if !producedAnyText {
             note.transcriptionOutcome = .noSpeech
         } else {
@@ -361,6 +365,21 @@ final class SegmentedAudioTranscriber {
         let s = total % 60, m = (total / 60) % 60, h = total / 3600
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s)
                      : String(format: "%d:%02d", m, s)
+    }
+
+    /// Names why slices failed, not just how many. Release builds have no debug
+    /// log, so this message is the only place the cause survives.
+    nonisolated static func failureSummary(for ranges: [SegmentFailureRange]) -> String {
+        let headline = "\(ranges.count) segment(s) failed after retry"
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for reason in ranges.map({ $0.reason ?? "unknown error" }) {
+            if counts[reason] == nil { order.append(reason) }
+            counts[reason, default: 0] += 1
+        }
+        guard !order.isEmpty else { return headline }
+        let breakdown = order.map { "\($0) ×\(counts[$0] ?? 0)" }.joined(separator: ", ")
+        return "\(headline): \(breakdown)"
     }
 
     nonisolated static func placeholder(forStart start: Int64, end: Int64, sampleRate: Double) -> String {

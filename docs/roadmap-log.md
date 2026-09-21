@@ -339,3 +339,24 @@ Mac 端取证：笔记库（`~/Library/Containers/com.hellotaotao.Voicely/.../de
 ### 0.23.11 (2) 手动重转真机反馈（2026-09-22）
 
 用户确认测试的是已安装的 TestFlight 0.23.11 (2)，通过点击 Re-transcribe 启动；锁屏状态下进度已持续推进至 38%。这是手动路径的阶段性真机证据，最终完成及正文持久化尚未确认。自动恢复修复没有 archive 或发布，不属于本次真机验证范围。
+
+### 自动恢复 saved-audio 后台任务补漏（2026-09-22，未发布）
+
+用户授权修复 P-0e，保留既有未提交修改，不改版本、不 commit、不 archive、不上传。
+
+- 设备证据：`voicely-bg-2h.logarchive` 确认安装 0.23.11 (2)。自动恢复后后台进程被挂起，22:39:19–23:13:39 约 34 分 20 秒没有前台执行；未发现 continued-processing 启动记录。首段文件准备 27 ms、首 token 0.62 s，此次现象不是准备阶段等待。
+- 在 `transcribeClaimedNote` 实际执行入口登记恢复的 queued/claimed saved job，再走已有 `beginSavedContinuation`；若已在后台且无 grant，第二次暂停检查会在文件准备/解码前退出，保留 checkpoint 和旧正文。
+- 已运行 saved job 再收到手动请求时，缺失 grant 可补申请，但不重启解码、不重置分段进度。排队任务继续去重，不提前为自动排队任务申请后台任务。录音/新导入独立入口不变。
+- `ContinuedProcessing` Release 日志补齐注册/提交/接受/拒绝（error domain + code）、平台跳过、saved-job 入口、申请条件和暂停原因；不写路径或转录内容。
+- RED：原实现跑 69 项定向测试，29 个预期断言失败，定位自动恢复未登记/未申请/未主动暂停。最小修复后 69 项通过；追加队列推进回归后最终 70 项定向测试通过。
+- 回归包含 queued 与 claimed 自动恢复、获批/拒绝、后台开始前阻断文件准备、切后台后轮到下一任务、用户取消清理、重复请求不重置 checkpoint、实际 SegmentProgressStore checkpoint + fresh service 模拟重启恢复。
+- Mac Catalyst 与 iPhone 17 / iOS 26.2 全套各 326 项：324 通过、2 项 opt-in 真实录音重放因未配置而跳过、0 失败。测试驱动和 decoder 注入不等于 iOS 真正批准后台执行。
+- iOS Release `CODE_SIGNING_ALLOWED=NO build` 成功；`git diff --check` 通过。版本保持 0.23.11 (2)，未创建 archive 或上传新包。
+- 用户要求暂不调用额度耗尽的 Claude Code；该轮外部独立审查未执行。已本地逐项核对改动和回归测试，不将本地检查表述为独立审查。
+- 日志与本轮前置 diff 位于 `/tmp/voicely-auto-recovery-fix/`。真机待验：保留未完成任务 → 重启自动恢复 → 不点 Re-transcribe 直接锁屏，核对 grant/Live Activity 与 checkpoint 是否推进。
+
+### 按功能拆分提交（2026-09-22）
+
+用户后续明确授权将上述改动拆成两笔本地提交；不 push、不 archive、不上传。第一笔 `14a884c` 对应 build 2 的解码心跳/进度修复，包含生产实现、回归/重放测试、版本及文档；第二笔只增加自动恢复后台任务修复、对应回归和诊断日志。最终生产源码、配置和测试文件与拆分前逐字节一致；仅文档补记用户手动路径锁屏推进到 38% 的反馈及本次提交记录。自动恢复仍未发布、未真机验证。
+
+拆分验证：两个提交点各自重跑全套 Mac Catalyst 测试，第一笔 320 项（318 通过、2 项 opt-in 跳过），最终状态 326 项（324 通过、2 项 opt-in 跳过），均 0 失败；`git diff --check` 通过。记录及拆分前备份位于 `/tmp/voicely-split-commits/`。本轮未重复 iOS 验证；最终源码对应上一轮已通过的 iOS 26.2 全套测试与 iOS Release 构建。

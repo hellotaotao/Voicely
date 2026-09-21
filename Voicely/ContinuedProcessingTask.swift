@@ -106,6 +106,7 @@ final class SystemContinuedProcessingDriver: ContinuedProcessingDriver {
     static let identifierContext = "finalizeRecording"
 
     private var pendingLaunches: [String: (any ContinuedProcessingHandle) -> Void] = [:]
+    private let log = Logger(subsystem: "com.hellotaotao.Voicely", category: "ContinuedProcessing")
 
     func submit(
         title: String,
@@ -118,6 +119,7 @@ final class SystemContinuedProcessingDriver: ContinuedProcessingDriver {
             // Registering the same identifier twice kills the app, so every
             // request gets a fresh suffix under the permitted wildcard.
             let identifier = "\(bundleID).\(Self.identifierContext).\(UUID().uuidString)"
+            log.notice("task=\(identifier, privacy: .public) event=registrationStarted")
             let registered = BGTaskScheduler.shared.register(
                 forTaskWithIdentifier: identifier,
                 using: .main
@@ -131,20 +133,28 @@ final class SystemContinuedProcessingDriver: ContinuedProcessingDriver {
                     launch(SystemContinuedProcessingHandle(task: task))
                 }
             }
-            guard registered else { return nil }
+            guard registered else {
+                log.error("task=\(identifier, privacy: .public) event=registrationRejected")
+                return nil
+            }
 
             let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
             request.strategy = .fail
             pendingLaunches[identifier] = launch
             do {
+                log.notice("task=\(identifier, privacy: .public) event=submissionStarted")
                 try BGTaskScheduler.shared.submit(request)
+                log.notice("task=\(identifier, privacy: .public) event=submissionAccepted")
                 return identifier
             } catch {
                 pendingLaunches.removeValue(forKey: identifier)
+                let failure = error as NSError
+                log.error("task=\(identifier, privacy: .public) event=submissionRejected domain=\(failure.domain, privacy: .public) code=\(failure.code)")
                 return nil
             }
         }
         #endif
+        log.notice("event=submissionSkipped reason=unsupportedPlatform")
         return nil
     }
 

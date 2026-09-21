@@ -56,6 +56,7 @@ enum TranscriptionOutcome {
 class TranscriptionService: ObservableObject {
     typealias TranscribeImpl = (String, @escaping (Float) -> Void) async -> RawTranscription
     nonisolated private static let transcriptionLog = Logger(subsystem: "com.hellotaotao.Voicely", category: "TranscriptionTiming")
+    nonisolated private static let savedJobLog = Logger(subsystem: "com.hellotaotao.Voicely", category: "ContinuedProcessing")
 
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
@@ -313,7 +314,21 @@ class TranscriptionService: ObservableObject {
             return false
         }
 
-        if isLocallyTranscribing(note) || pendingTranscriptionQueue[note.id] != nil || runningSavedWorkingCopyIDs.contains(note.id) { return false }
+        if isLocallyTranscribing(note) || runningSavedWorkingCopyIDs.contains(note.id) {
+            // An explicit retry can repair a declined background request without
+            // restarting the decoder or replacing its saved segment checkpoint.
+            if ownsSavedTranscription(noteID: note.id), savedJobsAreInForeground,
+               !isPausedForBackground(noteID: note.id), savedContinuations[note.id]?.isAvailable != true {
+                savedContinuations.removeValue(forKey: note.id)?.finish(success: false)
+                beginSavedContinuation(for: note)
+            }
+            Self.savedJobLog.notice("event=savedRequestSkipped note=\(note.id.uuidString, privacy: .public) reason=alreadyRunning")
+            return false
+        }
+        if pendingTranscriptionQueue[note.id] != nil {
+            Self.savedJobLog.notice("event=savedRequestSkipped note=\(note.id.uuidString, privacy: .public) reason=alreadyQueued")
+            return false
+        }
         if force || note.transcriptionOutcome == .failed {
             do {
                 try segmentProgressStore.resetProgressPreservingAttempt(for: note.id)
@@ -324,6 +339,7 @@ class TranscriptionService: ObservableObject {
         }
         note.resumeCancelledTranscription(at: nowProvider())
         savedTranscriptionNotes[note.id] = note
+        Self.savedJobLog.notice("event=savedJobRegistered note=\(note.id.uuidString, privacy: .public) source=explicitRequest")
         backgroundPausedNoteIDs.remove(note.id)
         beginSavedContinuation(for: note)
         if note.audioFilePath.isEmpty, let workingCopy {
@@ -347,8 +363,13 @@ class TranscriptionService: ObservableObject {
     func isPausedForBackground(noteID: UUID) -> Bool { backgroundPausedNoteIDs.contains(noteID) }
 
     private func beginSavedContinuation(for note: VoiceNote) {
-        guard requiresBackgroundExecution, savedContinuations[note.id] == nil, !backgroundPausedNoteIDs.contains(note.id) else { return }
+        guard requiresBackgroundExecution else {
+            Self.savedJobLog.notice("event=savedContinuationSkipped note=\(note.id.uuidString, privacy: .public) reason=backgroundExecutionNotRequired")
+            return
+        }
+        guard savedContinuations[note.id] == nil, !backgroundPausedNoteIDs.contains(note.id) else { return }
         let supportsBackground = modelManager?.loadedModelSupportsBackgroundTranscription ?? true
+        Self.savedJobLog.notice("event=savedContinuationRequested note=\(note.id.uuidString, privacy: .public) foreground=\(self.savedJobsAreInForeground) supportedCompute=\(supportsBackground)")
         let continuation = SavedTranscriptionContinuation(
             driver: savedJobsAreInForeground && supportsBackground ? continuedProcessingDriver : nil,
             title: note.title,
@@ -358,6 +379,7 @@ class TranscriptionService: ObservableObject {
                 self.pauseSavedTranscriptionForBackground(note)
             })
         savedContinuations[note.id] = continuation
+        Self.savedJobLog.notice("event=savedContinuationReady note=\(note.id.uuidString, privacy: .public) available=\(continuation.isAvailable)")
         if !supportsBackground {
             backgroundStatusByNoteID[note.id] = "GPU transcription needs the app open. Progress is saved when the app goes into the background and resumes when you return."
         } else if !continuation.isAvailable {
@@ -388,6 +410,7 @@ class TranscriptionService: ObservableObject {
         guard savedTranscriptionNotes[note.id] != nil, !isUserPaused(note),
               !isDiscarded(noteID: note.id) else { return }
         backgroundPausedNoteIDs.insert(note.id)
+        Self.savedJobLog.notice("event=savedJobPaused note=\(note.id.uuidString, privacy: .public) foreground=\(self.savedJobsAreInForeground)")
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         savedContinuations.removeValue(forKey: note.id)?.finish(success: false)
         note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
@@ -1026,8 +1049,17 @@ private extension TranscriptionService {
         }
 
         guard !isPausedForBackground(noteID: note.id) else { return }
-        if savedTranscriptionNotes[note.id] != nil { beginSavedContinuation(for: note) }
+        // Persisted queued/claimed jobs survive relaunch; in-memory continuation
+        // ownership does not. Register only when this job acquires the decoder.
+        if savedTranscriptionNotes[note.id] == nil {
+            savedTranscriptionNotes[note.id] = note
+            Self.savedJobLog.notice("event=savedJobRegistered note=\(note.id.uuidString, privacy: .public) source=queueRecovery")
+        }
+        beginSavedContinuation(for: note)
         defer { finishSavedContinuation(for: note) }
+        // A queue may reach this job after the app has already backgrounded.
+        // Without an existing grant, beginSavedContinuation checkpoints it.
+        guard !isPausedForBackground(noteID: note.id) else { return }
         beginLocalTranscription(for: note, attemptID: attemptID)
         let session = beginTelemetrySession(noteID: note.id)
         defer { endTelemetrySession(session) }

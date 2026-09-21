@@ -52,17 +52,18 @@ final class SegmentedAudioTranscriber {
     func transcribe(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession? = nil) async {
         guard !transcriptionService.isLocalRecording(noteID: note.id),
               !transcriptionService.isDiscarded(noteID: note.id),
-              !transcriptionService.isUserPaused(note) else { return }
+              !transcriptionService.isUserPaused(note),
+              !transcriptionService.isPausedForBackground(noteID: note.id) else { return }
         // Prevent two concurrent runs over the same note (an import racing a
         // scene-activation resume, or repeated resumes corrupting the sidecar).
         guard progressStore.beginTranscribing(note.id) else { return }
         defer { progressStore.endTranscribing(note.id) }
         while transcriptionService.activeNoteID != nil || transcriptionService.isTranscribing {
-            if Task.isCancelled { return }
+            if Task.isCancelled || transcriptionService.isPausedForBackground(noteID: note.id) { return }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         if Task.isCancelled || transcriptionService.isDiscarded(noteID: note.id)
-            || transcriptionService.isUserPaused(note) { return }
+            || transcriptionService.isUserPaused(note) || transcriptionService.isPausedForBackground(noteID: note.id) { return }
         // Drop a stale cancellation flag left by a prior, unrelated transcription.
         transcriptionService.clearPendingCancellation()
 
@@ -154,6 +155,7 @@ final class SegmentedAudioTranscriber {
             // A recording has a checkpoint but no import working copy.
             guard note.transcriptionState != .completed,
                   !transcriptionService.isUserPaused(note),
+                  !transcriptionService.ownsSavedTranscription(noteID: id),
                   let workingCopy = progressStore.existingWorkingCopyURL(for: id) else { continue }
             if Task.isCancelled { return }
             await transcribe(note: note, sourceURL: workingCopy)
@@ -222,6 +224,7 @@ final class SegmentedAudioTranscriber {
         var accumulatedDuration: TimeInterval = 0
 
         transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
+        transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
         while start < info.totalFrames {
             if transcriptionService.isDiscarded(noteID: noteID) { return }
             if transcriptionService.isRunCancelled(noteID: noteID) || transcriptionService.isUserPaused(note) || Task.isCancelled {
@@ -340,6 +343,7 @@ final class SegmentedAudioTranscriber {
         guard !transcriptionService.isDiscarded(noteID: note.id),
               !transcriptionService.isUserPaused(note) else { return }
         note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
+        try? note.modelContext?.save()
     }
 
     // MARK: - Audio info & formatting

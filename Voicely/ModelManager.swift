@@ -146,6 +146,14 @@ class ModelManager: ObservableObject {
     private let removeModelFiles: ModelFileRemoval
     private let injectedLoader: Loader?
     private var activeLoad: (id: UUID, request: ModelLoadRequest, task: Task<Void, Never>)?
+    /// Consult the model's loaded configuration, not a Settings selection pending reload.
+    var loadedModelSupportsBackgroundTranscription: Bool {
+        let encoder = loadedRequest?.encoderComputeUnits ?? encoderComputeUnits
+        let decoder = loadedRequest?.decoderComputeUnits ?? decoderComputeUnits
+        return (encoder == .cpuOnly || encoder == .cpuAndNeuralEngine)
+            && (decoder == .cpuOnly || decoder == .cpuAndNeuralEngine)
+    }
+
     private var loadedRequest: ModelLoadRequest?
     private var loadingRequests: [UUID: String] = [:]
 

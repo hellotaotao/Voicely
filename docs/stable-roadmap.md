@@ -4,7 +4,7 @@
 > 其他文档若与本文件冲突，一律以本文件为准。
 > 历史执行/验证记录已剥离到 [roadmap-log.md](roadmap-log.md)，本文件只写"要做什么、做到哪一步"。
 >
-> 状态标记最后核对：**2026-09-13**，逐条按当前 `dev` 分支代码核实，不凭记忆。**2026-09-19** 补记 0.23.9 已提交、0.23.10 录音收尾修复（P-0）与 stash 回退（P-6）。
+> 状态标记最后核对：**2026-09-13**，逐条按当前 `dev` 分支代码核实，不凭记忆。**2026-09-19** 补记 0.23.9 已提交、0.23.10 录音收尾修复（P-0）与 stash 回退（P-6）；**2026-09-20** 补记 build 4 手动重转录后台支持（P-0a）。
 
 标记含义：✅ 已完成 · 🚧 进行中 · 🧪 代码就位、真机验收未做 · ⬜ 未开始 · ⚠️ 部分完成
 
@@ -22,7 +22,7 @@
 | ⑥ 预约提醒录音 | 本地通知提醒，点通知打开准备界面 | ⬜ | 无 `UNUserNotificationCenter` 调用 |
 | ⑦ 反馈驱动的增强 | 系统入口完善等 | 🧪 | Live Activity / Shortcut / DeepLink 文件均已存在，真机验收未做 |
 
-**版本现状（2026-09-19）**：0.23.9 已于 09-11 上传 TestFlight，当时是从未提交的工作区直接打包的，源码 09-19 补提交为 `aaf8002`。0.23.10 = 录音收尾修复（P-0），待真机验收。0.23.8 起的版本都**不含** 0.23.5–0.23.7 的改动（见 P-6）。
+**版本现状（2026-09-19）**：0.23.9 已于 09-11 上传 TestFlight，当时是从未提交的工作区直接打包的，源码 09-19 补提交为 `aaf8002`。0.23.10 = 录音收尾修复（P-0），build 4 另含手动重转录后台支持（P-0a），待真机验收。0.23.8 起的版本都**不含** 0.23.5–0.23.7 的改动（见 P-6）。
 
 ---
 
@@ -134,6 +134,16 @@ Live Activity / Dynamic Island 录音状态、Start Voicely Recording 快捷指�
 2. 停止后详情页显示 "Finalizing transcription…" 而不是 "Recording"。
 3. 若出现 `[… transcription unavailable]` 标记，记下是哪段、什么内容。
 
+### P-0a 🧪 手动 Re-transcribe 锁屏继续与中断恢复（0.23.10 build 4）
+
+用户长期真机使用已确认：旧版手动 Re-transcribe 锁屏后通常无法继续完成，不需要重新验证旧现象。
+
+本轮范围：为用户启动的保存音频转录接入 iOS 26 continued-processing task，报告实际进度；任务被拒绝或过期时保留已完成分段与旧正文，回前台恢复。用户主动取消仍不自动恢复。录音实时转录和停止后的收尾路径保持不变，不整体恢复 P-6 的 stash。
+
+GPU 配置没有后台 GPU entitlement，保持前台运行并明确提示；默认 CPU/Neural 配置申请后台执行。Mac Catalyst 不应用 iOS 挂起限制。
+
+验收：自动化验证和 archive 记录见 [roadmap-log.md](roadmap-log.md)。真实 iPhone 待验证新包：前台点 Re-transcribe 后锁屏，确认能否在锁屏期间完成；系统中断后解锁，确认从已保存分段继续，完整成功才替换旧稿。
+
 ### P-1 ⚠️ 转录指标：time ratio 与 speed 一直停在 "Measuring"
 
 re-transcribe / 整文件转录时这两个值出不来；live transcription 正常。根因是分段路径没接遥测会话。
@@ -173,7 +183,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 09-10 修卡顿前，按当时的约定把未提交的 0.23.5–0.23.7 改动暂存为 `stash@{0}`（`pre-ui-performance-fix-20260910`），准备真机测完 0.23.8 再放回，但一直没放。内容：手动转录的后台继续处理（`OfflineTranscriptionBackgroundManager`，iOS 26 `BGContinuedProcessingTask`，只管手动触发的已保存音频转录，不管录音）、段内进度显示、诊断面板、外层重试/`unusableOutput` 调整。0.23.7 二进制里有 `OfflineTranscriptionBackground` 符号，0.23.8/0.23.9 没有。
 
-0.23.10 的录音收尾已单独接上 `BGContinuedProcessingTask`（`ContinuedProcessingTask.swift`，思路取自 stash），其余内容要不要放回待定。09-18 只读模拟：放回 0.23.9 工作区有 7 个文件冲突。**不要 drop 这个 stash。**
+0.23.10 的录音收尾已单独接上 `BGContinuedProcessingTask`（`ContinuedProcessingTask.swift`，思路取自 stash），build 4 又独立补上手动重转录后台支持（P-0a），没有恢复整个 stash；其余内容要不要放回待定。09-18 只读模拟：放回 0.23.9 工作区有 7 个文件冲突。**不要 drop 这个 stash。**
 
 ---
 
@@ -201,7 +211,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 ## 六、基线与备份（历史参考）
 
 - 开发分支 `dev`，起点 `6f3681baa2658b1bc774677e421546dee2f10c63`，采用归档后整理的版本配置提交 `6f3681b`。
-- 版本源：`Config/Version.xcconfig`（当前 `0.23.10 (3)`）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
+- 版本源：`Config/Version.xcconfig`（当前 `0.23.10 (4)`）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
 - `old-dev` 保持在 `dea04f11eacb23e1a6a65e9a90f53ceba1a0afa8`，未重置。旧 dev 的未提交修复保存为 stash，由 `backup/pre-r0-20260907` tag 固定引用；本地备份目录 `build/backups/pre-r0-20260907/`（含 `working-tree.tar.gz`、`manifest.json`、`changes.patch`、`history.bundle`，均已校验）。
 
 恢复旧开发状态（工作区干净时）：

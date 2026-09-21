@@ -1246,6 +1246,219 @@ struct TranscriptionServiceTests {
         }
     }
 
+    @Test @MainActor func explicitRetranscriptionRequestsBackgroundExecution() async {
+        let service = makeService(deviceID: "phone")
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        service.continuedProcessingDriver = driver
+        service.transcribeImpl = { _, _ in "New complete transcript" }
+        let note = VoiceNote(title: "Saved recording", audioFilePath: "file.m4a")
+        note.transcription = "Previous complete transcript"
+        note.completeTranscription()
+
+        #expect(await service.requestTranscription(for: note, force: true))
+        #expect(driver.submissions.count == 1)
+        #expect(driver.handle.completions == [true])
+        #expect(note.transcription == "New complete transcript")
+    }
+
+    @Test @MainActor func expiredSavedJobWaitsForDecoderExitBeforeForegroundResume() async {
+        let service = makeService(deviceID: "phone")
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        service.continuedProcessingDriver = driver
+        let gate = TranscriptionGate()
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            if calls == 1 { await gate.wait(); return "Interrupted result" }
+            return "Complete resumed result"
+        }
+        let note = VoiceNote(audioFilePath: "file.m4a")
+        note.transcription = "Old saved transcript"
+        note.completeTranscription()
+        let firstRun = Task { await service.requestTranscription(for: note, force: true) }
+        await gate.waitUntilArmed()
+        service.savedTranscriptionsDidEnterBackground()
+        #expect(!service.isPausedForBackground(noteID: note.id))
+        driver.handle.expirationHandler?()
+        #expect(service.isPausedForBackground(noteID: note.id))
+        #expect(note.transcriptionState == .queued)
+        #expect(note.transcription == "Old saved transcript")
+        await service.processPendingTranscriptions(notes: [note])
+        #expect(calls == 1)
+        let resume = Task { await service.resumeSavedTranscriptionsInForeground() }
+        await Task.yield()
+        #expect(calls == 1)
+        await gate.resume()
+        _ = await firstRun.value
+        await resume.value
+        #expect(calls == 2)
+        #expect(note.transcription == "Complete resumed result")
+        #expect(note.transcriptionState == .completed)
+        #expect(driver.handle.completions == [false, true])
+        #expect(!service.ownsSavedTranscription(noteID: note.id))
+    }
+
+    @Test @MainActor func declinedBackgroundJobRunsInForegroundAndPausesOnLock() async {
+        let service = makeService(deviceID: "phone")
+        service.continuedProcessingDriver = nil
+        let gate = TranscriptionGate()
+        service.transcribeImpl = { _, _ in await gate.wait(); return "Discard this incomplete run" }
+        let note = VoiceNote(audioFilePath: "file.m4a")
+        note.transcription = "Old text"
+        note.completeTranscription()
+        let run = Task { await service.requestTranscription(for: note, force: true) }
+        await gate.waitUntilArmed()
+        #expect(!service.isPausedForBackground(noteID: note.id))
+        #expect(service.backgroundStatusByNoteID[note.id] != nil)
+        service.savedTranscriptionsDidEnterBackground()
+        #expect(service.isPausedForBackground(noteID: note.id))
+        await gate.resume()
+        _ = await run.value
+        #expect(note.transcription == "Old text")
+        #expect(note.transcriptionState == .queued)
+        #expect(service.activeNoteID == nil)
+    }
+
+    @Test @MainActor func userCancellationNeverAutomaticallyResumesSavedJob() async {
+        let service = makeService(deviceID: "phone")
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        service.continuedProcessingDriver = driver
+        let gate = TranscriptionGate()
+        var calls = 0
+        service.transcribeImpl = { _, _ in calls += 1; await gate.wait(); return "Not committed" }
+        let note = VoiceNote(audioFilePath: "file.m4a")
+        note.transcription = "Old text"
+        note.completeTranscription()
+        let run = Task { await service.requestTranscription(for: note, force: true) }
+        await gate.waitUntilArmed()
+        service.cancelTranscription(for: note)
+        await gate.resume()
+        _ = await run.value
+        await service.resumeSavedTranscriptionsInForeground()
+        #expect(calls == 1)
+        #expect(note.transcriptionState == .cancelled)
+        #expect(note.transcription == "Old text")
+        #expect(driver.handle.completions == [false])
+    }
+
+    @Test @MainActor func backgroundExpiryKeepsSegmentCheckpointAndResumesRemainingAudio() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SegmentProgressStore(rootDirectory: root)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 65)
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: url) }
+        let service = TranscriptionService(modelManager: LoadedModelManager(), segmentProgressStore: store)
+        service.requiresBackgroundExecution = true
+        service.deviceIDProvider = { "phone" }
+        service.prepareAudioFileForReading = { _ in url }
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        service.continuedProcessingDriver = driver
+        let gate = TranscriptionGate()
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            if calls == 2 { await gate.wait(); return "Interrupted second segment" }
+            return calls == 1 ? "Preserved first segment" : "Resumed segment"
+        }
+        let note = VoiceNote(audioFilePath: url.path)
+        note.transcription = "Old complete transcript"
+        note.completeTranscription()
+        let run = Task { await service.requestTranscription(for: note, force: true) }
+        await gate.waitUntilArmed()
+        let checkpoint = try #require(store.load(for: note.id))
+        #expect(checkpoint.lastFrame > 0)
+        #expect(checkpoint.accumulatedText == "Preserved first segment")
+        #expect(driver.handle.progressUpdates.contains { $0 > 0 })
+        driver.handle.expirationHandler?()
+        await gate.resume()
+        _ = await run.value
+        #expect(store.load(for: note.id)?.lastFrame == checkpoint.lastFrame)
+        #expect(note.transcription == "Old complete transcript")
+        await service.resumeSavedTranscriptionsInForeground()
+        #expect(calls > 2)
+        #expect(note.transcription.hasPrefix("Preserved first segment"))
+        #expect(!note.transcription.contains("Interrupted"))
+        #expect(note.transcriptionState == .completed)
+        #expect(store.load(for: note.id) == nil)
+    }
+
+    @Test @MainActor func gpuSavedJobDoesNotRequestUnsupportedBackgroundExecution() async {
+        let service = makeService(deviceID: "phone")
+        service.modelManager?.encoderComputeUnits = .cpuAndGPU
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        service.continuedProcessingDriver = driver
+        let gate = TranscriptionGate()
+        service.transcribeImpl = { _, _ in await gate.wait(); return "Not completed" }
+        let note = VoiceNote(audioFilePath: "file.m4a")
+        let run = Task { await service.requestTranscription(for: note) }
+        await gate.waitUntilArmed()
+        #expect(driver.submissions.isEmpty)
+        #expect(service.backgroundStatusByNoteID[note.id]?.contains("GPU") == true)
+        service.savedTranscriptionsDidEnterBackground()
+        await gate.resume()
+        _ = await run.value
+        #expect(note.transcriptionState == .queued)
+    }
+
+    @Test @MainActor func finishedSavedContinuationRejectsLateLaunchAndReleasesOwnership() {
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        driver.launchesImmediately = false
+        var expirations = 0
+        var continuation: SavedTranscriptionContinuation? = SavedTranscriptionContinuation(
+            driver: driver, title: "Queued", onExpiration: { expirations += 1 })
+        weak var weakContinuation = continuation
+        #expect(continuation?.isAvailable == true)
+        continuation?.finish(success: false)
+        continuation = nil
+        #expect(weakContinuation == nil)
+        #expect(driver.cancelledIdentifiers == ["request-1"])
+        driver.launchPending()
+        #expect(driver.handle.completions == [false])
+        #expect(expirations == 0)
+    }
+
+    @Test @MainActor func catalystSavedJobDoesNotPauseOrWarnWhenBackgrounded() async {
+        let service = makeService(deviceID: "phone")
+        service.requiresBackgroundExecution = false
+        service.continuedProcessingDriver = nil
+        let gate = TranscriptionGate()
+        service.transcribeImpl = { _, _ in await gate.wait(); return "Completed on Mac" }
+        let note = VoiceNote(audioFilePath: "file.m4a")
+        let run = Task { await service.requestTranscription(for: note) }
+        await gate.waitUntilArmed()
+        service.savedTranscriptionsDidEnterBackground()
+        #expect(service.backgroundStatusByNoteID[note.id] == nil)
+        #expect(!service.isPausedForBackground(noteID: note.id))
+        await gate.resume()
+        _ = await run.value
+        #expect(note.transcription == "Completed on Mac")
+    }
+
+    @Test @MainActor func repeatedActivationDoesNotReleaseRunningWorkingCopyAssertion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SegmentProgressStore(rootDirectory: root)
+        let source = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: source) }
+        let service = TranscriptionService(modelManager: LoadedModelManager(), segmentProgressStore: store)
+        service.requiresBackgroundExecution = true
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        service.continuedProcessingDriver = driver
+        let note = VoiceNote(audioFilePath: "")
+        _ = try store.importWorkingCopy(from: source, for: note.id)
+        let gate = TranscriptionGate()
+        var calls = 0
+        service.transcribeImpl = { _, _ in calls += 1; await gate.wait(); return "Completed import retry" }
+        let run = Task { await service.requestTranscription(for: note) }
+        await gate.waitUntilArmed()
+        await service.resumeSavedTranscriptionsInForeground()
+        await service.resumeSavedTranscriptionsInForeground()
+        #expect(driver.handle.completions.isEmpty)
+        #expect(driver.submissions.count == 1)
+        #expect(calls == 1)
+        await gate.resume()
+        _ = await run.value
+        #expect(driver.handle.completions == [true])
+    }
+
     @MainActor
     private func makeService(deviceID: String, now: Date = Date()) -> TranscriptionService {
         let service = TranscriptionService()
@@ -1257,6 +1470,7 @@ struct TranscriptionServiceTests {
         service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
         service.audioDurationProvider = { _ in 20 }
         service.heartbeatInterval = 3600
+        service.requiresBackgroundExecution = true
         return service
     }
 }

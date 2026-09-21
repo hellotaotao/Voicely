@@ -235,3 +235,25 @@ Codex 提了 3 条，讨论后只修第 1 条，另两条有意不修：
 3. **不修**：播放在等会话激活时被切走，激活返回后会话没被释放。窗口只有激活耗时（毫秒到几十毫秒），后果是播放会话多占到下一次停用或开始录音；要修得在共享会话状态上加计数，写错的后果（点播放没声音）比原问题大。这个窗口是 0.23.10 (2) 把激活挪到后台队列时引入的。
 
 验证：Mac Catalyst 单元测试 270 通过；iPhone 17 模拟器单元测试 270 通过。
+
+## 0.23.10 (4) 手动重转录后台支持（2026-09-20）
+
+- 用户确认旧版手动 Re-transcribe 锁屏后通常不能继续完成，本轮直接修复，不再要求复测旧问题。
+- 显式保存音频转录/Resume 独立申请 iOS 26 continued-processing task，实时报告已完成分段进度；录音实时转录与收尾类保持不变。
+- 申请被拒时前台仍可运行，进入后台安全暂停；过期取消当前解码，保留已完成分段和旧正文，回前台等待旧解码退出后恢复。未完成的当前分段需重新处理；短音频按原单次路径重跑。
+- 用户主动取消不自动恢复；系统暂停状态提供 Resume 按钮。GPU 配置明确降级前台，按实际已加载配置判断；Catalyst 不应用 iOS 挂起限制。
+- 修复重复前台激活提前结束 working-copy assertion 的竞争，以及显式本机恢复被 origin-device 五分钟等待挡住的问题。
+- 新增 9 项回归。首个 request(force:) 后台申请测试在旧行为下失败（submissions 0 / completions 空），实现后通过。定向 107 tests / 3 suites；最终 Mac Catalyst 279 tests / 33 suites；iPhone 17 / iOS 26.2 同样 279 tests / 33 suites，加 22 项 UI 测试，全部通过。
+- 主代理检查改动并完成独立任务内只读审查，无阻断性发现。已查看 UI 测试的取消后保留旧稿、分段预览截图；这些是夹具，不是后台系统授权或真实 ASR 的证据。
+- iOS Release `ARCHIVE SUCCEEDED`；archive/app/widget 均为 0.23.10 (4)。正常钥匙串环境 `codesign --verify --deep --strict` 通过。沙箱内信任链校验报 `CSSMERR_TP_NOT_TRUSTED`，正常环境复验通过。Release 仅有既有 verbose=false 条件表达式的不可达分支警告。
+- Archive：`/Users/tao/Library/Developer/Xcode/Archives/2026-09-20/Voicely 0.23.10 (4).xcarchive`。日志、截图及源码校验值：`/tmp/voicely-retranscribe-02310-4/`；构建前后核心源码 SHA-256 一致，`git diff --check` 通过。
+- 真实 iPhone 锁屏期间是否完成仍待此包验收；进程终止后的恢复继续走原 pending/checkpoint 路径，本次后台任务所有权不跨进程持久化。未 commit、push 或上传 TestFlight；用户仅要求实现与 archive。
+
+验证命令：
+
+```sh
+xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -parallel-testing-enabled NO -only-testing:VoicelyTests test
+xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,id=91A95B97-1254-429D-ADE2-D3375DDDD228' -parallel-testing-enabled NO test
+xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' -archivePath '/Users/tao/Library/Developer/Xcode/Archives/2026-09-20/Voicely 0.23.10 (4).xcarchive' archive
+codesign --verify --deep --strict --verbose=2 '/Users/tao/Library/Developer/Xcode/Archives/2026-09-20/Voicely 0.23.10 (4).xcarchive/Products/Applications/Voicely.app'
+```

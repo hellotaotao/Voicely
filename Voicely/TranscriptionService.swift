@@ -9,6 +9,7 @@ import AVFoundation
 import Foundation
 import os
 import SwiftData
+import UIKit
 import WhisperKit
 
 enum TranscriptionEngine {
@@ -69,6 +70,22 @@ class TranscriptionService: ObservableObject {
         get { telemetryState.snapshot }
         set { telemetryState.update(newValue) }
     }
+
+    var continuedProcessingDriver: (any ContinuedProcessingDriver)? = SystemContinuedProcessingDriver.shared
+
+    var requiresBackgroundExecution: Bool = {
+        #if targetEnvironment(macCatalyst)
+        false
+        #else
+        true
+        #endif
+    }()
+    private var runningSavedWorkingCopyIDs = Set<UUID>()
+    @Published private(set) var backgroundStatusByNoteID: [UUID: String] = [:]
+    private var savedTranscriptionNotes: [UUID: VoiceNote] = [:]
+    private var savedContinuations: [UUID: SavedTranscriptionContinuation] = [:]
+    private var backgroundPausedNoteIDs = Set<UUID>()
+    private var savedJobsAreInForeground = true
 
     var modelManager: ModelManager?
     var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil) }
@@ -290,7 +307,7 @@ class TranscriptionService: ObservableObject {
             return false
         }
 
-        if isLocallyTranscribing(note) { return false }
+        if isLocallyTranscribing(note) || pendingTranscriptionQueue[note.id] != nil || runningSavedWorkingCopyIDs.contains(note.id) { return false }
         if force || note.transcriptionOutcome == .failed {
             do {
                 try segmentProgressStore.resetProgressPreservingAttempt(for: note.id)
@@ -300,9 +317,11 @@ class TranscriptionService: ObservableObject {
             }
         }
         note.resumeCancelledTranscription(at: nowProvider())
+        savedTranscriptionNotes[note.id] = note
+        backgroundPausedNoteIDs.remove(note.id)
+        beginSavedContinuation(for: note)
         if note.audioFilePath.isEmpty, let workingCopy {
-            await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
-                .transcribe(note: note, sourceURL: workingCopy)
+            await transcribeSavedWorkingCopy(note, url: workingCopy)
             return true
         }
         let queuedAt = force || takeOver || note.transcriptionOutcome == .failed
@@ -318,11 +337,100 @@ class TranscriptionService: ObservableObject {
         return true
     }
 
+    func ownsSavedTranscription(noteID: UUID) -> Bool { savedTranscriptionNotes[noteID] != nil }
+    func isPausedForBackground(noteID: UUID) -> Bool { backgroundPausedNoteIDs.contains(noteID) }
+
+    private func beginSavedContinuation(for note: VoiceNote) {
+        guard requiresBackgroundExecution, savedContinuations[note.id] == nil, !backgroundPausedNoteIDs.contains(note.id) else { return }
+        let supportsBackground = modelManager?.loadedModelSupportsBackgroundTranscription ?? true
+        let continuation = SavedTranscriptionContinuation(
+            driver: savedJobsAreInForeground && supportsBackground ? continuedProcessingDriver : nil,
+            title: note.title,
+            onExpiration: { [weak self, weak note] in
+                guard let self, let note else { return }
+                self.pauseSavedTranscriptionForBackground(note)
+            })
+        savedContinuations[note.id] = continuation
+        if !supportsBackground {
+            backgroundStatusByNoteID[note.id] = "GPU transcription needs the app open. Progress is saved when the app goes into the background and resumes when you return."
+        } else if !continuation.isAvailable {
+            backgroundStatusByNoteID[note.id] = "Background execution is unavailable. Keep the app open; saved progress resumes when you return."
+        } else {
+            backgroundStatusByNoteID.removeValue(forKey: note.id)
+        }
+        if !savedJobsAreInForeground && !continuation.isAvailable { pauseSavedTranscriptionForBackground(note) }
+    }
+
+    private func finishSavedContinuation(for note: VoiceNote, remove: Bool = false) {
+        savedContinuations.removeValue(forKey: note.id)?.finish(
+            success: note.transcriptionState == .completed && note.transcriptionOutcome != .failed)
+        if remove || note.transcriptionState == .completed || isUserPaused(note) || isDiscarded(noteID: note.id) {
+            savedTranscriptionNotes.removeValue(forKey: note.id)
+            backgroundPausedNoteIDs.remove(note.id)
+            backgroundStatusByNoteID.removeValue(forKey: note.id)
+        }
+    }
+
+    private func pauseSavedTranscriptionForBackground(_ note: VoiceNote) {
+        guard savedTranscriptionNotes[note.id] != nil, !isUserPaused(note),
+              !isDiscarded(noteID: note.id) else { return }
+        backgroundPausedNoteIDs.insert(note.id)
+        if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
+        savedContinuations.removeValue(forKey: note.id)?.finish(success: false)
+        note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
+        backgroundStatusByNoteID[note.id] = "Transcription paused by iOS. Saved progress resumes when you return to the app."
+        do { try note.modelContext?.save() }
+        catch { note.markTranscriptionFailure("Could not save the paused state. Keep the app open. \(error.localizedDescription)") }
+    }
+
+    func savedTranscriptionsDidEnterBackground() {
+        savedJobsAreInForeground = false
+        guard requiresBackgroundExecution else { return }
+        for note in Array(savedTranscriptionNotes.values) where savedContinuations[note.id]?.isAvailable != true {
+            pauseSavedTranscriptionForBackground(note)
+        }
+    }
+
+    func resumeSavedTranscriptionsInForeground() async {
+        savedJobsAreInForeground = true
+        // A cancelled decoder may still be unwinding when scene activation arrives.
+        // Keep its engine ownership until it exits, then start a fresh attempt.
+        while activeNoteID.map({ backgroundPausedNoteIDs.contains($0) }) == true
+            || !runningSavedWorkingCopyIDs.isDisjoint(with: backgroundPausedNoteIDs) {
+            if Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard savedJobsAreInForeground else { return }
+        let notes = savedTranscriptionNotes.values.filter { activeNoteID != $0.id && !runningSavedWorkingCopyIDs.contains($0.id) }
+        for note in notes where !isUserPaused(note) && !isDiscarded(noteID: note.id) {
+            backgroundPausedNoteIDs.remove(note.id)
+            beginSavedContinuation(for: note)
+        }
+        await processPendingTranscriptions(notes: notes)
+        for note in notes where note.audioFilePath.isEmpty && ownsSavedTranscription(noteID: note.id)
+            && !isPausedForBackground(noteID: note.id) && !isUserPaused(note) {
+            if let url = segmentProgressStore.existingWorkingCopyURL(for: note.id) {
+                await transcribeSavedWorkingCopy(note, url: url)
+            }
+        }
+    }
+
+    private func transcribeSavedWorkingCopy(_ note: VoiceNote, url: URL) async {
+        guard runningSavedWorkingCopyIDs.insert(note.id).inserted else { return }
+        defer {
+            runningSavedWorkingCopyIDs.remove(note.id)
+            finishSavedContinuation(for: note)
+        }
+        await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
+            .transcribe(note: note, sourceURL: url)
+    }
+
     func cancelTranscription(for note: VoiceNote) {
         // Recording ownership includes the final flush, not a cancellable saved-note job.
         guard !localRecordingNoteIDs.contains(note.id) else { return }
         guard activeNoteID == note.id || note.transcriptionState == .queued || note.transcriptionState == .cancelled
             || (note.transcriptionState == .claimed && note.transcriptionOwnerDeviceID == currentDeviceID) else { return }
+        finishSavedContinuation(for: note, remove: true)
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         previewByNoteID.removeValue(forKey: note.id)
@@ -348,6 +456,7 @@ class TranscriptionService: ObservableObject {
     func isDiscarded(noteID: UUID) -> Bool { discardedNoteIDs.contains(noteID) }
     func discardTranscription(for note: VoiceNote) {
         discardedNoteIDs.insert(note.id)
+        finishSavedContinuation(for: note, remove: true)
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         previewByNoteID.removeValue(forKey: note.id)
@@ -386,6 +495,7 @@ class TranscriptionService: ObservableObject {
         let clamped = min(1, max(0, progress))
         guard progressByNoteID[noteID] != clamped else { return }
         progressByNoteID[noteID] = clamped
+        savedContinuations[noteID]?.update(progress: Double(clamped))
     }
 
     func endExternalTranscription(noteID: UUID) {
@@ -762,7 +872,7 @@ private extension TranscriptionService {
     }
 
     func processingAction(for note: VoiceNote, now: Date) -> ProcessingAction? {
-        guard !note.audioFilePath.isEmpty, !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
+        guard !note.audioFilePath.isEmpty, !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id), !isPausedForBackground(noteID: note.id) else {
             return nil
         }
 
@@ -802,7 +912,7 @@ private extension TranscriptionService {
             return false
         }
 
-        if note.transcriptionOriginDeviceID == currentDeviceID {
+        if savedTranscriptionNotes[note.id] != nil || note.transcriptionOriginDeviceID == currentDeviceID {
             return true
         }
 
@@ -895,6 +1005,9 @@ private extension TranscriptionService {
             return
         }
 
+        guard !isPausedForBackground(noteID: note.id) else { return }
+        if savedTranscriptionNotes[note.id] != nil { beginSavedContinuation(for: note) }
+        defer { finishSavedContinuation(for: note) }
         beginLocalTranscription(for: note, attemptID: attemptID)
         let session = beginTelemetrySession(noteID: note.id)
         defer { endTelemetrySession(session) }

@@ -100,8 +100,15 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newValue in
-            guard newValue == .active, !AppRuntime.isRunningTests else { return }
-            resumePendingImports()
+            guard !AppRuntime.isRunningTests else { return }
+            if newValue == .background { transcriptionService.savedTranscriptionsDidEnterBackground() }
+            if newValue == .active {
+                Task { @MainActor in
+                    await transcriptionService.resumeSavedTranscriptionsInForeground()
+                    await processQueuedTranscriptionsIfReady()
+                    resumePendingImports()
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             if !AppRuntime.isRunningTests { resumePendingImports() }
@@ -2116,6 +2123,14 @@ struct VoiceNoteDetailView: View {
 
     @ViewBuilder
     private var transcriptionStatusBody: some View {
+        if let message = transcriptionService.backgroundStatusByNoteID[note.id] {
+            Text(message).font(.footnote).foregroundStyle(.secondary)
+            if transcriptionService.isPausedForBackground(noteID: note.id) {
+                Button("Resume Transcription") { requestTranscription() }
+                    .buttonStyle(.bordered)
+                    .disabled(isLocallyTranscribing)
+            }
+        }
         if note.transcriptionState == .cancelled {
             Label(isLocallyTranscribing ? "Cancelling transcription…" : "Transcription cancelled",
                   systemImage: "xmark.circle")

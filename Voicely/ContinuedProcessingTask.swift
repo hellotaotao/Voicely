@@ -119,3 +119,52 @@ private final class SystemContinuedProcessingHandle: ContinuedProcessingHandle {
     }
 }
 #endif
+
+/// A saved-audio job owns one assertion independently of the recording final flush.
+@MainActor
+final class SavedTranscriptionContinuation {
+    private let driver: (any ContinuedProcessingDriver)?
+    private var identifier: String?
+    private var handle: (any ContinuedProcessingHandle)?
+    private var finished = false
+    private var progress: Double = 0
+    var isAvailable: Bool { !finished && (identifier != nil || handle != nil) }
+
+    init(driver: (any ContinuedProcessingDriver)?, title: String, onExpiration: @escaping () -> Void) {
+        self.driver = driver
+        let submitted = driver?.submit(title: "Transcribing saved audio", subtitle: title) { [weak self] handle in
+            guard let self, !self.finished else {
+                handle.complete(success: false)
+                return
+            }
+            debugLog("Saved transcription background task launched")
+            self.identifier = nil
+            self.handle = handle
+            handle.expirationHandler = { [weak self] in
+                guard let self, !self.finished else { return }
+                debugLog("Saved transcription background task expired")
+                onExpiration()
+                self.finish(success: false)
+            }
+            self.update(progress: self.progress)
+        }
+        if handle == nil, !finished { identifier = submitted }
+        debugLog("Saved transcription background request accepted: \(isAvailable)")
+    }
+
+    func update(progress: Double) {
+        self.progress = progress.isFinite ? min(max(progress, 0), 0.99) : 0
+        handle?.update(progress: self.progress, subtitle: "\(Int(self.progress * 100))% transcribed")
+    }
+
+    func finish(success: Bool) {
+        guard !finished else { return }
+        finished = true
+        if let identifier { driver?.cancel(identifier: identifier) }
+        identifier = nil
+        handle?.expirationHandler = nil
+        handle?.complete(success: success)
+        handle = nil
+        debugLog("Saved transcription background task finished; success: \(success)")
+    }
+}

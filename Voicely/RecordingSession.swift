@@ -51,15 +51,18 @@ final class RecordingFinalizationContinuation {
     private var handle: (any ContinuedProcessingHandle)?
     private var progressTask: Task<Void, Never>?
     private var isFinished = false
+    private var heartbeat: DecodeWorkHeartbeat
 
     init(
         driver: (any ContinuedProcessingDriver)?,
         title: String,
         subtitle: String,
+        decodeWork: @escaping () -> UInt64 = { 0 },
         progress: @escaping () -> Double
     ) {
         self.driver = driver
         self.progress = progress
+        heartbeat = DecodeWorkHeartbeat(decodeWork: decodeWork)
         let submitted = driver?.submit(title: title, subtitle: subtitle) { [weak self] handle in
             guard let self, !self.isFinished else {
                 handle.complete(success: false)
@@ -99,6 +102,7 @@ final class RecordingFinalizationContinuation {
         let value = progress()
         let clamped = value.isFinite ? min(max(value, 0), 0.99) : 0
         handle?.update(progress: clamped, subtitle: "\(Int((clamped * 100).rounded(.down)))% transcribed")
+        if heartbeat.decoderAdvanced() { handle?.advanceForWork() }
     }
 
     private func release(success: Bool) {
@@ -431,7 +435,8 @@ final class RecordingSession: ObservableObject {
         let continuation = RecordingFinalizationContinuation(
             driver: remainingSeconds >= Self.continuedProcessingThresholdSeconds ? continuedProcessingDriver : nil,
             title: "Finishing transcription",
-            subtitle: note.title
+            subtitle: note.title,
+            decodeWork: { [service = transcriptionService] in service.decodeWorkCount }
         ) { [weak capturedCoordinator, service = transcriptionService] in
             if let capturedCoordinator, !capturedCoordinator.requiresFullTranscription {
                 return capturedCoordinator.finalizationProgress

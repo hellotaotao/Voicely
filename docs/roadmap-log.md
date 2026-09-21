@@ -304,3 +304,38 @@ xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,id=91A95B97-1254
 验证：新增 `ContinuedProcessingProgressTests` 9 项。Mac Catalyst 306 tests / 38 suites 通过；iPhone 17 模拟器（`-parallel-testing-enabled NO`）306 tests / 38 suites 通过。时间戳进度能否让 dasd 满意只能真机验证。
 
 提交：工作区里的三批改动拆成三个提交。`6daf989` 是 0.23.10 (4) 原样——用 `/tmp/voicely-retranscribe-02310-4/source.patch` 还原，7 个源码文件的 SHA-256 与 archive 时记录一致，Mac Catalyst 279 tests / 33 suites，与当时记录相同；`3e1dd7f` 是 P-0b（297 / 37）；P-0c 为其后一个提交（306 / 38）。拆分后的最终工作区与拆分前逐字节一致。未 archive。
+
+## 0.23.11 (2) 重解期间的解码心跳（2026-09-21）
+
+用户装 0.23.11 (1)（设备日志 19:43:52 `bundleShortVersion = 0.23.11; bundleVersion = 1`），锁屏重转仍被收走。`sudo log collect --last 1h`：
+
+- 19:58:00 与 20:39:13 两次任务，dasd 在启动后 +17 s / +21 s 收到更新，之后 86 s / 57 s 无更新 → `marking stalled` → 用户离开前台瞬间 `AMNP` → `Suspending` → expiration → `success: 0`，下一秒 app `running-suspended`。
+- 两次停滞期间 app 均为 `running-active-Visible`（SpringBoard runningboard 记录），所以不是后台降速，是前台也有一分多钟没有可见进度。
+
+Mac 端取证：笔记库（`~/Library/Containers/com.hellotaotao.Voicely/.../default.store`，已通过 CloudKit 同步手机笔记）显示这三条长录音都用 `openai_whisper-large-v3_turbo_954MB` / Neural Engine，速度 0.20× / 0.52× / 0.74× 实时。音频取自 iCloud 容器 `recording_1789885222.680101.m4a`（2602 s），`ffmpeg -t 600` 截前 10 分钟做重放输入（放在 test host 的 `tmp/voicely-replay/saved.m4a`，另有 `saved-model.txt`、`saved-prompt.txt`）。
+
+测量（`SavedAudioReplayTests` + `transcribeWithWhisper` 里 DEBUG 下每次解码的 fallbacks/tokens/temperature/ratio/logprob 日志）见 stable-roadmap P-0d。门槛 2.0/2.4 对比用的临时开关已删除，生产仍为 2.0。
+
+改动：`TranscriptionService.decodeWorkCounter`（WhisperKit 回调里每步 +1）；`DecodeWorkHeartbeat`；`ContinuedProcessingHandle.advanceForWork()`（系统实现 +1 unit，封顶 9 900）；`SavedTranscriptionContinuation` 1 s 心跳任务、`RecordingFinalizationContinuation` 在已有 500 ms 上报里检查。
+
+验证：新增 3 项心跳测试；Mac Catalyst 310 tests / 39 suites（含 opt-in 真实模型重放）通过；iPhone 17 模拟器 310 tests / 39 suites 通过。真实模型重放：音频进度最长停顿 28.0 s，加心跳后系统可见最长停顿 0.7 s。重放输入已删除（它会让每次 Mac 单测多跑约 5 分钟），需要时按上面的命令重建。
+
+版本 0.23.11 (2)。未 commit、未 archive。
+
+### 0.23.11 (2) 心跳补救复审与修正（2026-09-21）
+
+用户授权在既有未提交修复上继续修改，不提交、不 archive、不上传。
+
+- 先将系统进度运算原样抽为 Foundation-only `ContinuedProcessingProgress`，新增回归确认旧实现到 9 900 后心跳无效，且 decoder 在输出验证/重试结束前已经对外报满。定向测试实际失败后实施修正。
+- 系统进度记录新增解码工作时可扩展总量，保留收尾预算，取消固定 99% 停更；仅成功结束才达到 100%，结束后忽略迟到更新。每次更新结束后的比例前进；Foundation 的总量/完成量分两次写入，不声称每个中间 KVO 事件严格单调。
+- `transcribeAudioOutcome` 在取消检查及输出验证之后才报完成，窗口/第一次 prompt pass 的结束不再直接表示片段完成；未改变分片长度、温度 fallback 数或识别质量阈值。
+- 修正 `SavedAudioReplayTests`：通过真实 request/continuation 及共享的 Foundation 进度运算记录提交值，不再用 50 ms token 轮询冒充系统进度。旧记录的 0.7 s 仅为 token 活动采样推算，不能用作新实现/iOS 接受进度的证据。模型加载时间独立报告。
+- Release 新增 `TranscriptionTiming` / `ContinuedProcessing` unified log，记录准备、VAD、首 token、各轮解码及任务生命周期/实际进度，不包含路径、prompt 或转录正文。无 token 的准备阶段尚不保证后台持续执行，先据新日志定位。
+- 独立只读定向 review 未发现阻断问题，建议的完成后忽略更新/取消不报满回归已加入。
+- 补测短音频路径发现完成后异步 onProgress 会把已清理的进度重新写成 1.0；回归先失败，再移除主线程内多余的 Task 排队，确保更新先于清理。
+- 最终验证：Mac Catalyst 与 iPhone 17 / iOS 26.2 均运行 320 项，318 通过、0 失败、2 项 opt-in 真实录音重放因未配置输入而跳过。iOS 27 首轮 319 项运行通过；收尾复跑未进入测试，主动中止该 runner 后使用 iOS 26.2 串行复验最终源码，不将其记为断言失败。
+- iOS Release `CODE_SIGNING_ALLOWED=NO build` 成功，产物版本 0.23.11 (2)；`git diff --check` 通过。无 archive、签名分发、commit 或上传。记录和测试日志位于 `/tmp/voicely-heartbeat-followup/`。真实 iPhone 锁屏及新版本真实录音重放仍待验。
+
+### 0.23.11 (2) 手动重转真机反馈（2026-09-22）
+
+用户确认测试的是已安装的 TestFlight 0.23.11 (2)，通过点击 Re-transcribe 启动；锁屏状态下进度已持续推进至 38%。这是手动路径的阶段性真机证据，最终完成及正文持久化尚未确认。自动恢复修复没有 archive 或发布，不属于本次真机验证范围。

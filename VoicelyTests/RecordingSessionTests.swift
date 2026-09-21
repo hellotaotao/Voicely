@@ -243,8 +243,10 @@ struct RecordingSessionTests {
         var expirationHandler: (() -> Void)?
         private(set) var progressUpdates: [Double] = []
         private(set) var completions: [Bool] = []
+        private(set) var workAdvances = 0
 
         func update(progress: Double, subtitle _: String) { progressUpdates.append(progress) }
+        func advanceForWork() { workAdvances += 1 }
         func complete(success: Bool) { completions.append(success) }
     }
 

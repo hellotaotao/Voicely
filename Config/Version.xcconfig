@@ -3,4 +3,4 @@
 // so the two can never drift out of sync (the App Store requires an extension's
 // version to match its host app's).
 MARKETING_VERSION = 0.23.11
-CURRENT_PROJECT_VERSION = 1
+CURRENT_PROJECT_VERSION = 2

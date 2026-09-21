@@ -55,6 +55,7 @@ enum TranscriptionOutcome {
 @MainActor
 class TranscriptionService: ObservableObject {
     typealias TranscribeImpl = (String, @escaping (Float) -> Void) async -> RawTranscription
+    nonisolated private static let transcriptionLog = Logger(subsystem: "com.hellotaotao.Voicely", category: "TranscriptionTiming")
 
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
@@ -72,6 +73,11 @@ class TranscriptionService: ObservableObject {
     }
 
     var continuedProcessingDriver: (any ContinuedProcessingDriver)? = SystemContinuedProcessingDriver.shared
+
+    /// Decoding steps Whisper has taken, across every pass and fallback. Background
+    /// tasks read it as proof of work while the audio position stands still.
+    nonisolated let decodeWorkCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+    var decodeWorkCount: UInt64 { decodeWorkCounter.withLock { $0 } }
 
     var requiresBackgroundExecution: Bool = {
         #if targetEnvironment(macCatalyst)
@@ -346,6 +352,7 @@ class TranscriptionService: ObservableObject {
         let continuation = SavedTranscriptionContinuation(
             driver: savedJobsAreInForeground && supportsBackground ? continuedProcessingDriver : nil,
             title: note.title,
+            decodeWork: { [weak self] in self?.decodeWorkCount ?? 0 },
             onExpiration: { [weak self, weak note] in
                 guard let self, let note else { return }
                 self.pauseSavedTranscriptionForBackground(note)
@@ -635,7 +642,12 @@ class TranscriptionService: ObservableObject {
         }
 
         let task = Task { [weak self] in
-            await self?.transcribeImpl(filePath, progressCallback)
+            await self?.transcribeImpl(filePath) { fraction in
+                // Decoder windows and prompted passes can finish before output
+                // validation or a retry. Only an accepted outcome completes audio.
+                let pending = fraction.isFinite ? min(max(fraction, 0), 0.99) : 0
+                progressCallback(pending)
+            }
         }
         currentTranscriptionTask = task
 
@@ -655,6 +667,7 @@ class TranscriptionService: ObservableObject {
                 // to surface for diagnosis — not as a calm "no speech".
                 return .whisperError("blank output")
             }
+            progressCallback(1)
             if ownsTelemetry, let duration = session.audioDuration {
                 recordProcessedAudio(start: 0, end: duration, session: session)
             }
@@ -666,6 +679,7 @@ class TranscriptionService: ObservableObject {
                 modelIdentifier: modelIdentifier
             ))
         case .noSpeech:
+            progressCallback(1)
             if ownsTelemetry, let duration = session.audioDuration {
                 recordProcessedAudio(start: 0, end: duration, session: session)
             }
@@ -1030,12 +1044,16 @@ private extension TranscriptionService {
         }
 
         // Resolve the actual file before routing. Cloud metadata can be absent or stale.
+        let preparationStart = ProcessInfo.processInfo.systemUptime
+        Self.transcriptionLog.notice("attempt=\(attemptID, privacy: .public) stage=filePreparationStarted")
         guard let url = await prepareAudioFileForReading(note.audioFilePath) else {
+            Self.transcriptionLog.notice("attempt=\(attemptID, privacy: .public) stage=fileUnavailable seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
             if stillOwnsAttempt() { handleUnavailableAudio(for: note) }
             return
         }
         guard stillOwnsAttempt() else { return }
         let resolvedDuration = await audioDurationProvider(url.path)
+        Self.transcriptionLog.notice("attempt=\(attemptID, privacy: .public) stage=filePreparationFinished seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
         guard stillOwnsAttempt() else { return }
         guard let resolvedDuration, resolvedDuration.isFinite, resolvedDuration > 0 else {
             note.completeTranscription()
@@ -1058,9 +1076,9 @@ private extension TranscriptionService {
         let hadExistingTranscript = LocalTranscriptFinalizer.finalizeTranscript(note.transcription) != nil
 
         let onProgress: (Float) -> Void = { [weak self] value in
-            Task { @MainActor in
-                self?.reportExternalProgress(value, for: noteID)
-            }
+            // This callback already runs on the main actor. Enqueueing another
+            // task can recreate progress after endLocalTranscription cleared it.
+            self?.reportExternalProgress(value, for: noteID)
         }
 
         var outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
@@ -1237,10 +1255,16 @@ private extension TranscriptionService {
             currentEngine = .whisperKit
             print("Using WhisperKit for transcription")
 
+            // Persist timings in Release without recording paths, prompts, or text.
+            let diagnosticID = UUID().uuidString
+            let preparationStart = ProcessInfo.processInfo.systemUptime
+            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=preparationStarted")
+
             guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
                 print("Failed to prepare audio file for transcription: \(filePath)")
                 return .audioUnavailable
             }
+            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=fileReady seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
 
 #if DEBUG
             let windowSamples = whisperKit.featureExtractor.windowSamples ?? Constants.defaultWindowSamples
@@ -1254,9 +1278,11 @@ private extension TranscriptionService {
             }
             updateProgressOnMain(0.01)
 
+            let vadStart = ProcessInfo.processInfo.systemUptime
             let containsProbableSpeech = await Task.detached(priority: .utility) {
                 NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
             }.value
+            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=vadFinished seconds=\(ProcessInfo.processInfo.systemUptime - vadStart) speech=\(containsProbableSpeech)")
             guard containsProbableSpeech else {
                 print("Skipping transcription because no probable speech was detected in audio file: \(filePath)")
                 updateProgressOnMain(1.0)
@@ -1342,6 +1368,12 @@ private extension TranscriptionService {
             let decode: (Bool) async throws -> String? = { [weak self] usePrompt in
                 var decodeOptions = baseDecodeOptions
                 decodeOptions.promptTokens = usePrompt ? promptTokens : nil
+                let passStart = ProcessInfo.processInfo.systemUptime
+                let firstCallback = OSAllocatedUnfairLock<Bool>(initialState: true)
+                Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passStarted prompted=\(usePrompt)")
+                defer {
+                    Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passEnded prompted=\(usePrompt) seconds=\(ProcessInfo.processInfo.systemUptime - passStart)")
+                }
                 let results = try await whisperKit.transcribe(
                     audioPath: audioPath,
                     decodeOptions: decodeOptions
@@ -1349,6 +1381,14 @@ private extension TranscriptionService {
                     guard let self else { return nil }
                     if self.cancelRequested || Task.isCancelled {
                         return false
+                    }
+                    self.decodeWorkCounter.withLock { $0 &+= 1 }
+                    let isFirst = firstCallback.withLock { first in
+                        defer { first = false }
+                        return first
+                    }
+                    if isFirst {
+                        Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=firstToken prompted=\(usePrompt) seconds=\(ProcessInfo.processInfo.systemUptime - passStart)")
                     }
                     var fraction = Float(whisperKit.progress.fractionCompleted)
                     if let timeTokenBegin, let singleWindowSeconds,
@@ -1368,11 +1408,18 @@ private extension TranscriptionService {
                     }
                     return nil
                 }
+                if let result = results.first {
+                    let timings = result.timings
+                    Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passMetrics audioLoading=\(timings.audioLoading) encoding=\(timings.encoding) prefill=\(timings.prefill) fallbacks=\(Int(timings.totalDecodingFallbacks)) tokens=\(Int(timings.totalDecodingLoops))")
+                    let ratio = result.segments.map(\.compressionRatio).max() ?? 0
+                    let logprob = result.segments.map(\.avgLogprob).min() ?? 0
+                    let temperature = result.segments.map(\.temperature).max() ?? 0
+                    Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=qualityMetrics ratio=\(ratio) logprob=\(logprob) temperature=\(temperature)")
+                }
                 return results.first?.text
             }
 
             let firstPassText = try await decode(promptTokens != nil)
-            updateProgressOnMain(1.0)
 
             if cancelRequested || Task.isCancelled {
                 return .cancelled
@@ -1427,7 +1474,8 @@ private extension TranscriptionService {
     }
 
     func smoothProgress(to target: Float, progressCallback: @escaping (Float) -> Void) {
-        let clamped = min(1.0, max(0.0, target))
+        // A completed decoder pass may still need validation and prompt-free retry.
+        let clamped = target.isFinite ? min(0.99, max(0.0, target)) : 0
         if clamped <= transcriptionProgress {
             return
         }

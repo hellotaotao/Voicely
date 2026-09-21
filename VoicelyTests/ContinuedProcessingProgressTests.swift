@@ -106,6 +106,221 @@ struct ContinuedProcessingProgressTests {
         #expect(service.progressByNoteID.isEmpty)
     }
 
+    // MARK: Decode work heartbeat
+
+    @Test @MainActor func workStillAdvancesAtTheEndWithoutFinishingTheTask() {
+        let reporter = ContinuedProcessingProgress()
+        reporter.update(0.99)
+        var previous = reporter.progress.fractionCompleted
+        for _ in 0..<500 {
+            let units = reporter.progress.completedUnitCount
+            reporter.advanceForWork()
+            #expect(reporter.progress.completedUnitCount > units)
+            #expect(reporter.progress.fractionCompleted > previous)
+            #expect(!reporter.progress.isFinished)
+            previous = reporter.progress.fractionCompleted
+        }
+        reporter.complete(success: true)
+        #expect(reporter.progress.isFinished)
+    }
+
+    @Test @MainActor func audioPositionAloneCannotFinishTheSystemTask() {
+        let reporter = ContinuedProcessingProgress()
+        reporter.update(1)
+        #expect(!reporter.progress.isFinished)
+        reporter.complete(success: false)
+        #expect(!reporter.progress.isFinished)
+    }
+
+    @Test @MainActor func completedTasksIgnoreLateProgressAndWork() {
+        for success in [false, true] {
+            let reporter = ContinuedProcessingProgress()
+            reporter.update(0.99)
+            reporter.advanceForWork()
+            reporter.complete(success: success)
+            let completed = reporter.progress.completedUnitCount
+            let total = reporter.progress.totalUnitCount
+            reporter.update(1)
+            reporter.advanceForWork()
+            reporter.complete(success: !success)
+            #expect(reporter.progress.completedUnitCount == completed)
+            #expect(reporter.progress.totalUnitCount == total)
+            #expect(reporter.progress.isFinished == success)
+        }
+    }
+
+    @Test @MainActor func pendingProgressHandlesInvalidPositionsWithoutRegressing() {
+        let reporter = ContinuedProcessingProgress()
+        reporter.update(0.5)
+        for fraction in [Double.nan, .infinity, -1, 0.2] { reporter.update(fraction) }
+        #expect(reporter.progress.completedUnitCount == 5_000)
+        #expect(reporter.progress.totalUnitCount == 10_000)
+    }
+
+    @Test @MainActor func decoderCompletionIsHeldUntilOutputValidationFinishes() async {
+        let model = TranscriptionServiceTests.ToggleableModelManager()
+        model.setLoaded(true)
+        let service = TranscriptionService(modelManager: model)
+        var values: [Float] = []
+        service.transcribeImpl = { _, progress in
+            progress(1)
+            #expect(values.allSatisfy { $0 < 1 })
+            // A prompt-free retry starts at zero after the first pass finished.
+            progress(0.2)
+            progress(1)
+            #expect(values.allSatisfy { $0 < 1 })
+            return .text("Validated transcript")
+        }
+        _ = await service.transcribeAudioOutcome(filePath: "/tmp/progress-test.caf") { values.append($0) }
+        #expect(values.last == 1)
+    }
+
+    @Test @MainActor func unusableOutputNeverReportsCompletedAudio() async {
+        let model = TranscriptionServiceTests.ToggleableModelManager()
+        model.setLoaded(true)
+        let service = TranscriptionService(modelManager: model)
+        var values: [Float] = []
+        service.transcribeImpl = { _, progress in
+            progress(1)
+            return .whisperError("repetitive output")
+        }
+        _ = await service.transcribeAudioOutcome(filePath: "/tmp/progress-test.caf") { values.append($0) }
+        #expect(!values.isEmpty)
+        #expect(values.allSatisfy { $0 < 1 })
+    }
+
+    @Test @MainActor func cancelledDecodeNeverReportsCompletedAudio() async {
+        let model = TranscriptionServiceTests.LoadedModelManager()
+        let service = TranscriptionService(modelManager: model)
+        var values: [Float] = []
+        service.transcribeImpl = { _, progress in
+            progress(1)
+            return .cancelled
+        }
+        _ = await service.transcribeAudioOutcome(filePath: "/tmp/progress-test.caf") { values.append($0) }
+        #expect(!values.isEmpty)
+        #expect(values.allSatisfy { $0 < 1 })
+    }
+
+    @Test @MainActor func shortSavedJobDoesNotRepublishProgressAfterCompletion() async {
+        let service = TranscriptionService(modelManager: TranscriptionServiceTests.LoadedModelManager())
+        let driver = RecordingProgressDriver()
+        service.requiresBackgroundExecution = true
+        service.continuedProcessingDriver = driver
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        service.audioDurationProvider = { _ in 20 }
+        service.transcribeImpl = { _, progress in
+            progress(0.5)
+            return .text("A complete saved transcript")
+        }
+        let note = VoiceNote(title: "Short", audioFilePath: "/tmp/progress-test.caf")
+        _ = await service.requestTranscription(for: note)
+        await Task.yield()
+        #expect(note.transcriptionOutcome == .transcribed)
+        #expect(driver.handle.completions == [true])
+        #expect(service.progressByNoteID[note.id] == nil)
+    }
+
+    @Test @MainActor func savedTimerRecordsRealProgressAt99PercentAndStopsOnExpiration() async {
+        let driver = RecordingProgressDriver()
+        let counter = WorkCounter()
+        var expired = false
+        let continuation = SavedTranscriptionContinuation(
+            driver: driver, title: "Meeting", decodeWork: { counter.steps },
+            heartbeatInterval: .milliseconds(20), onExpiration: { expired = true })
+        // Preparation without decoder activity must not fabricate progress.
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(driver.handle.samples.count == 1)
+        continuation.update(progress: 0.99)
+        let units = driver.handle.reporter.progress.completedUnitCount
+        counter.steps += 1
+        await waitUntil(.seconds(2)) { driver.handle.reporter.progress.completedUnitCount > units }
+        #expect(driver.handle.reporter.progress.completedUnitCount > units)
+        #expect(!driver.handle.reporter.progress.isFinished)
+        driver.handle.expirationHandler?()
+        let samples = driver.handle.samples.count
+        counter.steps += 1
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(expired)
+        #expect(driver.handle.completions == [false])
+        #expect(driver.handle.samples.count == samples)
+    }
+
+    @Test @MainActor func finalizationTimerRecordsRealProgressAt99Percent() async {
+        let driver = RecordingProgressDriver()
+        let counter = WorkCounter()
+        let continuation = RecordingFinalizationContinuation(
+            driver: driver, title: "Finishing", subtitle: "Meeting",
+            decodeWork: { counter.steps }) { 0.99 }
+        counter.steps += 1
+        await waitUntil(.seconds(3)) { driver.handle.reporter.progress.completedUnitCount > 9_900 }
+        #expect(driver.handle.reporter.progress.completedUnitCount > 9_900)
+        #expect(!driver.handle.reporter.progress.isFinished)
+        continuation.finish(success: true)
+        #expect(driver.handle.reporter.progress.isFinished)
+    }
+
+    @MainActor final class WorkCounter { var steps: UInt64 = 0 }
+
+    @Test @MainActor func heartbeatSeesOnlyNewDecoderSteps() {
+        let counter = WorkCounter()
+        var heartbeat = DecodeWorkHeartbeat(decodeWork: { counter.steps })
+        let beforeAnyWork = heartbeat.decoderAdvanced()
+        counter.steps += 3
+        let afterWork = heartbeat.decoderAdvanced()
+        let withoutNewWork = heartbeat.decoderAdvanced()
+        #expect(!beforeAnyWork)
+        #expect(afterWork)
+        #expect(!withoutNewWork)
+    }
+
+    private func waitUntil(_ timeout: Duration, _ condition: () -> Bool) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    @Test @MainActor func savedTaskMovesWhileTheDecoderWorksAndStopsWhenItStops() async {
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        let counter = WorkCounter()
+        let continuation = SavedTranscriptionContinuation(
+            driver: driver, title: "Meeting", decodeWork: { counter.steps },
+            heartbeatInterval: .milliseconds(20), onExpiration: {})
+
+        // Same audio re-decoded: the position stands still but tokens keep coming.
+        counter.steps += 40
+        await waitUntil(.seconds(2)) { driver.handle.workAdvances >= 1 }
+        #expect(driver.handle.workAdvances >= 1)
+        #expect(driver.handle.progressUpdates.allSatisfy { $0 == 0 })
+
+        // A decoder that produces nothing is not reported as working.
+        let idle = driver.handle.workAdvances
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(driver.handle.workAdvances == idle)
+
+        continuation.finish(success: true)
+        counter.steps += 40
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(driver.handle.workAdvances == idle)
+    }
+
+    @Test @MainActor func finalizationTaskMovesWhileTheDecoderWorks() async {
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        let counter = WorkCounter()
+        let continuation = RecordingFinalizationContinuation(
+            driver: driver, title: "Finishing transcription", subtitle: "Meeting",
+            decodeWork: { counter.steps }) { 0.4 }
+
+        counter.steps += 40
+        await waitUntil(.seconds(3)) { driver.handle.workAdvances >= 1 }
+        #expect(driver.handle.workAdvances >= 1)
+
+        let idle = driver.handle.workAdvances
+        try? await Task.sleep(for: .milliseconds(1_200))
+        #expect(driver.handle.workAdvances == idle)
+        continuation.finish(success: true)
+    }
+
     // MARK: Recording finalization
 
     @MainActor final class Samples { var values: [Double] = [] }

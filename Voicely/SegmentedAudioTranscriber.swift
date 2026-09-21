@@ -33,6 +33,13 @@ final class SegmentedAudioTranscriber {
     /// sidecar intact for later resume. Wired to background-time expiration.
     var shouldStopForBackground: () -> Bool = { false }
 
+    /// The segment being decoded, so the decoder's progress through it can be
+    /// reported as progress through the whole file. iOS expires a continued
+    /// processing task that reports nothing for ~30 s, and one 29 s segment can
+    /// take longer than that to decode on a locked phone.
+    private var activeSegment: (noteID: UUID, start: Int64, end: Int64, total: Int64)?
+    private var reportedProgress: Float = 0
+
     /// Files longer than one WhisperKit window get sliced + a resume sidecar.
     private let singlePassFrameLimit: (Double) -> Int64 = { sampleRate in
         Int64(30.0 * sampleRate)
@@ -45,7 +52,10 @@ final class SegmentedAudioTranscriber {
         self.progressStore = progressStore
         self.nowProvider = nowProvider
         self.transcribeSegmentOutcome = { [weak self] url in
-            await transcriptionService.transcribeAudioOutcome(filePath: url.path, telemetrySession: self?.telemetrySession)
+            await transcriptionService.transcribeAudioOutcome(
+                filePath: url.path,
+                progressCallback: { fraction in self?.reportSegmentProgress(fraction) },
+                telemetrySession: self?.telemetrySession)
         }
     }
 
@@ -224,7 +234,9 @@ final class SegmentedAudioTranscriber {
         var accumulatedDuration: TimeInterval = 0
 
         transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
-        transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
+        reportedProgress = Float(start) / Float(info.totalFrames)
+        transcriptionService.reportExternalProgress(reportedProgress, for: noteID)
+        defer { activeSegment = nil }
         while start < info.totalFrames {
             if transcriptionService.isDiscarded(noteID: noteID) { return }
             if transcriptionService.isRunCancelled(noteID: noteID) || transcriptionService.isUserPaused(note) || Task.isCancelled {
@@ -268,6 +280,7 @@ final class SegmentedAudioTranscriber {
                 continue
             }
 
+            activeSegment = (noteID, start, end, info.totalFrames)
             var outcome = await transcribeSegmentOutcome(segmentURL)
             var retries = 0
             while case .whisperError = outcome, retries < 2,
@@ -276,6 +289,7 @@ final class SegmentedAudioTranscriber {
                 outcome = await transcribeSegmentOutcome(segmentURL)
             }
             try? FileManager.default.removeItem(at: segmentURL)
+            activeSegment = nil
 
             if transcriptionService.isDiscarded(noteID: noteID) { return }
             if transcriptionService.isRunCancelled(noteID: noteID) || transcriptionService.isUserPaused(note) || Task.isCancelled {
@@ -314,7 +328,7 @@ final class SegmentedAudioTranscriber {
                                      failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
             transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
-            transcriptionService.reportExternalProgress(Float(start) / Float(info.totalFrames), for: noteID)
+            reportProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
 
         // Re-transcription that produced no new text: keep the previous transcript.
@@ -341,6 +355,21 @@ final class SegmentedAudioTranscriber {
             note.transcriptionOutcome = .transcribed
         }
         note.clearTransientTranscriptionFlags()
+    }
+
+    /// Maps the decoder's progress through the active segment onto the file.
+    /// Retries restart the decoder at zero, so only forward movement is reported.
+    func reportSegmentProgress(_ fraction: Float) {
+        guard let segment = activeSegment, segment.total > 0 else { return }
+        let within = Double(min(max(fraction, 0), 1))
+        let frame = Double(segment.start) + within * Double(segment.end - segment.start)
+        reportProgress(Float(frame / Double(segment.total)), for: segment.noteID)
+    }
+
+    private func reportProgress(_ value: Float, for noteID: UUID) {
+        guard value > reportedProgress else { return }
+        reportedProgress = value
+        transcriptionService.reportExternalProgress(value, for: noteID)
     }
 
     private func pause(_ note: VoiceNote) {

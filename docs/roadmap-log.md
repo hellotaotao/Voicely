@@ -287,3 +287,20 @@ codesign --verify --deep --strict --verbose=2 '/Users/tao/Library/Developer/Xcod
 xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -only-testing:VoicelyTests test
 xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,id=91A95B97-1254-429D-ADE2-D3375DDDD228' -parallel-testing-enabled NO -only-testing:VoicelyTests test
 ```
+
+## 0.23.11 (1) 后台任务停滞判定（2026-09-21，续）
+
+0.23.10 (4) 已由用户上传 TestFlight 并装机（设备日志 appstored 记录确认 `version: 0.23.10 bundleVersion: 4`）。锁屏重转 20 多分钟录音，锁屏进度约 4% 时弹 "Transcription failed"。
+
+取证：用户执行 `sudo log collect --device-udid 00008150-001924623CB9401C --last 3h`（`--last 30m` 那份没覆盖测试时间）。窗口内 5 个 `finalizeRecording.*` continued-processing 任务：
+
+- 11:13:52、11:15:20、12:11:42 三次：submit 后立即 launch，随后 dasd `Task has not reported progress within expected cadence, marking stalled`（距上次更新 31.6–41.2 秒）→ `Activity Progress Policy … tracker.health == 2` → `AMNP` → `Suspending` → app 收到 expiration → `complete with success: 0`。三次分别在启动后 83 秒、54 秒、122 秒被收。
+- 11:28:06：22 秒后 `CANCELED`；12:21:02：2 秒后 app 自己 `complete with success: 0`。这两次原因日志里看不出（app 的 `print` 不进系统日志），可能是用户在系统界面取消或回前台后的正常收尾，未追。
+
+根因见 stable-roadmap P-0c：WhisperKit `TranscribeTask` 只在窗口结束时写 `progress.completedUnitCount`，单窗口分片解码期间进度恒为 0。
+
+改动：`TranscriptionService.decodedWindowFraction` / `singleWindowSeconds`，解码回调里取 `max(WhisperKit 进度, 时间戳进度)`；`SegmentedAudioTranscriber.reportSegmentProgress`（单调前进）；`IncrementalTranscriptionCoordinator.reportSliceProgress` + `finalizationProgress` 计入解码中分片；`finishSavedContinuation` 成功判定改为"完成且有正文"。
+
+验证：新增 `ContinuedProcessingProgressTests` 9 项。Mac Catalyst 306 tests / 38 suites 通过；iPhone 17 模拟器（`-parallel-testing-enabled NO`）306 tests / 38 suites 通过。时间戳进度能否让 dasd 满意只能真机验证。
+
+提交：工作区里的三批改动拆成三个提交。`6daf989` 是 0.23.10 (4) 原样——用 `/tmp/voicely-retranscribe-02310-4/source.patch` 还原，7 个源码文件的 SHA-256 与 archive 时记录一致，Mac Catalyst 279 tests / 33 suites，与当时记录相同；`3e1dd7f` 是 P-0b（297 / 37）；P-0c 为其后一个提交（306 / 38）。拆分后的最终工作区与拆分前逐字节一致。未 archive。

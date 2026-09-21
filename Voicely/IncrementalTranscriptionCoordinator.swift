@@ -91,7 +91,15 @@ final class IncrementalTranscriptionCoordinator {
         let settledFrames = slices.reduce(AVAudioFramePosition(0)) { total, slice in
             slice.failure == nil || slice.text != nil ? total + (slice.endFrame - slice.startFrame) : total
         }
-        return min(1, max(0, Double(settledFrames) / Double(finalFrame)))
+        // The slice being decoded is never settled yet — a tail slice is not in
+        // `slices` and a retried one is still marked failed — so its partial
+        // frames are not counted twice. Without them the reported value only
+        // moves once per slice, and iOS expires a continued processing task that
+        // reports nothing for ~30 s.
+        let decodingFrames = decodingSlice.map {
+            AVAudioFramePosition(Double($0.end - $0.start) * $0.fraction)
+        } ?? 0
+        return min(1, max(0, Double(settledFrames + decodingFrames) / Double(finalFrame)))
     }
 
     /// Attempts per failed slice after recording stops, on top of the live attempt.
@@ -211,6 +219,9 @@ final class IncrementalTranscriptionCoordinator {
     /// The live slice being transcribed right now. `lastSegmentEndFrame` already
     /// covers it, but it joins `slices` only once transcription returns.
     private var inFlightSlice: (start: AVAudioFramePosition, end: AVAudioFramePosition)?
+    /// The slice Whisper is decoding right now and how far through it the
+    /// decoder has reached (0...1), for live progress while it runs.
+    private var decodingSlice: (start: AVAudioFramePosition, end: AVAudioFramePosition, fraction: Double)?
     private var finalFrame: AVAudioFramePosition?
 
     private var targetIntervalFrames: AVAudioFramePosition {
@@ -397,6 +408,8 @@ final class IncrementalTranscriptionCoordinator {
         // neural VAD gate before invoking Whisper, so checking twice would
         // just double the inference cost per segment.
         let result: SliceResult
+        decodingSlice = (startFrame, endFrame, 0)
+        defer { decodingSlice = nil }
         if let override = transcribeOverride {
             if let text = await override(sliceURL.path) {
                 result = Self.sanitizedSegmentText(text).map(SliceResult.text) ?? .silent
@@ -404,7 +417,11 @@ final class IncrementalTranscriptionCoordinator {
                 result = .failed(.transcription(nil))
             }
         } else {
-            switch await transcriptionService.transcribeAudioOutcome(filePath: sliceURL.path, telemetrySession: session) {
+            let outcome = await transcriptionService.transcribeAudioOutcome(
+                filePath: sliceURL.path,
+                progressCallback: { [weak self] fraction in self?.reportSliceProgress(fraction) },
+                telemetrySession: session)
+            switch outcome {
             case .transcribed(let transcription):
                 result = Self.sanitizedSegmentText(transcription.text).map(SliceResult.text) ?? .silent
             case .noSpeech:
@@ -425,6 +442,15 @@ final class IncrementalTranscriptionCoordinator {
                 end: Double(endFrame) / recordingSampleRate, session: session)
         }
         return result
+    }
+
+    /// Records how far the decoder has reached through the slice it is decoding.
+    /// Retries restart the decoder at zero, so only forward movement counts.
+    func reportSliceProgress(_ fraction: Float) {
+        guard let slice = decodingSlice else { return }
+        let clamped = Double(min(max(fraction, 0), 1))
+        guard clamped > slice.fraction else { return }
+        decodingSlice = (slice.start, slice.end, clamped)
     }
 
     /// Live slices can fail for transient reasons, e.g. while the phone is locked.

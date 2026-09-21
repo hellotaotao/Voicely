@@ -362,8 +362,14 @@ class TranscriptionService: ObservableObject {
     }
 
     private func finishSavedContinuation(for note: VoiceNote, remove: Bool = false) {
-        savedContinuations.removeValue(forKey: note.id)?.finish(
-            success: note.transcriptionState == .completed && note.transcriptionOutcome != .failed)
+        // A run that reached the end with a few unreadable slices still produced a
+        // transcript; the note names the gaps, and a lock screen "failed" for it
+        // reads as if nothing was transcribed. Only a finished run with no text
+        // at all is reported to the system as failed.
+        let finishedWithText = note.transcriptionState == .completed
+            && (note.transcriptionOutcome != .failed
+                || LocalTranscriptFinalizer.finalizeTranscript(note.transcription) != nil)
+        savedContinuations.removeValue(forKey: note.id)?.finish(success: finishedWithText)
         if remove || note.transcriptionState == .completed || isUserPaused(note) || isDiscarded(noteID: note.id) {
             savedTranscriptionNotes.removeValue(forKey: note.id)
             backgroundPausedNoteIDs.remove(note.id)
@@ -1321,6 +1327,15 @@ private extension TranscriptionService {
                 promptTokens = nil
             }
 
+            // WhisperKit advances `progress` only when a decode window finishes, and
+            // every slice here is a single window, so it sits at zero for the whole
+            // decode. The timestamp tokens Whisper emits as it walks the audio are
+            // the only signal that moves in between. iOS expires a continued
+            // processing task that reports nothing for ~30 s, and a 29 s slice can
+            // take longer than that to decode on a locked phone.
+            let timeTokenBegin = whisperKit.tokenizer?.specialTokens.timeTokenBegin
+            let singleWindowSeconds = Self.singleWindowSeconds(of: audioURL)
+
             // Whisper invokes this once per decoded token; only hop to the
             // main actor when the fraction moved enough to be visible.
             let lastReportedFraction = OSAllocatedUnfairLock<Float>(initialState: 0)
@@ -1330,12 +1345,17 @@ private extension TranscriptionService {
                 let results = try await whisperKit.transcribe(
                     audioPath: audioPath,
                     decodeOptions: decodeOptions
-                ) { _ in
+                ) { decoding in
                     guard let self else { return nil }
                     if self.cancelRequested || Task.isCancelled {
                         return false
                     }
-                    let fraction = Float(whisperKit.progress.fractionCompleted)
+                    var fraction = Float(whisperKit.progress.fractionCompleted)
+                    if let timeTokenBegin, let singleWindowSeconds,
+                       let decoded = Self.decodedWindowFraction(
+                           tokens: decoding.tokens, timeTokenBegin: timeTokenBegin, windowSeconds: singleWindowSeconds) {
+                        fraction = max(fraction, Float(decoded))
+                    }
                     let shouldPublish = lastReportedFraction.withLock { last in
                         guard fraction >= last + 0.01 || fraction >= 1.0 else { return false }
                         last = fraction
@@ -1450,6 +1470,29 @@ extension TranscriptionService {
             return .whisperError("repetitive output")
         }
         return .text(text)
+    }
+
+    /// Whisper timestamps are 20 ms steps from the start of the window.
+    nonisolated static let timestampTokenSeconds = 0.02
+
+    /// How far into a single decode window the decoder has reached, from the
+    /// latest timestamp token. Nil when no timestamp has been emitted yet.
+    nonisolated static func decodedWindowFraction(tokens: [Int], timeTokenBegin: Int, windowSeconds: Double) -> Double? {
+        guard windowSeconds > 0,
+              let latest = tokens.lazy.filter({ $0 >= timeTokenBegin }).max() else { return nil }
+        let seconds = Double(latest - timeTokenBegin) * timestampTokenSeconds
+        return min(1, max(0, seconds / windowSeconds))
+    }
+
+    /// Length of audio that decodes as one Whisper window, or nil when it spans
+    /// several. Timestamps restart in each window, so they only measure progress
+    /// through a single one.
+    nonisolated static func singleWindowSeconds(of url: URL) -> Double? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let sampleRate = file.processingFormat.sampleRate
+        guard sampleRate > 0 else { return nil }
+        let seconds = Double(file.length) / sampleRate
+        return seconds > 0 && seconds <= 30.5 ? seconds : nil
     }
 
     /// Why a prompted pass produced nothing usable. Separating a prompt echo from

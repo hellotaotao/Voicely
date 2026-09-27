@@ -221,6 +221,14 @@ Suspending ... - required criterion is not satisfied.
 
 真机验收：新包中保留一个未完成的重转任务，重启 App 触发自动恢复，不再点 Re-transcribe，直接锁屏；核对后台任务是否获批、锁屏期间 checkpoint 是否推进。自动化测试不能证明 iOS 实际批准或维持后台运行。
 
+### P-0f 🧪 iOS 去掉 GPU 计算选项和 Benchmark 页（2026-09-27，未发布）
+
+iOS 在 App 进后台或锁屏后会中止 GPU 任务：CoreML 直接抛 `Insufficient Permission (to submit GPU work from background)`，不会自动退到 CPU；iOS 26 的后台 GPU entitlement 目前只支持 iPad。录音中的实时转录（`IncrementalTranscriptionCoordinator`）对此没有防护，选 GPU 时锁屏期间的分段会失败，停止后才重试。
+
+改动：iOS/iPadOS 的 Encoder/Decoder Picker 只剩 CPU 和 Neural，Settings 不再显示 Run Benchmark（只剩 ANE 和 CPU 可比，没有意义）；Mac Catalyst 没有后台限制，GPU 和 Benchmark 都保留。计算单元本来就不持久化，启动总是默认 Neural，没有旧设置要迁移。`loadedModelSupportsBackgroundTranscription` 保留作兜底。
+
+真机验收（可选）：本项目从未实测过"GPU + 锁屏"的实际表现，外部证据见 Apple Developer Forums thread 757715。
+
 ### P-1 ⚠️ 转录指标：time ratio 与 speed 一直停在 "Measuring"
 
 re-transcribe / 整文件转录时这两个值出不来；live transcription 正常。根因是分段路径没接遥测会话。

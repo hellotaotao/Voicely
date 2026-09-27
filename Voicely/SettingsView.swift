@@ -176,6 +176,8 @@ struct SettingsView: View {
                             Divider().background(VoicelyTheme.hairline)
                             reloadButton
                         }
+                        #if targetEnvironment(macCatalyst)
+                        // Only the Mac offers GPU, so only there is there anything worth benchmarking.
                         Divider().background(VoicelyTheme.hairline)
                         NavigationLink {
                             BenchmarkView().environmentObject(modelManager)
@@ -184,6 +186,7 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier(AccessibilityIdentifiers.Settings.runBenchmarkLink)
+                        #endif
                     }
 
                     privacyNoticeCard
@@ -510,7 +513,11 @@ struct SettingsView: View {
             Spacer()
             Picker("", selection: selection) {
                 Text("CPU").tag(MLComputeUnits.cpuOnly)
+                #if targetEnvironment(macCatalyst)
+                // iOS aborts GPU work once the app is backgrounded or the screen locks,
+                // which would stall transcription during a locked-screen recording.
                 Text("GPU").tag(MLComputeUnits.cpuAndGPU)
+                #endif
                 Text("Neural").tag(MLComputeUnits.cpuAndNeuralEngine)
             }
             .pickerStyle(.menu)

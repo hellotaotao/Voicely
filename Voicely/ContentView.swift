@@ -634,7 +634,7 @@ struct ContentView: View {
         }
 
         transcriptionService.setModelManager(modelManager)
-        await modelManager.fetchModels(includeRemote: false)
+        Task.detached(priority: .utility) { RetiredWhisperModels.removeDownloadedFiles() }
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
         recordingSession.recoverInterruptedFinalizations(in: voiceNotes)
 
@@ -645,9 +645,9 @@ struct ContentView: View {
 
         consumePendingStartRecordingQuickActionIfNeeded()
 
-        if !transcriptionService.isWhisperAvailable() {
+        if !transcriptionService.isEngineAvailable() {
             Task {
-                let didLoadModel = await transcriptionService.loadWhisperModel()
+                let didLoadModel = await transcriptionService.loadSpeechModel()
                 if didLoadModel {
                     await processQueuedTranscriptionsIfReady()
                 }
@@ -660,7 +660,7 @@ struct ContentView: View {
     private func processQueuedTranscriptionsIfReady() async {
         transcriptionService.setModelManager(modelManager)
 
-        guard transcriptionService.isWhisperAvailable() else {
+        guard transcriptionService.isEngineAvailable() else {
             return
         }
 
@@ -734,10 +734,10 @@ struct ContentView: View {
             try modelContext.save()
             selectedNoteID = note.id
 
-            if !transcriptionService.isWhisperAvailable() {
-                _ = await transcriptionService.loadWhisperModel()
+            if !transcriptionService.isEngineAvailable() {
+                _ = await transcriptionService.loadSpeechModel()
             }
-            guard transcriptionService.isWhisperAvailable() else { return }
+            guard transcriptionService.isEngineAvailable() else { return }
             await runImportTranscription { await $0.transcribe(note: note, sourceURL: workingCopy) }
         } catch {
             if let unpublishedWorkingCopy {
@@ -811,10 +811,10 @@ struct ContentView: View {
     private func resumePendingImports() {
         guard !transcriptionService.segmentProgressStore.listPendingNoteIDs().isEmpty else { return }
         Task { @MainActor in
-            if !transcriptionService.isWhisperAvailable() {
-                _ = await transcriptionService.loadWhisperModel()
+            if !transcriptionService.isEngineAvailable() {
+                _ = await transcriptionService.loadSpeechModel()
             }
-            guard transcriptionService.isWhisperAvailable() else { return }
+            guard transcriptionService.isEngineAvailable() else { return }
             await runImportTranscription { await $0.resumePending(notes: voiceNotes) }
         }
     }
@@ -1082,7 +1082,6 @@ struct RecordingControls: View {
     let togglePauseQuickActionID: UUID
     let recordingInterruptionID: UUID
     let onManageModels: () -> Void
-    @State private var showingModelPicker = false
 
     private var controlPhase: RecordingControlPhase {
         session.controlPhase
@@ -1108,10 +1107,7 @@ struct RecordingControls: View {
     }
 
     private var selectedModelDisplayName: String {
-        guard let selectedModel = modelManager?.selectedModel, !selectedModel.isEmpty else {
-            return "Small"
-        }
-        return ModelManager.displayNameWithLanguageTag(for: selectedModel)
+        ModelManager.displayName(for: modelManager?.selectedModel ?? Qwen3Backend.current.modelIdentifier)
     }
 
     private var statusTint: Color {
@@ -1120,26 +1116,12 @@ struct RecordingControls: View {
         switch modelManager.modelState {
         case .loaded: return .green
         case .loading, .downloading, .prewarming: return .orange
-        case .unloaded: return modelManager.isModelAvailableOffline(modelManager.selectedModel) ? .secondary : .accentColor
+        case .unloaded: return modelManager.isModelDownloaded ? .secondary : .accentColor
         }
     }
 
     private var recordingTint: Color {
         audioService.isPaused ? .orange : .red
-    }
-
-    private var quickSelectableModels: [String] {
-        guard let modelManager else { return [] }
-        return modelManager.localModels.sorted { lhs, rhs in
-            ModelManager.displayName(for: lhs).localizedCaseInsensitiveCompare(ModelManager.displayName(for: rhs)) == .orderedAscending
-        }
-    }
-
-    private var modelPickerMessage: String {
-        if quickSelectableModels.isEmpty {
-            return "Download a model in Settings to make it available here."
-        }
-        return "Choose an offline model for new transcriptions."
     }
 
     var body: some View {
@@ -1159,24 +1141,6 @@ struct RecordingControls: View {
         .shadow(color: Color.black.opacity(0.28), radius: 22, x: 0, y: 12)
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: controlPhase)
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: audioService.isPaused)
-        .confirmationDialog(
-            "Transcription Model",
-            isPresented: $showingModelPicker,
-            titleVisibility: .visible
-        ) {
-            if !quickSelectableModels.isEmpty {
-                ForEach(quickSelectableModels, id: \.self) { model in
-                    Button(modelPickerButtonTitle(for: model)) {
-                        selectModel(model)
-                    }
-                    .disabled(isModelLoading)
-                }
-            }
-            Button("Manage Models…") { onManageModels() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(modelPickerMessage)
-        }
         .onChange(of: startRecordingQuickActionID) { _, _ in
             session.startRecordingFromQuickAction()
         }
@@ -1235,7 +1199,7 @@ struct RecordingControls: View {
     private var idleLayout: some View {
         HStack(spacing: 10) {
             Button {
-                showingModelPicker = true
+                onManageModels()
             } label: {
                 HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -1251,7 +1215,7 @@ struct RecordingControls: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 6)
-                    Image(systemName: "chevron.up.chevron.down")
+                    Image(systemName: "chevron.right")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -1269,7 +1233,7 @@ struct RecordingControls: View {
                 .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Selected Model \(selectedModelDisplayName)")
+            .accessibilityLabel("Speech Model \(selectedModelDisplayName)")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
 
             recordButton
@@ -1398,32 +1362,6 @@ struct RecordingControls: View {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    private func modelPickerButtonTitle(for model: String) -> String {
-        let displayName = ModelManager.displayNameWithLanguageTag(for: model)
-        if modelManager?.selectedModel == model {
-            return "✓ \(displayName)"
-        }
-        return displayName
-    }
-
-    private func selectModel(_ model: String) {
-        guard let modelManager else { return }
-
-        if modelManager.selectedModel == model && modelManager.isModelLoaded() {
-            return
-        }
-
-        if modelManager.selectedModel != model {
-            modelManager.selectedModel = model
-        }
-
-        modelManager.modelState = .unloaded
-        modelManager.errorMessage = nil
-
-        Task {
-            await modelManager.loadModel(model)
-        }
-    }
 }
 
 // MARK: - Voice Note Detail
@@ -1468,7 +1406,7 @@ struct VoiceNoteDetailView: View {
         guard let selectedModel = transcriptionService.modelManager?.selectedModel, !selectedModel.isEmpty else {
             return nil
         }
-        return ModelManager.displayNameWithLanguageTag(for: selectedModel)
+        return ModelManager.displayName(for: selectedModel)
     }
 
     private var isLocallyTranscribing: Bool {
@@ -1541,10 +1479,7 @@ struct VoiceNoteDetailView: View {
 
         return TranscriptionTelemetrySnapshot.inactive(
             modelName: modelName,
-            computeRoute: TranscriptionComputeRoute(
-                encoderUnits: transcriptionService.modelManager?.encoderComputeUnits ?? .cpuAndNeuralEngine,
-                decoderUnits: transcriptionService.modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
-            )
+            computeRoute: TranscriptionComputeRoute(backend: transcriptionService.modelManager?.backend ?? .current)
         )
     }
 

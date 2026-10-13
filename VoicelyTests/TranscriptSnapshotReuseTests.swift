@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct TranscriptSnapshotReuseTests {
     @Test func eachSegmentBuildsOneSnapshotForCheckpointAndPreview() async throws {
-        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
         let store = SegmentedAudioTestSupport.makeStore()
         defer {
             try? FileManager.default.removeItem(at: url)
@@ -28,14 +28,14 @@ struct TranscriptSnapshotReuseTests {
     }
 
     @Test func resumeReusesSavedSnapshotAndPersistsNewTextBeforePause() async throws {
-        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 90)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 45)
         let store = SegmentedAudioTestSupport.makeStore()
         defer {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(at: store.directory)
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
-        store.save(.init(lastFrame: 29 * 16_000, totalFrames: 90 * 16_000,
+        store.save(.init(lastFrame: 14 * 16_000, totalFrames: 45 * 16_000,
                          accumulatedText: "saved\ntext", failedRanges: [], updatedAt: Date()), for: note.id)
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
         var snapshots: [String] = []
@@ -52,11 +52,11 @@ struct TranscriptSnapshotReuseTests {
         #expect(snapshots == ["saved\ntext\nnew"])
         let checkpoint = try #require(store.load(for: note.id))
         #expect(checkpoint.accumulatedText == snapshots[0])
-        #expect(checkpoint.lastFrame == 58 * 16_000)
+        #expect(checkpoint.lastFrame == 28 * 16_000)
         #expect(note.transcriptionState == .queued)
     }
     @Test func extractionFailurePublishesCheckpointBeforeNextSegment() async throws {
-        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
         let store = SegmentedAudioTestSupport.makeStore()
         defer {
             try? FileManager.default.removeItem(at: url)

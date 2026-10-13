@@ -53,12 +53,7 @@ enum AccessibilityIdentifiers {
         static let activeModelCard = "ActiveModelCard"
         static let modelPicker = "ModelPicker"
         static let languageSection = "LanguageSettingsSection"
-        static let transcriptionSection = "TranscriptionSettingsSection"
-        static let computeSection = "ComputeSettingsSection"
         static let aboutSection = "AboutSettingsSection"
         static let speechLanguagePicker = "SpeechLanguagePicker"
-        static let customPromptField = "CustomPromptField"
-        static let browseModelsLink = "BrowseModelsLink"
-        static let runBenchmarkLink = "RunBenchmarkLink"
     }
 }

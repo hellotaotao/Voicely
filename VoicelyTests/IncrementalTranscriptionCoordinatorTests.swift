@@ -154,12 +154,12 @@ struct IncrementalTranscriptionCoordinatorTests {
 
     // MARK: Helpers
 
-    @Test func defaultIntervalHelperUsesWhisperSafeCadence() {
-        #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 29)
-        #expect(IncrementalTranscriptionTiming.minimumCutSeconds == 15)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 29)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 29)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 29)
+    @Test func defaultIntervalHelperUsesEngineSafeCadence() {
+        #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 14)
+        #expect(IncrementalTranscriptionTiming.minimumCutSeconds == 7)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 14)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 14)
+        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 14)
     }
 
     @Test func storedIntervalChoicesNoLongerChangeRuntimeCadence() throws {
@@ -168,11 +168,11 @@ struct IncrementalTranscriptionCoordinatorTests {
         defaults.removePersistentDomain(forName: suiteName)
         defaults.set(20, forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey)
 
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 29)
+        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 14)
 
         defaults.set(30, forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey)
 
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 29)
+        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 14)
 
         defaults.removePersistentDomain(forName: suiteName)
     }
@@ -185,10 +185,10 @@ struct IncrementalTranscriptionCoordinatorTests {
 
         let migratedSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded(in: defaults)
 
-        #expect(migratedSeconds == 29)
+        #expect(migratedSeconds == 14)
         #expect(migratedSeconds != 10)
-        #expect(defaults.integer(forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey) == 29)
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 29)
+        #expect(defaults.integer(forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey) == 14)
+        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 14)
 
         defaults.removePersistentDomain(forName: suiteName)
     }
@@ -239,11 +239,11 @@ struct IncrementalTranscriptionCoordinatorTests {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 30.0, amplitude: 0.08)
         ])
-        // Analysis window starts at minimumCutSeconds (15 s); silence at
-        // 4.0–4.8 s into the window is 19.0–19.8 s into the recording.
+        // Analysis window starts at minimumCutSeconds (7 s); silence at
+        // 2.0–2.8 s into the window is 9.0–9.8 s into the recording.
         let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
-            seconds: 14,
-            silentRanges: [4.0..<4.8]
+            seconds: 7,
+            silentRanges: [2.0..<2.8]
         ))
 
         let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
@@ -253,8 +253,9 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        #expect(cutFrame > 304_000)
-        #expect(cutFrame <= 316_800)
+        #expect(cutFrame > 144_000)
+        // The silence ends on a VAD frame boundary, up to one frame past 9.8 s.
+        #expect(cutFrame <= 156_800 + 576)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -264,8 +265,8 @@ struct IncrementalTranscriptionCoordinatorTests {
             (seconds: 30.0, amplitude: 0.08)
         ])
         let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
-            seconds: 14,
-            silentRanges: [2.0..<3.0, 8.0..<9.0]
+            seconds: 7,
+            silentRanges: [1.0..<2.0, 4.0..<5.0]
         ))
 
         let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
@@ -276,8 +277,8 @@ struct IncrementalTranscriptionCoordinatorTests {
         )
 
         // Equal-confidence silences: the later one wins so less audio carries over.
-        #expect(cutFrame > 368_000)
-        #expect(cutFrame <= 384_000)
+        #expect(cutFrame > 176_000)
+        #expect(cutFrame <= 192_000 + 576)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -287,7 +288,7 @@ struct IncrementalTranscriptionCoordinatorTests {
             (seconds: 30.0, amplitude: 0.08)
         ])
         let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
-            seconds: 14,
+            seconds: 7,
             silentRanges: []
         ))
 
@@ -298,8 +299,8 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        // Batch is capped at targetSegmentSeconds (29 s = 464 000 frames).
-        #expect(cutFrame == 464_000)
+        // Batch is capped at targetSegmentSeconds (14 s = 224 000 frames).
+        #expect(cutFrame == 224_000)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -309,7 +310,7 @@ struct IncrementalTranscriptionCoordinatorTests {
             (seconds: 40.0, amplitude: 0.08)
         ])
         let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
-            seconds: 14,
+            seconds: 7,
             silentRanges: []
         ))
 
@@ -320,8 +321,8 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        // Overshoot past one batch carries over instead of producing a >30 s chunk.
-        #expect(cutFrame == 464_000)
+        // Overshoot past one batch carries over instead of producing a >15 s chunk.
+        #expect(cutFrame == 224_000)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -441,7 +442,7 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func finishedTelemetryDoesNotRestartDuringFinalFlush() async throws {
-        let url = try makeSilentCAF(seconds: 60)
+        let url = try makeSilentCAF(seconds: 30)
         defer { try? FileManager.default.removeItem(at: url) }
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
@@ -451,12 +452,12 @@ struct IncrementalTranscriptionCoordinatorTests {
             return "unexpected"
         }
         coordinator.finishTelemetry()
-        let text = await coordinator.stop(currentFrame: 60 * 16_000)
+        let text = await coordinator.stop(currentFrame: 30 * 16_000)
         #expect(text.isEmpty)
     }
 
     @Test @MainActor func stopAccumulatesTranscriptFromSegments() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 70)
+        let pcmURL = try makeSilentCAF(seconds: 40)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -464,14 +465,14 @@ struct IncrementalTranscriptionCoordinatorTests {
         )
         coordinator.transcribeOverride = { @Sendable _ in "hello" }
 
+        await coordinator.transcribeSegment(upToFrame: 240_000)
         await coordinator.transcribeSegment(upToFrame: 480_000)
-        await coordinator.transcribeSegment(upToFrame: 960_000)
 
         #expect(coordinator.accumulatedTranscript == "hello\nhello")
     }
 
     @Test @MainActor func stopWaitsForInFlightSegmentAndPendingFinalSegment() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 70)
+        let pcmURL = try makeSilentCAF(seconds: 40)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -483,13 +484,13 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
 
         let segmentTask = Task { @MainActor in
-            await coordinator.transcribeSegment(upToFrame: 480_000)
+            await coordinator.transcribeSegment(upToFrame: 240_000)
         }
         await harness.waitForCallCount(1)
 
         let stopRecorder = StopResultRecorder()
         let stopTask = Task { @MainActor in
-            let transcript = await coordinator.stop(currentFrame: 960_000)
+            let transcript = await coordinator.stop(currentFrame: 480_000)
             await stopRecorder.setTranscript(transcript)
             return transcript
         }
@@ -536,39 +537,39 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func finalFlushDrainsBacklogInEngineSizedWindows() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 75)
+        let pcmURL = try makeSilentCAF(seconds: 36)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
         let recorder = SliceDurationRecorder()
         coordinator.transcribeOverride = { @Sendable path in await recorder.record(path) }
 
-        _ = await coordinator.stop(currentFrame: 75 * 16_000)
+        _ = await coordinator.stop(currentFrame: 36 * 16_000)
 
         let durations = await recorder.durations
-        #expect(durations == [29, 29, 17])
+        #expect(durations == [14, 14, 8])
         #expect(!coordinator.requiresFullTranscription)
     }
 
     @Test @MainActor func sliceWhisperRejectedLiveIsMarkedAtStopWithoutDecodingAgain() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 75)
+        let pcmURL = try makeSilentCAF(seconds: 36)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
-        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         // Live: slice 1 succeeds, slice 2 fails. Stop: only the tail is decoded.
         let script = ScriptedSliceResults(["first", nil, "third"])
         coordinator.transcribeOverride = { @Sendable _ in await script.next() }
 
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
         await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
-        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
         #expect(coordinator.failedSliceCount == 1)
         #expect(coordinator.accumulatedTranscript == "first")
-        #expect(coordinator.remainingAudioSeconds(upTo: 75 * 16_000) == 17)
+        #expect(coordinator.remainingAudioSeconds(upTo: 36 * 16_000) == 8)
 
-        let transcript = await coordinator.stop(currentFrame: 75 * 16_000)
+        let transcript = await coordinator.stop(currentFrame: 36 * 16_000)
 
-        let gap = SegmentedAudioTranscriber.placeholder(forStart: 29 * 16_000, end: 58 * 16_000, sampleRate: 16_000)
+        let gap = SegmentedAudioTranscriber.placeholder(forStart: 14 * 16_000, end: 28 * 16_000, sampleRate: 16_000)
         #expect(transcript == "first\n\(gap)\nthird")
         #expect(!coordinator.requiresFullTranscription)
         #expect(coordinator.unrecoveredSliceCount == 1)
@@ -582,33 +583,33 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func sliceThatNeverReachedWhisperIsDecodedAtStopInItsOriginalPosition() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 75)
+        let pcmURL = try makeSilentCAF(seconds: 36)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let service = TranscriptionService()
-        let modelManager = SwitchableModelManager()
+        let modelManager = SwitchableModelManager(backend: .coreML)
         service.setModelManager(modelManager)
         var decoded = 0
         var engineThrows = false
         service.transcribeImpl = { _, _ in
-            if engineThrows { return .whisperError(TranscriptionService.engineFailurePrefix + "GPU work refused") }
+            if engineThrows { return .engineError(TranscriptionService.engineFailurePrefix + "GPU work refused") }
             decoded += 1
             return .text("slice \(decoded)")
         }
         let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
-        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         var published: [String] = []
         coordinator.transcriptCallback = { published.append($0) }
 
         // The model is still loading for slice 1; the engine throws on slice 2.
-        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
         modelManager.loaded = true
         engineThrows = true
-        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
+        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
         engineThrows = false
         #expect(coordinator.failedSliceCount == 2)
-        #expect(coordinator.remainingAudioSeconds(upTo: 75 * 16_000) == 75)
+        #expect(coordinator.remainingAudioSeconds(upTo: 36 * 16_000) == 36)
 
-        let transcript = await coordinator.stop(currentFrame: 75 * 16_000)
+        let transcript = await coordinator.stop(currentFrame: 36 * 16_000)
 
         // Decode order was the tail, then slices 1 and 2 again.
         #expect(transcript == "slice 2\nslice 3\nslice 1")
@@ -620,62 +621,62 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func sliceTheEngineKeepsRejectingIsRetriedOnceThenSettledAsGap() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 40)
+        let pcmURL = try makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let service = TranscriptionService()
-        let modelManager = SwitchableModelManager()
+        let modelManager = SwitchableModelManager(backend: .coreML)
         modelManager.loaded = true
         service.setModelManager(modelManager)
         var calls = 0
         service.transcribeImpl = { _, _ in
             calls += 1
             return calls == 1 ? .text("first slice")
-                : .whisperError(TranscriptionService.engineFailurePrefix + "GPU work refused")
+                : .engineError(TranscriptionService.engineFailurePrefix + "GPU work refused")
         }
         let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
 
-        let transcript = await coordinator.stop(currentFrame: 40 * 16_000)
+        let transcript = await coordinator.stop(currentFrame: 25 * 16_000)
 
-        let gap = SegmentedAudioTranscriber.placeholder(forStart: 29 * 16_000, end: 40 * 16_000, sampleRate: 16_000)
+        let gap = SegmentedAudioTranscriber.placeholder(forStart: 14 * 16_000, end: 25 * 16_000, sampleRate: 16_000)
         #expect(transcript == "first slice\n\(gap)")
         #expect(calls == 3)  // slice 1, the tail, and one retry of the tail
         #expect(!coordinator.requiresFullTranscription)
         #expect(coordinator.unrecoveredSliceCount == 1)
         #expect(coordinator.finalizationProgress == 1)
-        #expect(coordinator.remainingAudioSeconds(upTo: 40 * 16_000) == 0)
+        #expect(coordinator.remainingAudioSeconds(upTo: 25 * 16_000) == 0)
     }
 
     @Test @MainActor func remainingAudioIncludesTheSliceStillBeingTranscribed() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 40)
+        let pcmURL = try makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
-        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         let harness = SegmentTranscriptionHarness()
         coordinator.transcribeOverride = { @Sendable path in await harness.transcribe(path) }
 
-        let live = Task { @MainActor in await coordinator.transcribeSegment(upToFrame: 30 * 16_000) }
+        let live = Task { @MainActor in await coordinator.transcribeSegment(upToFrame: 15 * 16_000) }
         await harness.waitForCallCount(1)
 
-        // The 29 s slice is still in flight when recording stops at 31 s.
-        #expect(coordinator.remainingAudioSeconds(upTo: 31 * 16_000) == 31)
+        // The 14 s slice is still in flight when recording stops at 16 s.
+        #expect(coordinator.remainingAudioSeconds(upTo: 16 * 16_000) == 16)
 
         await harness.resumeFirstCall()
         await live.value
-        #expect(coordinator.remainingAudioSeconds(upTo: 31 * 16_000) == 2)
+        #expect(coordinator.remainingAudioSeconds(upTo: 16 * 16_000) == 2)
     }
 
     @Test @MainActor func sliceThatKeepsFailingIsMarkedInPlaceInsteadOfWholeFileRecovery() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 40)
+        let pcmURL = try makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
         let script = ScriptedSliceResults(["first slice"])
         coordinator.transcribeOverride = { @Sendable _ in await script.next() }
 
-        let transcript = await coordinator.stop(currentFrame: 40 * 16_000)
+        let transcript = await coordinator.stop(currentFrame: 25 * 16_000)
 
-        let gap = SegmentedAudioTranscriber.placeholder(forStart: 29 * 16_000, end: 40 * 16_000, sampleRate: 16_000)
+        let gap = SegmentedAudioTranscriber.placeholder(forStart: 14 * 16_000, end: 25 * 16_000, sampleRate: 16_000)
         #expect(transcript == "first slice\n\(gap)")
         #expect(!coordinator.requiresFullTranscription)
         #expect(coordinator.unrecoveredSliceCount == 1)
@@ -684,13 +685,13 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func sliceThatCannotBeDecodedStillHandsRecordingToQueue() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 40)
+        let pcmURL = try makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         // No model is loaded, so every attempt reports the model as unavailable.
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
 
-        let transcript = await coordinator.stop(currentFrame: 40 * 16_000)
+        let transcript = await coordinator.stop(currentFrame: 25 * 16_000)
 
         #expect(transcript.isEmpty)
         #expect(coordinator.requiresFullTranscription)
@@ -698,7 +699,7 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func stopTranscribesFinalTailShorterThanMinimumChunk() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 40)
+        let pcmURL = try makeSilentCAF(seconds: 25)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -706,10 +707,10 @@ struct IncrementalTranscriptionCoordinatorTests {
         )
         coordinator.transcribeOverride = { @Sendable _ in "hello" }
 
-        // First segment cuts at one full batch (~29 s), leaving a tail
+        // First segment cuts at one full batch (~14 s), leaving a tail
         // shorter than a batch when the recording stops at 40 s.
-        await coordinator.transcribeSegment(upToFrame: 480_000)
-        let transcript = await coordinator.stop(currentFrame: 640_000)
+        await coordinator.transcribeSegment(upToFrame: 240_000)
+        let transcript = await coordinator.stop(currentFrame: 320_000)
 
         #expect(transcript == "hello\nhello")
 
@@ -717,7 +718,7 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func stopQueuedBehindInFlightSegmentTranscribesShortTail() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 40)
+        let pcmURL = try makeSilentCAF(seconds: 25)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -729,14 +730,14 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
 
         let segmentTask = Task { @MainActor in
-            await coordinator.transcribeSegment(upToFrame: 480_000)
+            await coordinator.transcribeSegment(upToFrame: 240_000)
         }
         await harness.waitForCallCount(1)
 
         // Stop while the first segment is still transcribing; the remaining
         // tail is shorter than the minimum chunk but must not be dropped.
         let stopTask = Task { @MainActor in
-            await coordinator.stop(currentFrame: 640_000)
+            await coordinator.stop(currentFrame: 320_000)
         }
         try await Task.sleep(nanoseconds: 50_000_000)
 
@@ -751,7 +752,7 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     @Test @MainActor func transcriptCallbackPublishesAccumulatedTranscript() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 70)
+        let pcmURL = try makeSilentCAF(seconds: 40)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -766,15 +767,15 @@ struct IncrementalTranscriptionCoordinatorTests {
             updates.append(transcript)
         }
 
+        await coordinator.transcribeSegment(upToFrame: 240_000)
         await coordinator.transcribeSegment(upToFrame: 480_000)
-        await coordinator.transcribeSegment(upToFrame: 960_000)
 
         #expect(updates == ["first", "first\nsecond"])
         #expect(coordinator.accumulatedTranscript == "first\nsecond")
     }
 
     @Test @MainActor func noAudioPlaceholderDoesNotPolluteAccumulatedTranscript() async throws {
-        let pcmURL = try makeSilentCAF(seconds: 30)
+        let pcmURL = try makeSilentCAF(seconds: 15)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: service,
@@ -782,7 +783,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         )
         coordinator.transcribeOverride = { @Sendable _ in " [no audio] " }
 
-        await coordinator.transcribeSegment(upToFrame: 480_000)
+        await coordinator.transcribeSegment(upToFrame: 240_000)
 
         #expect(coordinator.accumulatedTranscript.isEmpty)
     }

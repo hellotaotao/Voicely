@@ -19,9 +19,16 @@ let all = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: I
 let cacheDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Caches/qwen3-speech/models/aufklarer/Qwen3-ASR-CoreML")
 let loadStart = Date()
-// No GPU anywhere: the configuration a locked iPhone is limited to.
+// Default is no GPU anywhere: the configuration a locked iPhone is limited to.
+// COMPUTE_UNITS=all|cpuAndGPU|cpuOnly overrides it for Mac comparisons.
+let units: MLComputeUnits = switch ProcessInfo.processInfo.environment["COMPUTE_UNITS"] {
+case "all": .all
+case "cpuAndGPU": .cpuAndGPU
+case "cpuOnly": .cpuOnly
+default: .cpuAndNeuralEngine
+}
 let model = try await CoreMLASRModel.fromPretrained(
-    encoderComputeUnits: .cpuAndNeuralEngine, decoderComputeUnits: .cpuAndNeuralEngine,
+    encoderComputeUnits: units, decoderComputeUnits: units,
     cacheDir: cacheDir, offlineMode: true)
 try model.warmUp()
 FileHandle.standardError.write(Data("loaded in \(Date().timeIntervalSince(loadStart)) s\n".utf8))

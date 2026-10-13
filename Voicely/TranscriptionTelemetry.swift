@@ -92,6 +92,17 @@ struct TranscriptionComputeRoute: Equatable {
     let encoderUnits: MLComputeUnits
     let decoderUnits: MLComputeUnits
 
+    init(encoderUnits: MLComputeUnits, decoderUnits: MLComputeUnits) {
+        self.encoderUnits = encoderUnits
+        self.decoderUnits = decoderUnits
+    }
+
+    /// MLX runs the whole model on the GPU; CoreML is pinned off it.
+    init(backend: Qwen3Backend) {
+        let units: MLComputeUnits = backend == .mlx ? .cpuAndGPU : .cpuAndNeuralEngine
+        self.init(encoderUnits: units, decoderUnits: units)
+    }
+
     var summary: String {
         if encoderUnits == decoderUnits {
             return Self.displayName(for: encoderUnits)

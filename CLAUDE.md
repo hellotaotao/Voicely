@@ -34,12 +34,13 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 
 ## Architecture
 
-**Voicely** is a SwiftUI iOS/Mac Catalyst app for voice recording with on-device transcription using WhisperKit.
+**Voicely** is a SwiftUI iOS/Mac Catalyst app for voice recording with on-device transcription using Qwen3-ASR 0.6B.
 
 ### Core Services (all `@MainActor`)
 
-- **ModelManager** – Downloads, loads, and manages WhisperKit CoreML models. Persists selected model in UserDefaults. Posts `Notification.Name.modelLoadedNotification` when ready.
-- **TranscriptionService** – Orchestrates transcription via WhisperKit. Depends on ModelManager for the loaded model. Supports cancellation, progress smoothing, and batch processing of pending notes.
+- **ModelManager** – Downloads, loads, and deletes the Qwen3-ASR model and publishes its state. One model per device. Posts `Notification.Name.modelLoadedNotification` when ready.
+- **Qwen3ASRModelStore** (`Qwen3TranscriptionEngine.swift`, an actor) – Owns the loaded model and runs every inference. `Qwen3Backend` picks the runtime: MLX on the GPU on Apple-silicon Macs, CoreML on CPU + Neural Engine everywhere else (iOS takes the GPU away from a backgrounded app). Audio is always sliced to ≤14 s before it reaches the model.
+- **TranscriptionService** – Orchestrates transcription via the model store. Depends on ModelManager for the loaded model. Supports cancellation, progress smoothing, and batch processing of pending notes.
 - **AudioRecordingService** – Handles AVAudioRecorder, microphone permissions, and recording state. Saves audio to iCloud Documents.
 - **AudioPlayerService** – Plays back recorded audio files.
 - **CloudStorageManager** – Singleton managing iCloud Documents for audio file sync and NSMetadataQuery for sync status.
@@ -52,17 +53,16 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 
 ### Key Dependencies
 
-- **WhisperKit** (argmaxinc) – On-device speech recognition via CoreML
-- **swift-transformers** (huggingface) – Tokenization support
+- **speech-swift** (vendored subset in `Vendor/speech-swift`, see its `PATCHES.md`) – Qwen3-ASR on MLX and CoreML
+- **mlx-swift** (ml-explore) – GPU runtime for the Mac backend; building it needs Xcode's Metal Toolchain component (`xcodebuild -downloadComponent MetalToolchain`)
+- **swift-transformers** (huggingface) – Hugging Face Hub downloads
 
 ### Views
 
 - **ContentView** – Main recording/playback UI with note list
-- **SettingsView** – Model selection, language, custom prompts
-- **WhisperKitModelsView** – Model download and management UI
+- **SettingsView** – Model download/delete, speech language, diagnostics
 - **CloudKitSettingsView** – iCloud sync configuration
 - **SyncStatusView** – Visual sync status indicator
-- **BenchmarkView** – Performance benchmarking UI
 
 ## Testing
 

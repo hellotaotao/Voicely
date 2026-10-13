@@ -337,7 +337,7 @@ class AudioRecordingService: ObservableObject {
 
         pendingM4AURL = m4aURL
 
-        // Target format: 16 kHz Float32 mono (WhisperKit native)
+        // Target format: 16 kHz Float32 mono (what the speech model takes)
         let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 16000,

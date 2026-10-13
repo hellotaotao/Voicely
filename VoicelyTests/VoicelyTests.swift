@@ -16,7 +16,7 @@ struct VoicelyTests {
 
     @Test @MainActor func cancelTranscriptionReturnsNilAndStopsUpdates() async {
         let service = TranscriptionService()
-        service.setModelManager(LoadedModelManager())
+        service.setModelManager(LoadedModelManager(backend: .coreML))
 
         service.transcribeImpl = { _, _ in
             for _ in 0..<10 {
@@ -72,19 +72,4 @@ struct VoicelyTests {
         #expect(resolvedTime == 30)
         #expect(state.pendingTime == nil)
     }
-
-    @Test func selectingAlreadyLoadedModelKeepsLoadedState() {
-        let keptState = ModelManager.selectionStateAfterPickingModel(
-            "openai_whisper-small",
-            loadedModelIdentifier: "openai_whisper-small"
-        )
-        #expect(keptState == .loaded)
-
-        let resetState = ModelManager.selectionStateAfterPickingModel(
-            "openai_whisper-large-v3_turbo_954MB",
-            loadedModelIdentifier: "openai_whisper-small"
-        )
-        #expect(resetState == .unloaded)
-    }
-
 }

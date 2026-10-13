@@ -13,7 +13,7 @@ import SwiftData
 struct TranscriptionServiceTests {
     @Test func ordinaryRepeatedChecklistIsPreserved() {
         let text = "When recording starts, check the recording status. When recording pauses, check the recording timer. When recording resumes, check the recording timer again. When recording stops, check the recording file. When the recording file opens, check the beginning and the end of the recording."
-        if case .text(let result) = TranscriptionService.validatedWhisperOutput(text) {
+        if case .text(let result) = TranscriptionService.validatedEngineOutput(text) {
             #expect(result == text)
         } else {
             Issue.record("A normal checklist must not be rejected for repeated terminology")
@@ -22,21 +22,21 @@ struct TranscriptionServiceTests {
 
     @Test func repeatedWhisperOutputIsNotAcceptedAsSuccess() {
         let text = "First segment. " + String(repeating: "Claude Code, ", count: 80)
-        if case .whisperError = TranscriptionService.validatedWhisperOutput(text) {} else {
+        if case .engineError = TranscriptionService.validatedEngineOutput(text) {} else {
             Issue.record("Degenerate decoder output must not replace the transcript")
         }
     }
 
     @Test func repeatedUnicodeWhisperOutputIsNotAcceptedAsSuccess() {
         let text = "First segment. " + String(repeating: "ḕ", count: 80)
-        if case .whisperError = TranscriptionService.validatedWhisperOutput(text) {} else {
+        if case .engineError = TranscriptionService.validatedEngineOutput(text) {} else {
             Issue.record("Repeated Unicode output must be rejected")
         }
     }
 
     @Test func ordinaryWhisperOutputIsPreserved() {
         let text = "The first meeting starts at three. The second meeting starts at four."
-        if case .text(let result) = TranscriptionService.validatedWhisperOutput(text) {
+        if case .text(let result) = TranscriptionService.validatedEngineOutput(text) {
             #expect(result == text)
         } else {
             Issue.record("Ordinary speech must be preserved")
@@ -101,7 +101,7 @@ struct TranscriptionServiceTests {
 
         #expect(result?.text == "hello")
         #expect((result?.duration ?? -1) >= 0)
-        #expect(result?.modelIdentifier == "openai_whisper-small")
+        #expect(result?.modelIdentifier == Qwen3Backend.coreML.modelIdentifier)
         #expect(service.isTranscribing == false)
         #expect(service.transcriptionProgress == 0.0)
     }
@@ -131,7 +131,7 @@ struct TranscriptionServiceTests {
 
     @Test @MainActor func transcribeAudioReturnsNilWhenModelNotLoaded() async {
         let service = TranscriptionService()
-        service.setModelManager(UnloadedModelManager())
+        service.setModelManager(UnloadedModelManager(backend: .coreML))
         service.transcribeImpl = { _, _ in "hello" }
 
         let result = await service.transcribeAudio(filePath: "file.m4a")
@@ -163,7 +163,7 @@ struct TranscriptionServiceTests {
 
         #expect(note.transcription == "Transcribed text")
         #expect(note.transcriptionState == .completed)
-        #expect(note.transcriptionModelIdentifier == "openai_whisper-small")
+        #expect(note.transcriptionModelIdentifier == Qwen3Backend.coreML.modelIdentifier)
         #expect(service.activeNoteID == nil)
     }
 
@@ -267,14 +267,13 @@ struct TranscriptionServiceTests {
     @Test @MainActor func requestTranscriptionUsesLatestModelManagerState() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = TranscriptionService()
-        let modelManager = ToggleableModelManager()
-        modelManager.selectedModel = "openai_whisper-small"
+        let modelManager = ToggleableModelManager(backend: .coreML)
         modelManager.setLoaded(false)
         service.setModelManager(modelManager)
         service.deviceIDProvider = { "phone" }
         service.nowProvider = { now }
         service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
-        service.audioDurationProvider = { _ in 20 }
+        service.audioDurationProvider = { _ in 10 }
         service.transcribeImpl = { _, _ in "Queued result" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
@@ -295,7 +294,7 @@ struct TranscriptionServiceTests {
         service.nowProvider = { now }
         service.audioDurationProvider = { _ in
             now = now.addingTimeInterval(2)
-            return 20
+            return 10
         }
         service.transcribeImpl = { _, _ in
             now = now.addingTimeInterval(3)
@@ -305,14 +304,14 @@ struct TranscriptionServiceTests {
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: now)
         _ = await service.requestTranscription(for: note)
-        #expect(service.transcriptionTelemetry.metrics.processedAudioSeconds == 20)
+        #expect(service.transcriptionTelemetry.metrics.processedAudioSeconds == 10)
         #expect(service.transcriptionTelemetry.metrics.elapsedSeconds == 5)
-        #expect(service.transcriptionTelemetry.metrics.speedMultiplier == 4)
+        #expect(service.transcriptionTelemetry.metrics.speedMultiplier == 2)
         #expect(note.transcriptionOutcome == .noSpeech)
     }
 
     @Test @MainActor func liveTelemetryAccumulatesPreparationAndSilenceWithoutIdle() async throws {
-        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 90)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 45)
         defer { try? FileManager.default.removeItem(at: url) }
         var now = Date(timeIntervalSince1970: 100)
         let service = makeService(deviceID: "phone", now: now)
@@ -322,21 +321,21 @@ struct TranscriptionServiceTests {
         coordinator.configureTelemetry(noteID: note.id)
         coordinator.resolveVoiceActivityCut = { _, start, _, _ in
             now += 2
-            return start + 29 * 16_000
+            return start + 14 * 16_000
         }
         coordinator.telemetryCallback = { note.replaceCumulativeTranscriptionTelemetry($0) }
         service.transcribeImpl = { _, _ in now += 3; return .noSpeech }
-        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
-        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.processedAudioSeconds == 29)
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
+        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.processedAudioSeconds == 14)
         #expect(service.telemetryState.snapshot(for: note.id)?.metrics.elapsedSeconds == 5)
         coordinator.pause()
         now += 300
         #expect(service.telemetryState.snapshot(for: note.id)?.metrics.elapsedSeconds == 5)
-        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
-        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.processedAudioSeconds == 58)
+        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        #expect(service.telemetryState.snapshot(for: note.id)?.metrics.processedAudioSeconds == 28)
         #expect(service.telemetryState.snapshot(for: note.id)?.metrics.elapsedSeconds == 10)
         #expect(note.transcriptionTelemetrySampleCount == 1)
-        #expect(note.averageTranscriptionSpeedLabel == "5.8× avg")
+        #expect(note.averageTranscriptionSpeedLabel == "2.8× avg")
         coordinator.finishTelemetry()
     }
 
@@ -404,23 +403,23 @@ struct TranscriptionServiceTests {
     }
 
     @Test @MainActor func cancelledLiveChunkPreservesPreviouslyCompletedCoverage() async throws {
-        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
         defer { try? FileManager.default.removeItem(at: url) }
         let service = makeService(deviceID: "phone")
         let noteID = UUID()
         let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
         coordinator.configureTelemetry(noteID: noteID)
-        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         var calls = 0
         service.transcribeImpl = { _, _ in
             calls += 1
             if calls == 2 { service.cancelTranscription() }
             return .noSpeech
         }
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
         await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
-        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
         #expect(calls == 2)
-        #expect(service.telemetryState.snapshot(for: noteID)?.metrics.processedAudioSeconds == 29)
+        #expect(service.telemetryState.snapshot(for: noteID)?.metrics.processedAudioSeconds == 14)
         #expect(coordinator.failedSliceCount == 1)
         coordinator.finishTelemetry()
     }
@@ -429,7 +428,7 @@ struct TranscriptionServiceTests {
         var now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         service.nowProvider = { now }
-        service.audioDurationProvider = { _ in 20 }
+        service.audioDurationProvider = { _ in 10 }
         service.transcribeImpl = { _, _ in
             now = now.addingTimeInterval(5)
             return "Telemetry result"
@@ -444,8 +443,8 @@ struct TranscriptionServiceTests {
         #expect(didStart == true)
         #expect(note.transcription == "Telemetry result")
         #expect(note.transcriptionTelemetrySampleCount == 1)
-        #expect(note.averageProcessingTimeRatioLabel == "25% avg")
-        #expect(note.averageTranscriptionSpeedLabel == "4.0× avg")
+        #expect(note.averageProcessingTimeRatioLabel == "50% avg")
+        #expect(note.averageTranscriptionSpeedLabel == "2.0× avg")
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
@@ -485,7 +484,7 @@ struct TranscriptionServiceTests {
         service.transcribeImpl = { _, _ in
             attempts += 1
             return attempts == 1
-                ? .whisperError(TranscriptionService.engineFailurePrefix + "transient") : .text("recovered")
+                ? .engineError(TranscriptionService.engineFailurePrefix + "transient") : .text("recovered")
         }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
@@ -524,7 +523,7 @@ struct TranscriptionServiceTests {
     }
 
     @Test @MainActor func failedSinglePassRecoveryKeepsPartialTextWithoutSuccessStatus() async {
-        let outcomes: [RawTranscription] = [.noSpeech, .whisperError("recovery failed")]
+        let outcomes: [RawTranscription] = [.noSpeech, .engineError("recovery failed")]
         for outcome in outcomes {
             let service = makeService(deviceID: "phone")
             let note = VoiceNote(title: "Partial", audioFilePath: "partial.caf")
@@ -546,7 +545,7 @@ struct TranscriptionServiceTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let store = service.segmentProgressStore
         _ = try store.importWorkingCopy(from: url, for: note.id)
-        service.transcribeImpl = { _, _ in .whisperError("failed import") }
+        service.transcribeImpl = { _, _ in .engineError("failed import") }
         #expect(await service.requestTranscription(for: note))
         #expect(note.transcriptionOutcome == .failed)
         #expect(store.existingWorkingCopyURL(for: note.id) != nil)
@@ -940,18 +939,6 @@ struct TranscriptionServiceTests {
         #expect(service.formatTranscriptionDuration(12.3) == "12.30 seconds")
     }
 
-    @Test @MainActor func engineStatusMessagesReflectAvailability() {
-        let service = TranscriptionService()
-
-        service.setModelManager(UnloadedModelManager())
-        #expect(service.getCurrentEngineDescription() == "No transcription available")
-        #expect(service.getEngineStatusMessage() == "WhisperKit not loaded. Please load a model first.")
-
-        service.setModelManager(LoadedModelManager())
-        #expect(service.getCurrentEngineDescription() == "WhisperKit (Local AI)")
-        #expect(service.getEngineStatusMessage() == "Using WhisperKit for high-quality offline transcription")
-    }
-
     @Test @MainActor func serviceOwnsSegmentProgressStore() {
         let service = makeService(deviceID: "d")
         _ = service.segmentProgressStore
@@ -960,7 +947,8 @@ struct TranscriptionServiceTests {
     @Test @MainActor func segmentRoutingUsesResolvedAudioDuration() {
         let service = makeService(deviceID: "d")
         #expect(service.shouldSegmentTranscription(audioDuration: 1800))
-        #expect(!service.shouldSegmentTranscription(audioDuration: 30))
+        #expect(service.shouldSegmentTranscription(audioDuration: 30))
+        #expect(!service.shouldSegmentTranscription(audioDuration: 15))
         #expect(!service.shouldSegmentTranscription(audioDuration: 12))
     }
 
@@ -1221,7 +1209,7 @@ struct TranscriptionServiceTests {
     }
 
     @Test @MainActor func realLongAudioWithUnknownOrStaleDurationIsSegmented() async throws {
-        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 65)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 35)
         defer { try? FileManager.default.removeItem(at: url) }
         for metadata in [0.0, 12.0] {
             let service = makeService(deviceID: "phone")
@@ -1233,7 +1221,7 @@ struct TranscriptionServiceTests {
             service.transcribeImpl = { path, _ in
                 calls += 1
                 let duration = await TranscriptionService.estimatedAudioDuration(for: path)
-                #expect((duration ?? 100) <= 30)
+                #expect((duration ?? 100) <= 15)
                 return "A complete segment."
             }
             let note = VoiceNote(audioFilePath: url.path)
@@ -1242,7 +1230,7 @@ struct TranscriptionServiceTests {
             note.queueTranscription(at: Date())
             await service.processPendingTranscriptions(notes: [note])
             #expect(calls >= 3)
-            #expect(abs(note.duration - 65) < 0.01)
+            #expect(abs(note.duration - 35) < 0.01)
             #expect(note.transcriptionState == .completed)
         }
     }
@@ -1523,9 +1511,9 @@ struct TranscriptionServiceTests {
     @Test(arguments: [false, true]) @MainActor func backgroundExpiryKeepsSegmentCheckpointAndResumesRemainingAudio(automaticRecovery: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = SegmentProgressStore(rootDirectory: root)
-        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 65)
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 35)
         defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: url) }
-        let service = TranscriptionService(modelManager: LoadedModelManager(), segmentProgressStore: store)
+        let service = TranscriptionService(modelManager: LoadedModelManager(backend: .coreML), segmentProgressStore: store)
         service.requiresBackgroundExecution = true
         service.deviceIDProvider = { "phone" }
         service.prepareAudioFileForReading = { _ in url }
@@ -1567,7 +1555,7 @@ struct TranscriptionServiceTests {
         #expect(note.transcription == "Old complete transcript")
         if automaticRecovery {
             // A fresh service has no in-memory saved-job ownership after relaunch.
-            let relaunchedService = TranscriptionService(modelManager: LoadedModelManager(), segmentProgressStore: store)
+            let relaunchedService = TranscriptionService(modelManager: LoadedModelManager(backend: .coreML), segmentProgressStore: store)
             relaunchedService.requiresBackgroundExecution = true
             relaunchedService.deviceIDProvider = { "phone" }
             relaunchedService.prepareAudioFileForReading = { _ in url }
@@ -1589,7 +1577,7 @@ struct TranscriptionServiceTests {
 
     @Test @MainActor func gpuSavedJobDoesNotRequestUnsupportedBackgroundExecution() async {
         let service = makeService(deviceID: "phone")
-        service.modelManager?.encoderComputeUnits = .cpuAndGPU
+        service.setModelManager(LoadedModelManager(backend: .mlx))
         let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
         service.continuedProcessingDriver = driver
         let gate = TranscriptionGate()
@@ -1644,7 +1632,7 @@ struct TranscriptionServiceTests {
         let store = SegmentProgressStore(rootDirectory: root)
         let source = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
         defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: source) }
-        let service = TranscriptionService(modelManager: LoadedModelManager(), segmentProgressStore: store)
+        let service = TranscriptionService(modelManager: LoadedModelManager(backend: .coreML), segmentProgressStore: store)
         service.requiresBackgroundExecution = true
         let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
         service.continuedProcessingDriver = driver
@@ -1668,13 +1656,12 @@ struct TranscriptionServiceTests {
     @MainActor
     private func makeService(deviceID: String, now: Date = Date()) -> TranscriptionService {
         let service = TranscriptionService()
-        let modelManager = LoadedModelManager()
-        modelManager.selectedModel = "openai_whisper-small"
+        let modelManager = LoadedModelManager(backend: .coreML)
         service.setModelManager(modelManager)
         service.deviceIDProvider = { deviceID }
         service.nowProvider = { now }
         service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
-        service.audioDurationProvider = { _ in 20 }
+        service.audioDurationProvider = { _ in 10 }
         service.heartbeatInterval = 3600
         service.requiresBackgroundExecution = true
         return service

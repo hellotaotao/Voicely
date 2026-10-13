@@ -2,8 +2,8 @@ import AVFoundation
 import Foundation
 
 /// Drives transcription of an imported, already-complete audio file.
-/// Files ≤30 s run in a single pass (no sidecar); longer files are sliced into
-/// ≤29 s neural-VAD segments with a resume sidecar written after each one.
+/// Files ≤15 s run in a single pass (no sidecar); longer files are sliced into
+/// ≤14 s neural-VAD segments with a resume sidecar written after each one.
 /// The imported file is never stored in iCloud — a throwaway working copy is
 /// used during transcription and removed on completion.
 @MainActor
@@ -35,14 +35,13 @@ final class SegmentedAudioTranscriber {
 
     /// The segment being decoded, so the decoder's progress through it can be
     /// reported as progress through the whole file. iOS expires a continued
-    /// processing task that reports nothing for ~30 s, and one 29 s segment can
-    /// take longer than that to decode on a locked phone.
+    /// processing task that reports nothing for ~30 s.
     private var activeSegment: (noteID: UUID, start: Int64, end: Int64, total: Int64)?
     private var reportedProgress: Float = 0
 
-    /// Files longer than one WhisperKit window get sliced + a resume sidecar.
+    /// Files longer than one engine pass get sliced + a resume sidecar.
     private let singlePassFrameLimit: (Double) -> Int64 = { sampleRate in
-        Int64(30.0 * sampleRate)
+        Int64(Qwen3ASRDefaults.singlePassSecondsLimit * sampleRate)
     }
 
     init(transcriptionService: TranscriptionService,
@@ -172,7 +171,7 @@ final class SegmentedAudioTranscriber {
         }
     }
 
-    // MARK: - Single pass (≤30 s)
+    // MARK: - Single pass (≤15 s)
 
     private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome, hadExistingTranscript: Bool) {
         switch outcome {
@@ -205,7 +204,7 @@ final class SegmentedAudioTranscriber {
             note.transcription = ""
             note.completeTranscription()
             note.transcriptionOutcome = .noSpeech
-        case .whisperError(let diagnostic):
+        case .engineError(let diagnostic):
             note.completeTranscription()
             note.transcriptionOutcome = .failed
             note.markTranscriptionFailure(diagnostic ?? "transcription error")
@@ -217,7 +216,7 @@ final class SegmentedAudioTranscriber {
         note.clearTransientTranscriptionFlags()
     }
 
-    // MARK: - Segmented (>30 s)
+    // MARK: - Segmented (>15 s)
 
     private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo, hadExistingTranscript: Bool) async {
         guard let session = telemetrySession else { return }
@@ -283,7 +282,7 @@ final class SegmentedAudioTranscriber {
             activeSegment = (noteID, start, end, info.totalFrames)
             var outcome = await transcribeSegmentOutcome(segmentURL)
             // Only an aborted decode is worth repeating; rejected output is not.
-            if case .whisperError(let diagnostic) = outcome, TranscriptionService.isEngineFailure(diagnostic),
+            if case .engineError(let diagnostic) = outcome, TranscriptionService.isEngineFailure(diagnostic),
                !transcriptionService.isRunCancelled(noteID: noteID), !transcriptionService.isUserPaused(note), !Task.isCancelled {
                 outcome = await transcribeSegmentOutcome(segmentURL)
             }
@@ -308,7 +307,7 @@ final class SegmentedAudioTranscriber {
             case .modelUnavailable, .audioUnavailable, .cancelled:
                 pause(note)
                 return
-            case .whisperError(let diagnostic):
+            case .engineError(let diagnostic):
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end,
                                                         reason: diagnostic))
                 pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))

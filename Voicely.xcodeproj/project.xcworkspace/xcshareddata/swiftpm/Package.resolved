@@ -1,13 +1,13 @@
 {
-  "originHash" : "e843284a09b9d7fb8d0032fe1a3fd1fbd38f28ea54d42a39ccbe396af16d225d",
+  "originHash" : "49800b987ed3dd5706fc06623620f71bba970afd16d5f8267987698e2cd4a93b",
   "pins" : [
     {
-      "identity" : "swift-argument-parser",
+      "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-argument-parser.git",
+      "location" : "https://github.com/ml-explore/mlx-swift",
       "state" : {
-        "revision" : "011f0c765fb46d9cac61bca19be0527e99c98c8b",
-        "version" : "1.5.1"
+        "revision" : "19601207e9a0de51e03ee6ec0c3c5f3784275075",
+        "version" : "0.32.3"
       }
     },
     {
@@ -29,21 +29,21 @@
       }
     },
     {
+      "identity" : "swift-numerics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-numerics",
+      "state" : {
+        "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
+        "version" : "1.1.1"
+      }
+    },
+    {
       "identity" : "swift-transformers",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-transformers.git",
       "state" : {
         "revision" : "573e5c9036c2f136b3a8a071da8e8907322403d0",
         "version" : "1.1.6"
-      }
-    },
-    {
-      "identity" : "whisperkit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/argmaxinc/WhisperKit",
-      "state" : {
-        "revision" : "3199d8f681b648825acc1ed3b056745dcb056c07",
-        "version" : "0.16.0"
       }
     }
   ],

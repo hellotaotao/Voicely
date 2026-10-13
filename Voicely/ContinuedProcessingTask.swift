@@ -60,11 +60,10 @@ final class ContinuedProcessingProgress {
 
 /// Device logs show iOS expiring tasks after extended gaps in progress updates;
 /// the allowed cadence is not an API guarantee. Audio position stands still while
-/// Whisper re-decodes the same window: up to three temperature fallbacks plus a
-/// prompt-free pass, over a minute on a phone for hard far-field audio. While
-/// the decoder keeps producing tokens the task is working, not hung, so each
-/// check that sees new tokens moves the task one step. The steps stop short of
-/// completion, and a decoder that stops producing tokens is still expired.
+/// a slice is being decoded or retried. While the decoder keeps finishing work
+/// the task is not hung, so each check that sees new work moves the task one
+/// step. The steps stop short of completion, and a decoder that stops making
+/// progress is still expired.
 @MainActor
 struct DecodeWorkHeartbeat {
     private let decodeWork: () -> UInt64

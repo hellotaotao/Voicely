@@ -20,7 +20,7 @@ enum LocalTranscriptFinalizer {
     static let blankAudioTranscript = "[BLANK_AUDIO]"
 
     /// Local-only transcript finalization. This deliberately does not upload audio or text.
-    /// It polishes live/local Whisper output by applying deterministic cleanup that is safe
+    /// It polishes live/local engine output by applying deterministic cleanup that is safe
     /// to run by default: non-speech filtering, adjacent duplicate removal, and whitespace normalization.
     static func finalizeTranscript(_ text: String?) -> FinalizedTranscript? {
         guard let text else { return nil }
@@ -66,7 +66,8 @@ enum LocalTranscriptFinalizer {
 
         guard !finalizedText.isEmpty else {
             guard removedLineCount > 0 else { return nil }
-            // 整段都是非语音:如实保留 Whisper 的原话(相邻去重),不再抹成 [BLANK_AUDIO]。
+            // The whole clip is non-speech: keep the engine's own words (adjacent
+            // duplicates removed) instead of flattening them into [BLANK_AUDIO].
             return FinalizedTranscript(
                 text: nonSpeechLines.joined(separator: "\n"),
                 removedLineCount: removedLineCount,

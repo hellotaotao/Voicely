@@ -12,11 +12,6 @@ import Testing
 @testable import Voicely
 
 struct ModelPackagingAndTelemetryTests {
-    @Test func melSpectrogramStaysOffTheGPUForLockedScreenTranscription() {
-        let options = ModelManager.computeOptions(encoder: .cpuAndNeuralEngine, decoder: .cpuAndNeuralEngine)
-        #expect(options.melCompute == .cpuOnly)
-    }
-
     @Test @MainActor func telemetrySessionsIsolateNotesAndExcludeLiveIdle() {
         let service = TranscriptionService()
         var now = Date(timeIntervalSince1970: 100)
@@ -72,85 +67,6 @@ struct ModelPackagingAndTelemetryTests {
     @Test func savedTranscriptEqualityDependsOnlyOnText() {
         #expect(SavedTranscriptText(text: "Original transcript") == SavedTranscriptText(text: "Original transcript"))
         #expect(SavedTranscriptText(text: "Original transcript") != SavedTranscriptText(text: "New transcript"))
-    }
-
-    @Test func bundledModelLocationIsPreferredBeforeDownloadedModel() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voicely-bundled-model-test-")
-            .appendingPathComponent(UUID().uuidString)
-        let bundledFolder = root
-            .appendingPathComponent("BundledModels")
-            .appendingPathComponent("openai_whisper-small")
-        let downloadedRoot = root.appendingPathComponent("DownloadedModels")
-        let downloadedFolder = downloadedRoot.appendingPathComponent("openai_whisper-small")
-
-        try FileManager.default.createDirectory(at: bundledFolder, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: downloadedFolder, withIntermediateDirectories: true)
-        try Self.createMinimalWhisperModelFiles(in: bundledFolder)
-        try Self.createMinimalWhisperModelFiles(in: downloadedFolder)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let source = ModelManager.preferredLocalModelSource(
-            for: "openai_whisper-small",
-            downloadedModels: ["openai_whisper-small"],
-            downloadedModelsRootPath: downloadedRoot.path,
-            bundledModelsRoot: root
-        )
-
-        #expect(source?.kind == .bundled)
-        #expect(source?.url.path == bundledFolder.path)
-    }
-
-    @Test func downloadedModelLocationIsUsedWhenBundleDoesNotContainModel() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voicely-downloaded-model-test-")
-            .appendingPathComponent(UUID().uuidString)
-        let downloadedRoot = root.appendingPathComponent("DownloadedModels")
-        let downloadedFolder = downloadedRoot.appendingPathComponent("openai_whisper-small")
-
-        try FileManager.default.createDirectory(at: downloadedFolder, withIntermediateDirectories: true)
-        try Self.createMinimalWhisperModelFiles(in: downloadedFolder)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let source = ModelManager.preferredLocalModelSource(
-            for: "openai_whisper-small",
-            downloadedModels: ["openai_whisper-small"],
-            downloadedModelsRootPath: downloadedRoot.path,
-            bundledModelsRoot: root
-        )
-
-        #expect(source?.kind == .downloaded)
-        #expect(source?.url.path == downloadedFolder.path)
-    }
-
-    @Test func bundledBundleFolderKeepsModelIdentifierWithoutBundleExtension() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voicely-bundled-bundle-test-")
-            .appendingPathComponent(UUID().uuidString)
-        let bundledFolder = root
-            .appendingPathComponent("BundledModels")
-            .appendingPathComponent("openai_whisper-small.bundle")
-
-        try FileManager.default.createDirectory(at: bundledFolder, withIntermediateDirectories: true)
-        try Self.createMinimalWhisperModelFiles(in: bundledFolder)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let identifiers = ModelManager.bundledModelIdentifiers(in: root)
-        let source = ModelManager.preferredLocalModelSource(
-            for: "openai_whisper-small",
-            downloadedModels: [],
-            downloadedModelsRootPath: root.path,
-            bundledModelsRoot: root
-        )
-
-        #expect(identifiers == ["openai_whisper-small"])
-        #expect(source?.kind == .bundled)
-        #expect(source?.url.path == bundledFolder.path)
-    }
-
-    @Test func modelLoadingStartsWithDirectLoadInsteadOfPrewarm() {
-        #expect(ModelManager.shouldPrewarmBeforeInitialLoad(redownload: false) == false)
-        #expect(ModelManager.shouldPrewarmBeforeInitialLoad(redownload: true) == false)
     }
 
     @Test func voiceNoteAveragesCompletedTelemetrySamples() {
@@ -234,12 +150,4 @@ struct ModelPackagingAndTelemetryTests {
         #expect(route.detail == "Encoder ANE · Decoder ANE")
     }
 
-    private static func createMinimalWhisperModelFiles(in folder: URL) throws {
-        for component in ["MelSpectrogram", "AudioEncoder", "TextDecoder"] {
-            try FileManager.default.createDirectory(
-                at: folder.appendingPathComponent("\(component).mlmodelc"),
-                withIntermediateDirectories: true
-            )
-        }
-    }
 }

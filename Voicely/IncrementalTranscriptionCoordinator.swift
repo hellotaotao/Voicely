@@ -9,10 +9,10 @@ import Foundation
 struct IncrementalTranscriptionTiming {
     static let intervalSecondsStorageKey = "incrementalTranscriptionIntervalSeconds"
     static let legacyIntervalMinutesStorageKey = "incrementalTranscriptionInterval"
-    static let defaultIntervalSeconds = 29
+    static let defaultIntervalSeconds = Int(Qwen3ASRDefaults.chunkSeconds)
     /// Earliest position inside a full batch where a VAD cut is allowed,
-    /// so every chunk sent to Whisper carries at least this much audio.
-    static let minimumCutSeconds = 15
+    /// so every chunk sent to the engine carries at least this much audio.
+    static let minimumCutSeconds = Int(Qwen3ASRDefaults.minimumChunkCutSeconds)
 
     static func sanitizedIntervalSeconds(_: Int) -> Int {
         defaultIntervalSeconds
@@ -36,7 +36,7 @@ struct IncrementalTranscriptionTiming {
 
     static func migratedIntervalSeconds(fromLegacyMinutes _: Int) -> Int {
         // Legacy values represented minutes. Do not reinterpret them as seconds.
-        // Reset to the current recommended Whisper-safe chunk cadence.
+        // Reset to the current recommended chunk cadence.
         defaultIntervalSeconds
     }
 }
@@ -71,11 +71,11 @@ final class IncrementalTranscriptionCoordinator {
     /// audio, cancelled), so only the regular queue can recover the recording.
     private(set) var requiresFullTranscription = false
 
-    /// Slices Whisper ran on and could not transcribe. Their text is a visible
+    /// Slices the engine ran on and could not transcribe. Their text is a visible
     /// "[m:ss–m:ss transcription unavailable]" marker.
     private(set) var unrecoveredSliceCount = 0
 
-    /// One entry per unrecovered slice, carrying Whisper's diagnostic so the note
+    /// One entry per unrecovered slice, carrying the engine's diagnostic so the note
     /// can name the cause. Release builds have no debug log to fall back on.
     private(set) var unrecoveredSliceRanges: [SegmentFailureRange] = []
 
@@ -168,8 +168,8 @@ final class IncrementalTranscriptionCoordinator {
     private var segmentProcessingWaiters: [CheckedContinuation<Void, Never>] = []
 
     private enum SliceFailure: Equatable {
-        /// Whisper ran and produced nothing usable; the gap is marked at stop.
-        /// Carries Whisper's diagnostic so the note can name the cause later.
+        /// The engine ran and produced nothing usable; the gap is marked at stop.
+        /// Carries the engine's diagnostic so the note can name the cause later.
         case transcription(String?)
         /// The engine threw instead of decoding, e.g. GPU work refused while the
         /// phone is locked. Retried once at stop, when the app is in front again.
@@ -191,7 +191,7 @@ final class IncrementalTranscriptionCoordinator {
         var text: String?
         var failure: SliceFailure?
 
-        /// Whisper never got to judge this audio, so stop decodes it once more.
+        /// The engine never got to judge this audio, so stop decodes it once more.
         var awaitsRetry: Bool {
             // A gap marker means the retry already ran and the slice is settled.
             guard text == nil else { return false }
@@ -226,7 +226,7 @@ final class IncrementalTranscriptionCoordinator {
     /// The live slice being transcribed right now. `lastSegmentEndFrame` already
     /// covers it, but it joins `slices` only once transcription returns.
     private var inFlightSlice: (start: AVAudioFramePosition, end: AVAudioFramePosition)?
-    /// The slice Whisper is decoding right now and how far through it the
+    /// The slice the engine is decoding right now and how far through it the
     /// decoder has reached (0...1), for live progress while it runs.
     private var decodingSlice: (start: AVAudioFramePosition, end: AVAudioFramePosition, fraction: Double)?
     private var finalFrame: AVAudioFramePosition?
@@ -412,7 +412,7 @@ final class IncrementalTranscriptionCoordinator {
         }
 
         // No separate speech preflight here: transcribeAudio runs the same
-        // neural VAD gate before invoking Whisper, so checking twice would
+        // neural VAD gate before invoking the engine, so checking twice would
         // just double the inference cost per segment.
         let result: SliceResult
         decodingSlice = (startFrame, endFrame, 0)
@@ -433,7 +433,7 @@ final class IncrementalTranscriptionCoordinator {
                 result = Self.sanitizedSegmentText(transcription.text).map(SliceResult.text) ?? .silent
             case .noSpeech:
                 result = .silent
-            case .whisperError(let diagnostic):
+            case .engineError(let diagnostic):
                 result = .failed(TranscriptionService.isEngineFailure(diagnostic)
                     ? .engine(diagnostic) : .transcription(diagnostic))
             case .modelUnavailable, .audioUnavailable, .cancelled:
@@ -461,9 +461,9 @@ final class IncrementalTranscriptionCoordinator {
         decodingSlice = (slice.start, slice.end, clamped)
     }
 
-    /// A slice Whisper never decoded (model still loading, cancelled, engine
+    /// A slice the engine never decoded (model still loading, cancelled, engine
     /// error) gets one attempt in place, so it never forces the whole recording to
-    /// be transcribed again. A slice Whisper ran on and rejected is not retried: the
+    /// be transcribed again. A slice the engine ran on and rejected is not retried: the
     /// decoder has already used its temperature fallback and prompt-free pass on
     /// it, and repeating that held "Finalizing" for minutes after the text was
     /// complete.
@@ -482,7 +482,7 @@ final class IncrementalTranscriptionCoordinator {
         }
     }
 
-    /// Marks slices Whisper could not transcribe as visible gaps; anything that
+    /// Marks slices the engine could not transcribe as visible gaps; anything that
     /// still could not be decoded at all hands the recording to the regular queue.
     private func settleRemainingFailures() {
         unrecoveredSliceCount = 0
@@ -674,7 +674,7 @@ final class IncrementalTranscriptionCoordinator {
             let minimumCutFrames = AVAudioFramePosition(configuration.minimumCutSeconds * sampleRate)
 
             // A batch is exactly `targetSeconds` long; audio past it carries
-            // over so every chunk stays within Whisper's 30 s window.
+            // over so every chunk stays within the engine's single-pass limit.
             let batchEndFrame = min(targetFrame, sourceFile.length, startFrame + targetFrames)
 
             guard batchEndFrame >= startFrame + targetFrames else {

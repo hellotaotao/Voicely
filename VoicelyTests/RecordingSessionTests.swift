@@ -125,7 +125,7 @@ struct RecordingSessionTests {
         guard let note = collector.notes.first else { return }
         #expect(note.transcriptionOriginDeviceID == "local")
         #expect(note.transcriptionState == .queued)
-        transcription.setModelManager(TranscriptionServiceTests.LoadedModelManager())
+        transcription.setModelManager(TranscriptionServiceTests.LoadedModelManager(backend: .coreML))
         var attempts = 0
         transcription.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
         transcription.audioDurationProvider = { _ in 8 }
@@ -212,17 +212,17 @@ struct RecordingSessionTests {
     @Test func sliceTheEngineRejectedLiveIsRecoveredAtStopWithoutQueuingWholeRecording() async throws {
         let (session, audio, collector) = makeSession()
         session.continuedProcessingDriver = nil
-        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 40)
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         audio.currentPCMFileURL = pcmURL
         let decoder = TranscriptionService()
-        decoder.setModelManager(TranscriptionServiceTests.LoadedModelManager())
+        decoder.setModelManager(TranscriptionServiceTests.LoadedModelManager(backend: .coreML))
         var calls = 0
         decoder.transcribeImpl = { _, _ in
             calls += 1
             switch calls {
             case 1: return .text("first slice")
-            case 2: return .whisperError(TranscriptionService.engineFailurePrefix + "GPU work refused")
+            case 2: return .engineError(TranscriptionService.engineFailurePrefix + "GPU work refused")
             default: return .text("recovered slice")
             }
         }
@@ -232,8 +232,8 @@ struct RecordingSessionTests {
         session.startRecording()
         try await waitUntil { session.currentRecordingNote != nil }
         let note = try #require(collector.notes.first)
-        audio.recordingDuration = 40
-        audio.currentFramePosition = AVAudioFramePosition(40 * 16_000)
+        audio.recordingDuration = 25
+        audio.currentFramePosition = AVAudioFramePosition(25 * 16_000)
         session.stopRecording()
         try await waitUntil { !session.isRecording(note) }
 
@@ -247,11 +247,11 @@ struct RecordingSessionTests {
 
     @Test func failedLiveTailIsMarkedInPlaceInsteadOfQueuingWholeRecording() async throws {
         let script = IncrementalTranscriptionCoordinatorTests.ScriptedSliceResults(["first slice"])
-        let (session, note, pcmURL) = try await stopRecording(seconds: 40, script: script)
+        let (session, note, pcmURL) = try await stopRecording(seconds: 25, script: script)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         try await waitUntil { !session.isRecording(note) }
 
-        let gap = SegmentedAudioTranscriber.placeholder(forStart: 29 * 16_000, end: 40 * 16_000, sampleRate: 16_000)
+        let gap = SegmentedAudioTranscriber.placeholder(forStart: 14 * 16_000, end: 25 * 16_000, sampleRate: 16_000)
         #expect(note.transcription == "first slice\n\(gap)")
         #expect(note.transcriptionState == .completed)
         #expect(note.transcriptionOutcome == .failed)
@@ -301,7 +301,7 @@ struct RecordingSessionTests {
     @Test func finalizationRunsUnderContinuedProcessingUntilItCompletes() async throws {
         let driver = FakeContinuedProcessingDriver()
         let script = IncrementalTranscriptionCoordinatorTests.ScriptedSliceResults(["first", "second"])
-        let (session, note, pcmURL) = try await stopRecording(seconds: 40, script: script, driver: driver)
+        let (session, note, pcmURL) = try await stopRecording(seconds: 25, script: script, driver: driver)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
 
         #expect(driver.submissions.count == 1)
@@ -320,15 +320,18 @@ struct RecordingSessionTests {
         let gate = TranscriptionServiceTests.TranscriptionGate()
         let (session, audio, collector) = makeSession()
         session.continuedProcessingDriver = driver
+        // Two slices (14 s + 11 s): long enough to ask for background time.
         let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         audio.currentPCMFileURL = pcmURL
+        let script = IncrementalTranscriptionCoordinatorTests.ScriptedSliceResults(["first", "tail"])
         session.coordinatorFactory = { url in
             let coordinator = IncrementalTranscriptionCoordinator(
                 transcriptionService: TranscriptionService(), recordingFileURL: url)
             coordinator.transcribeOverride = { @Sendable _ in
-                await gate.wait()
-                return "tail"
+                let text = await script.next()
+                if text == "first" { await gate.wait() }
+                return text
             }
             return coordinator
         }
@@ -346,7 +349,7 @@ struct RecordingSessionTests {
 
         await gate.resume()
         try await waitUntil { !session.isRecording(note) }
-        #expect(note.transcription == "tail")
+        #expect(note.transcription == "first\ntail")
         #expect(note.transcriptionState == .completed)
         #expect(driver.handle.completions == [false])
     }
@@ -355,7 +358,7 @@ struct RecordingSessionTests {
         let driver = FakeContinuedProcessingDriver()
         let (session, audio, collector) = makeSession()
         session.continuedProcessingDriver = driver
-        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 31)
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 22)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         audio.currentPCMFileURL = pcmURL
         let harness = IncrementalTranscriptionCoordinatorTests.SegmentTranscriptionHarness()
@@ -363,7 +366,7 @@ struct RecordingSessionTests {
         session.coordinatorFactory = { url in
             let created = IncrementalTranscriptionCoordinator(
                 transcriptionService: TranscriptionService(), recordingFileURL: url)
-            created.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+            created.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
             created.transcribeOverride = { @Sendable path in await harness.transcribe(path) }
             coordinator = created
             return created
@@ -373,12 +376,12 @@ struct RecordingSessionTests {
         let note = try #require(collector.notes.first)
         let liveCoordinator = try #require(coordinator)
         liveCoordinator.pause()
-        let live = Task { @MainActor in await liveCoordinator.transcribeSegment(upToFrame: 30 * 16_000) }
+        let live = Task { @MainActor in await liveCoordinator.transcribeSegment(upToFrame: 15 * 16_000) }
         await harness.waitForCallCount(1)
 
-        // Only 2 s were never reached, but the 29 s slice in flight still has to finish.
-        audio.recordingDuration = 31
-        audio.currentFramePosition = 31 * 16_000
+        // Only 8 s were never reached, but the 14 s slice in flight still has to finish.
+        audio.recordingDuration = 22
+        audio.currentFramePosition = 22 * 16_000
         session.stopRecording()
         #expect(driver.submissions.count == 1)
 
@@ -402,7 +405,7 @@ struct RecordingSessionTests {
     @Test func unlaunchedContinuedProcessingRequestIsWithdrawnWhenFinalizationEnds() async throws {
         let driver = FakeContinuedProcessingDriver()
         driver.launchesImmediately = false
-        let script = IncrementalTranscriptionCoordinatorTests.ScriptedSliceResults(["only slice"])
+        let script = IncrementalTranscriptionCoordinatorTests.ScriptedSliceResults(["first slice", "second slice"])
         let (session, note, pcmURL) = try await stopRecording(seconds: 25, script: script, driver: driver)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         try await waitUntil { !session.isRecording(note) }
@@ -416,7 +419,7 @@ struct RecordingSessionTests {
     @Test(arguments: [false, true])
     func expiredLiveLeaseCannotCancelFinalFlushOrBlockRecovery(failTail: Bool) async throws {
         let audio = MockRecordingAudio()
-        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 40)
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         audio.currentPCMFileURL = pcmURL
         let transcription = TranscriptionService()
@@ -447,7 +450,7 @@ struct RecordingSessionTests {
         let note = try #require(collector.notes.first)
         let liveCoordinator = try #require(coordinator)
         liveCoordinator.pause()
-        await liveCoordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        await liveCoordinator.transcribeSegment(upToFrame: 15 * 16_000)
         try #require(note.transcription == "First live segment.")
 
         // Advance the lease clock without spending six minutes on microphone IO.
@@ -456,8 +459,8 @@ struct RecordingSessionTests {
         #expect(!transcription.shouldShowPendingState(note))
         transcription.cancelTranscription(for: note)
         #expect(note.transcriptionState == .claimed)
-        audio.recordingDuration = 40
-        audio.currentFramePosition = 40 * 16_000
+        audio.recordingDuration = 25
+        audio.currentFramePosition = 25 * 16_000
         session.stopRecording()
         await gate.waitUntilArmed()
 

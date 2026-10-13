@@ -256,7 +256,7 @@ final class RecordingSession: ObservableObject {
 
         if !isModelLoaded && !isModelLoading {
             Task {
-                _ = await transcriptionService.loadWhisperModel()
+                _ = await transcriptionService.loadSpeechModel()
             }
         }
 

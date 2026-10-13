@@ -10,10 +10,9 @@ import Foundation
 import os
 import SwiftData
 import UIKit
-import WhisperKit
 
 enum TranscriptionEngine {
-    case whisperKit
+    case qwen3
     case notAvailable
 }
 
@@ -23,7 +22,7 @@ struct TranscriptionResult {
     let modelIdentifier: String?
 }
 
-/// What a single transcription attempt produced. `.text` carries Whisper's raw
+/// What a single transcription attempt produced. `.text` carries the engine's raw
 /// output (still to be finalized); every other case names *why* there is no
 /// text, so callers can react per cause instead of treating all failures alike.
 /// A string literal becomes `.text`, so existing test stubs keep working.
@@ -32,7 +31,7 @@ enum RawTranscription: ExpressibleByStringLiteral {
     case noSpeech
     case modelUnavailable
     case audioUnavailable
-    case whisperError(String?)
+    case engineError(String?)
     case cancelled
 
     init(stringLiteral value: String) {
@@ -48,7 +47,7 @@ enum TranscriptionOutcome {
     case noSpeech
     case modelUnavailable
     case audioUnavailable
-    case whisperError(String?)
+    case engineError(String?)
     case cancelled
 }
 
@@ -75,7 +74,7 @@ class TranscriptionService: ObservableObject {
 
     var continuedProcessingDriver: (any ContinuedProcessingDriver)? = SystemContinuedProcessingDriver.shared
 
-    /// Decoding steps Whisper has taken, across every pass and fallback. Background
+    /// Slices the engine has finished decoding. Background
     /// tasks read it as proof of work while the audio position stands still.
     nonisolated let decodeWorkCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
     var decodeWorkCount: UInt64 { decodeWorkCounter.withLock { $0 } }
@@ -95,7 +94,7 @@ class TranscriptionService: ObservableObject {
     private var savedJobsAreInForeground = true
 
     var modelManager: ModelManager?
-    var transcribeImpl: TranscribeImpl = { _, _ in .whisperError(nil) }
+    var transcribeImpl: TranscribeImpl = { _, _ in .engineError(nil) }
     var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
     var nowProvider: () -> Date = { Date() }
     var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
@@ -144,7 +143,7 @@ class TranscriptionService: ObservableObject {
         self.segmentProgressStore = segmentProgressStore
         self.transcribeImpl = { [weak self] filePath, progressCallback in
             guard let self else { return .cancelled }
-            return await self.transcribeWithWhisper(
+            return await self.transcribeWithQwen(
                 filePath: filePath,
                 progressCallback: progressCallback
             )
@@ -156,26 +155,23 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
     }
 
-    func loadWhisperModel() async -> Bool {
+    func loadSpeechModel() async -> Bool {
         guard let modelManager else {
             print("ModelManager not available")
             return false
         }
 
-        let modelName = modelManager.selectedModel
         loadingProgress = 0.1
-        await modelManager.loadModel(modelName)
+        await modelManager.loadModel()
 
         updateEngineStatus()
         loadingProgress = modelManager.loadingProgressValue
+        return modelManager.isModelLoaded()
+    }
 
-        let success = modelManager.isModelLoaded()
-        if success {
-            print("WhisperKit loaded successfully with model: \(modelName)")
-        } else {
-            print("Failed to load WhisperKit model: \(modelName)")
-        }
-        return success
+    /// Runs one inference on a slice of 16 kHz mono audio. Tests replace it.
+    var transcribeSamples: ([Float], String?) async throws -> String = { samples, languageHint in
+        try await Qwen3ASRModelStore.shared.transcribe(samples: samples, languageHint: languageHint)
     }
 
     func configureNewNote(_ note: VoiceNote, shouldStartImmediately: Bool) {
@@ -233,7 +229,7 @@ class TranscriptionService: ObservableObject {
     func processPendingTranscriptions(notes: [VoiceNote]) async {
         updateEngineStatus()
 
-        guard isWhisperLoaded else {
+        guard isEngineLoaded else {
             return
         }
 
@@ -298,7 +294,7 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
 
         let workingCopy = segmentProgressStore.existingWorkingCopyURL(for: note.id)
-        guard isWhisperLoaded, !note.audioFilePath.isEmpty || workingCopy != nil,
+        guard isEngineLoaded, !note.audioFilePath.isEmpty || workingCopy != nil,
               !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
             return false
         }
@@ -515,7 +511,7 @@ class TranscriptionService: ObservableObject {
     /// Long recordings with audio are re-transcribed via SegmentedAudioTranscriber
     /// (segmented + resumable + progress) rather than the whole-file single pass.
     func shouldSegmentTranscription(audioDuration: TimeInterval) -> Bool {
-        audioDuration > 30
+        audioDuration > Qwen3ASRDefaults.singlePassSecondsLimit
     }
 
     /// Surfaces a note transcribed by an external coordinator
@@ -564,49 +560,15 @@ class TranscriptionService: ObservableObject {
         return note.transcriptionState == .claimed && leaseHasExpired(note, now: now)
     }
 
-    func unloadWhisperModel() {
-        if let modelManager {
-            modelManager.whisperKit = nil
-            modelManager.modelState = .unloaded
-        }
+    func unloadSpeechModel() async {
+        await modelManager?.unloadModel()
         currentEngine = .notAvailable
         loadingProgress = 0.0
-        print("WhisperKit model unloaded")
     }
 
-    func getAvailableModels() -> [String] {
-        [
-            "tiny",
-            "base",
-            "small"
-        ]
-    }
-
-    func isWhisperAvailable() -> Bool {
+    func isEngineAvailable() -> Bool {
         updateEngineStatus()
-        return isWhisperLoaded
-    }
-
-    func getCurrentEngineDescription() -> String {
-        updateEngineStatus()
-
-        switch currentEngine {
-        case .whisperKit:
-            return "WhisperKit (Local AI)"
-        case .notAvailable:
-            return "No transcription available"
-        }
-    }
-
-    func getEngineStatusMessage() -> String {
-        updateEngineStatus()
-
-        switch currentEngine {
-        case .whisperKit:
-            return "Using WhisperKit for high-quality offline transcription"
-        case .notAvailable:
-            return "WhisperKit not loaded. Please load a model first."
-        }
+        return isEngineLoaded
     }
 
     /// Runs one transcription attempt and reports *why* there is no transcript, so
@@ -650,7 +612,7 @@ class TranscriptionService: ObservableObject {
             transcriptionProgress = 0.0
         }
 
-        guard isWhisperLoaded else {
+        guard isEngineLoaded else {
             return .modelUnavailable
         }
 
@@ -686,9 +648,9 @@ class TranscriptionService: ObservableObject {
         switch raw {
         case .text(let rawText):
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(rawText) else {
-                // Whisper ran but produced nothing usable. Treat it as a real error
+                // The engine ran but produced nothing usable. Treat it as a real error
                 // to surface for diagnosis — not as a calm "no speech".
-                return .whisperError("blank output")
+                return .engineError("blank output")
             }
             progressCallback(1)
             if ownsTelemetry, let duration = session.audioDuration {
@@ -711,8 +673,8 @@ class TranscriptionService: ObservableObject {
             return .modelUnavailable
         case .audioUnavailable:
             return .audioUnavailable
-        case .whisperError(let diagnostic):
-            return .whisperError(diagnostic)
+        case .engineError(let diagnostic):
+            return .engineError(diagnostic)
         case .cancelled:
             lastCancellationHandled = true
             return .cancelled
@@ -871,7 +833,7 @@ private extension TranscriptionService {
         deviceIDProvider()
     }
 
-    var isWhisperLoaded: Bool {
+    var isEngineLoaded: Bool {
         modelManager?.isModelLoaded() ?? false
     }
 
@@ -900,15 +862,12 @@ private extension TranscriptionService {
     }
 
     func currentTelemetryComputeRoute() -> TranscriptionComputeRoute {
-        TranscriptionComputeRoute(
-            encoderUnits: modelManager?.encoderComputeUnits ?? .cpuAndNeuralEngine,
-            decoderUnits: modelManager?.decoderComputeUnits ?? .cpuAndNeuralEngine
-        )
+        TranscriptionComputeRoute(backend: modelManager?.backend ?? .current)
     }
 
     func updateEngineStatus() {
-        if isWhisperLoaded {
-            currentEngine = .whisperKit
+        if isEngineLoaded {
+            currentEngine = .qwen3
         } else {
             currentEngine = .notAvailable
         }
@@ -1116,8 +1075,8 @@ private extension TranscriptionService {
         var outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
 
         // An aborted decode is often transient — retry once before giving up.
-        // Output Whisper produced and we rejected would only come back the same.
-        if case .whisperError(let diagnostic) = outcome, Self.isEngineFailure(diagnostic), !wasTranscriptionCancelled() {
+        // Output the engine produced and we rejected would only come back the same.
+        if case .engineError(let diagnostic) = outcome, Self.isEngineFailure(diagnostic), !wasTranscriptionCancelled() {
             outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
         }
 
@@ -1173,7 +1132,7 @@ private extension TranscriptionService {
             // automatically once the condition clears (e.g. modelLoadedNotification).
             requeueNote(note, queuedAt: nowProvider())
 
-        case .whisperError(let diagnostic):
+        case .engineError(let diagnostic):
             // A real error survived the retry. Don't pretend it succeeded, and don't
             // dump jargon on the user — keep the real reason internally for us.
             #if DEBUG
@@ -1269,13 +1228,11 @@ private extension TranscriptionService {
         leaseHeartbeatTask = nil
     }
 
-    func transcribeWithWhisper(
+    func transcribeWithQwen(
         filePath: String,
         progressCallback: @escaping (Float) -> Void
     ) async -> RawTranscription {
-        guard let modelManager,
-              let whisperKit = modelManager.getWhisperKit() else {
-            print("WhisperKit not available")
+        guard isEngineLoaded else {
             currentEngine = .notAvailable
             return .modelUnavailable
         }
@@ -1283,224 +1240,85 @@ private extension TranscriptionService {
         if cancelRequested || Task.isCancelled {
             return .cancelled
         }
+        currentEngine = .qwen3
 
+        // Persist timings in Release without recording paths or text.
+        let diagnosticID = UUID().uuidString
+        let preparationStart = ProcessInfo.processInfo.systemUptime
+        Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=preparationStarted")
+
+        guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
+            print("Failed to prepare audio file for transcription: \(filePath)")
+            return .audioUnavailable
+        }
+        Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=fileReady seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
+
+        let updateProgressOnMain: (Float) -> Void = { [weak self] value in
+            guard let self else { return }
+            self.smoothProgress(to: value, progressCallback: progressCallback)
+        }
+        updateProgressOnMain(0.01)
+
+        // The decoder is never allowed to answer with an empty transcript, so
+        // silence has to be turned away before it gets there.
+        let vadStart = ProcessInfo.processInfo.systemUptime
+        let containsProbableSpeech = await Task.detached(priority: .utility) {
+            NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
+        }.value
+        Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=vadFinished seconds=\(ProcessInfo.processInfo.systemUptime - vadStart) speech=\(containsProbableSpeech)")
+        guard containsProbableSpeech else {
+            updateProgressOnMain(1.0)
+            return .noSpeech
+        }
+
+        let samples: [Float]
         do {
-            currentEngine = .whisperKit
-            print("Using WhisperKit for transcription")
-
-            // Persist timings in Release without recording paths, prompts, or text.
-            let diagnosticID = UUID().uuidString
-            let preparationStart = ProcessInfo.processInfo.systemUptime
-            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=preparationStarted")
-
-            guard let audioURL = await CloudStorageManager.shared.prepareFileForReading(at: filePath) else {
-                print("Failed to prepare audio file for transcription: \(filePath)")
-                return .audioUnavailable
-            }
-            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=fileReady seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
-
-#if DEBUG
-            let windowSamples = whisperKit.featureExtractor.windowSamples ?? Constants.defaultWindowSamples
-            let windowSeconds = Double(windowSamples) / Double(WhisperKit.sampleRate)
-            print("WhisperKit windowSamples=\(windowSamples) (~\(String(format: "%.2f", windowSeconds))s) sampleRate=\(WhisperKit.sampleRate)")
-#endif
-
-            let updateProgressOnMain: (Float) -> Void = { [weak self] value in
-                guard let self else { return }
-                self.smoothProgress(to: value, progressCallback: progressCallback)
-            }
-            updateProgressOnMain(0.01)
-
-            let vadStart = ProcessInfo.processInfo.systemUptime
-            let containsProbableSpeech = await Task.detached(priority: .utility) {
-                NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
+            samples = try await Task.detached(priority: .utility) {
+                try Qwen3AudioPCM.loadPCM16kMono(url: audioURL)
             }.value
-            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=vadFinished seconds=\(ProcessInfo.processInfo.systemUptime - vadStart) speech=\(containsProbableSpeech)")
-            guard containsProbableSpeech else {
-                print("Skipping transcription because no probable speech was detected in audio file: \(filePath)")
-                updateProgressOnMain(1.0)
-                return .noSpeech
-            }
+        } catch {
+            print("Could not decode audio for transcription: \(error)")
+            return .engineError(Self.engineFailurePrefix + error.localizedDescription)
+        }
+        guard !samples.isEmpty else { return .noSpeech }
+        updateProgressOnMain(0.1)
 
-            whisperKit.transcriptionStateCallback = { state in
-                Task { @MainActor in
-                    switch state {
-                    case .convertingAudio:
-                        updateProgressOnMain(0.05)
-                    case .transcribing:
-                        updateProgressOnMain(0.1)
-                    case .finished:
-                        break
-                    }
-                }
-            }
-            defer {
-                whisperKit.segmentDiscoveryCallback = nil
-                whisperKit.transcriptionStateCallback = nil
-            }
-
-            let selectedLanguageKey = UserDefaults.standard.string(forKey: "selectedLanguage") ?? "auto"
-            let languageCode: String?
-            let customPrompt = UserDefaults.standard.string(forKey: "transcriptionPrompt") ?? ""
-
-            updateProgressOnMain(0.02)
-
-            let audioPath = audioURL.path
-
-            let isAutoLanguage = selectedLanguageKey == "auto"
-            if isAutoLanguage {
-                languageCode = nil
-                print("Auto language mode: WhisperKit will detect language via prefill")
-            } else {
-                languageCode = LanguageConstants.languages[selectedLanguageKey]
-                print("Using selected language code: \(languageCode ?? "nil")")
-            }
-            updateProgressOnMain(0.06)
-            updateProgressOnMain(0.1)
-
-            let baseDecodeOptions = DecodingOptions(
-                task: .transcribe,
-                language: languageCode,
-                temperature: 0.0,
-                // Measured on a 43 min far-field replay: with one fallback instead of
-                // three, 19 of 115 slices drifted clearly further from the reference
-                // (wrong language, garbled text) for a 32% shorter decode.
-                temperatureFallbackCount: 3,
-                sampleLength: 224,
-                usePrefillPrompt: true,
-                usePrefillCache: false,
-                detectLanguage: isAutoLanguage,
-                skipSpecialTokens: true,
-                withoutTimestamps: false,
-                wordTimestamps: false,
-                clipTimestamps: [0.0],
-                compressionRatioThreshold: 2.0,
-                // Incremental segments are pre-cut to ≤29 s by our own VAD;
-                // WhisperKit must treat each input as a single window.
-                chunkingStrategy: ChunkingStrategy.none
-            )
-
-            let promptTokens: [Int]?
-            if !customPrompt.isEmpty, let tokenizer = whisperKit.tokenizer {
-                let promptText = " " + customPrompt.trimmingCharacters(in: .whitespaces)
-                promptTokens = tokenizer.encode(text: promptText)
-                print("Using custom prompt: \(customPrompt)")
-            } else {
-                promptTokens = nil
-            }
-
-            // WhisperKit advances `progress` only when a decode window finishes, and
-            // every slice here is a single window, so it sits at zero for the whole
-            // decode. The timestamp tokens Whisper emits as it walks the audio are
-            // the only signal that moves in between. iOS expires a continued
-            // processing task that reports nothing for ~30 s, and a 29 s slice can
-            // take longer than that to decode on a locked phone.
-            let timeTokenBegin = whisperKit.tokenizer?.specialTokens.timeTokenBegin
-            let singleWindowSeconds = Self.singleWindowSeconds(of: audioURL)
-
-            // Whisper invokes this once per decoded token; only hop to the
-            // main actor when the fraction moved enough to be visible.
-            let lastReportedFraction = OSAllocatedUnfairLock<Float>(initialState: 0)
-            let decode: (Bool) async throws -> String? = { [weak self] usePrompt in
-                var decodeOptions = baseDecodeOptions
-                decodeOptions.promptTokens = usePrompt ? promptTokens : nil
+        let languageHint = Qwen3ASRDefaults.languageHint(
+            forSelectedLanguageKey: UserDefaults.standard.string(forKey: "selectedLanguage"))
+        // Callers slice to the engine's limit; anything longer is cut here so
+        // the model never falls onto its slow long-input path.
+        let chunkSamples = Int(Qwen3ASRDefaults.singlePassSecondsLimit * 16_000)
+        var pieces: [String] = []
+        var offset = 0
+        do {
+            while offset < samples.count {
+                let end = min(offset + chunkSamples, samples.count)
                 let passStart = ProcessInfo.processInfo.systemUptime
-                let firstCallback = OSAllocatedUnfairLock<Bool>(initialState: true)
-                Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passStarted prompted=\(usePrompt)")
-                defer {
-                    Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passEnded prompted=\(usePrompt) seconds=\(ProcessInfo.processInfo.systemUptime - passStart)")
-                }
-                let results = try await whisperKit.transcribe(
-                    audioPath: audioPath,
-                    decodeOptions: decodeOptions
-                ) { decoding in
-                    guard let self else { return nil }
-                    if self.cancelRequested || Task.isCancelled {
-                        return false
-                    }
-                    self.decodeWorkCounter.withLock { $0 &+= 1 }
-                    let isFirst = firstCallback.withLock { first in
-                        defer { first = false }
-                        return first
-                    }
-                    if isFirst {
-                        Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=firstToken prompted=\(usePrompt) seconds=\(ProcessInfo.processInfo.systemUptime - passStart)")
-                    }
-                    var fraction = Float(whisperKit.progress.fractionCompleted)
-                    if let timeTokenBegin, let singleWindowSeconds,
-                       let decoded = Self.decodedWindowFraction(
-                           tokens: decoding.tokens, timeTokenBegin: timeTokenBegin, windowSeconds: singleWindowSeconds) {
-                        fraction = max(fraction, Float(decoded))
-                    }
-                    let shouldPublish = lastReportedFraction.withLock { last in
-                        guard fraction >= last + 0.01 || fraction >= 1.0 else { return false }
-                        last = fraction
-                        return true
-                    }
-                    if shouldPublish {
-                        Task { @MainActor in
-                            updateProgressOnMain(fraction)
-                        }
-                    }
-                    return nil
-                }
-                if let result = results.first {
-                    let timings = result.timings
-                    Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passMetrics audioLoading=\(timings.audioLoading) encoding=\(timings.encoding) prefill=\(timings.prefill) fallbacks=\(Int(timings.totalDecodingFallbacks)) tokens=\(Int(timings.totalDecodingLoops))")
-                    let ratio = result.segments.map(\.compressionRatio).max() ?? 0
-                    let logprob = result.segments.map(\.avgLogprob).min() ?? 0
-                    let temperature = result.segments.map(\.temperature).max() ?? 0
-                    Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=qualityMetrics ratio=\(ratio) logprob=\(logprob) temperature=\(temperature)")
-                }
-                return results.first?.text
-            }
-
-            let firstPassText = try await decode(promptTokens != nil)
-
-            if cancelRequested || Task.isCancelled {
-                return .cancelled
-            }
-
-            guard let firstPassText else {
-                return .whisperError("empty result")
-            }
-
-            // Without a prompt there is nothing left to vary, so one pass decides.
-            guard promptTokens != nil else {
-                return Self.validatedWhisperOutput(firstPassText)
-            }
-
-            switch Self.promptedOutputVerdict(for: firstPassText, prompt: customPrompt) {
-            case .usable:
-                return .text(firstPassText)
-            case .promptEcho, .degenerate:
-                // The prompt derails real speech as well as silence: on a 43 min
-                // replay, 8 of the 10 slices that ended up here held speech that
-                // the prompt-free pass transcribed. The prompt is the only input
-                // we can change, so decode once more without it.
-                print("Segment output looks prompt-driven; decoding again without the custom prompt")
-                let promptFreeText = try await decode(false)
+                let text = try await transcribeSamples(Array(samples[offset..<end]), languageHint)
+                Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passEnded seconds=\(ProcessInfo.processInfo.systemUptime - passStart) audioSeconds=\(Double(end - offset) / 16_000)")
+                decodeWorkCounter.withLock { $0 &+= 1 }
                 if cancelRequested || Task.isCancelled {
                     return .cancelled
                 }
-                guard let promptFreeText else {
-                    return .whisperError("empty result")
-                }
-                if case .degenerate = Self.promptedOutputVerdict(for: promptFreeText, prompt: "") {
-                    return .whisperError("repetitive output")
-                }
-                guard TranscriptSanitizer.cleanedTranscript(promptFreeText) != nil else {
-                    // Nothing intelligible with or without the prompt. This slice is
-                    // noise, not a decoder failure, and must not fail the whole note.
-                    return .noSpeech
-                }
-                return .text(promptFreeText)
+                pieces.append(text)
+                offset = end
+                updateProgressOnMain(0.1 + 0.9 * Float(offset) / Float(samples.count))
             }
-        } catch {
-            print("WhisperKit transcription error: \(error)")
+        } catch Qwen3ASRModelStore.StoreError.modelNotDownloaded {
             currentEngine = .notAvailable
-            return .whisperError(Self.engineFailurePrefix + error.localizedDescription)
+            return .modelUnavailable
+        } catch {
+            print("Transcription engine error: \(error)")
+            return .engineError(Self.engineFailurePrefix + error.localizedDescription)
         }
+
+        let text = pieces.joined(separator: " ")
+        guard TranscriptSanitizer.cleanedTranscript(text) != nil else {
+            // Nothing intelligible. This slice is noise, not a decoder failure,
+            // and must not fail the whole note.
+            return .noSpeech
+        }
+        return Self.validatedEngineOutput(text)
     }
 
     func resetProgressSmoothing() {
@@ -1548,80 +1366,29 @@ extension TranscriptionService {
     static let repetitionCompressionLimit: Float = 8.0
 
     /// Marks a diagnostic for a decode the engine aborted, as opposed to output
-    /// Whisper produced and we rejected. Only the former is worth another attempt.
-    nonisolated static let engineFailurePrefix = "WhisperKit error: "
+    /// it produced and we rejected. Only the former is worth another attempt.
+    nonisolated static let engineFailurePrefix = "Engine error: "
 
     nonisolated static func isEngineFailure(_ diagnostic: String?) -> Bool {
         diagnostic?.hasPrefix(engineFailurePrefix) ?? false
     }
 
-    nonisolated static func validatedWhisperOutput(_ text: String) -> RawTranscription {
-        // Decoder temperature fallback can exhaust its retries and still return
-        // repetitive text.
-        guard TextUtilities.compressionRatio(of: text) <= repetitionCompressionLimit else {
-            return .whisperError("repetitive output")
+    /// How much smaller DEFLATE makes the text. Ordinary speech stays near 1–2;
+    /// a decoder stuck repeating itself compresses many times over.
+    nonisolated static func compressionRatio(of text: String) -> Float {
+        let data = Data(text.utf8)
+        guard !data.isEmpty,
+              let compressed = try? (data as NSData).compressed(using: .zlib),
+              compressed.length > 0 else { return 0 }
+        return Float(data.count) / Float(compressed.length)
+    }
+
+    nonisolated static func validatedEngineOutput(_ text: String) -> RawTranscription {
+        // The repetition penalty makes loops rare, not impossible.
+        guard compressionRatio(of: text) <= repetitionCompressionLimit else {
+            return .engineError("repetitive output")
         }
         return .text(text)
-    }
-
-    /// Whisper timestamps are 20 ms steps from the start of the window.
-    nonisolated static let timestampTokenSeconds = 0.02
-
-    /// How far into a single decode window the decoder has reached, from the
-    /// latest timestamp token. Nil when no timestamp has been emitted yet.
-    nonisolated static func decodedWindowFraction(tokens: [Int], timeTokenBegin: Int, windowSeconds: Double) -> Double? {
-        guard windowSeconds > 0,
-              let latest = tokens.lazy.filter({ $0 >= timeTokenBegin }).max() else { return nil }
-        let seconds = Double(latest - timeTokenBegin) * timestampTokenSeconds
-        return min(1, max(0, seconds / windowSeconds))
-    }
-
-    /// Length of audio that decodes as one Whisper window, or nil when it spans
-    /// several. Timestamps restart in each window, so they only measure progress
-    /// through a single one.
-    nonisolated static func singleWindowSeconds(of url: URL) -> Double? {
-        guard let file = try? AVAudioFile(forReading: url) else { return nil }
-        let sampleRate = file.processingFormat.sampleRate
-        guard sampleRate > 0 else { return nil }
-        let seconds = Double(file.length) / sampleRate
-        return seconds > 0 && seconds <= 30.5 ? seconds : nil
-    }
-
-    /// Why a prompted pass produced nothing usable. Separating a prompt echo from
-    /// a genuine decoder loop is what makes one more pass worth running.
-    enum PromptedOutputVerdict: Equatable {
-        case usable
-        /// The conditioning prompt handed back instead of speech.
-        case promptEcho
-        /// Repetition that survived the decoder's own temperature fallback.
-        case degenerate
-    }
-
-    nonisolated static func promptedOutputVerdict(for text: String, prompt: String) -> PromptedOutputVerdict {
-        if isPromptEcho(text, prompt: prompt) { return .promptEcho }
-        if TextUtilities.compressionRatio(of: text) > repetitionCompressionLimit { return .degenerate }
-        return .usable
-    }
-
-    /// True when striking every copy of the prompt out of the output leaves
-    /// nothing behind. Whisper regurgitates `promptTokens` on slices with no
-    /// intelligible speech — a pause, page turns, distant room noise — and that
-    /// is the user's own prompt coming back, not a transcript.
-    nonisolated static func isPromptEcho(_ text: String, prompt: String) -> Bool {
-        let normalizedPrompt = normalizedForEchoComparison(prompt)
-        // Too short a prompt matches ordinary speech by accident.
-        guard normalizedPrompt.count >= 4 else { return false }
-        let normalizedText = normalizedForEchoComparison(text)
-        guard !normalizedText.isEmpty else { return false }
-        let remainder = normalizedText.replacingOccurrences(of: normalizedPrompt, with: "")
-        return remainder.count <= 2
-    }
-
-    nonisolated static func normalizedForEchoComparison(_ text: String) -> String {
-        let scalars = text.lowercased().unicodeScalars.filter {
-            CharacterSet.alphanumerics.contains($0)
-        }
-        return String(String.UnicodeScalarView(scalars))
     }
 
     func annotatedText(for result: TranscriptionResult) -> String {

@@ -37,17 +37,11 @@ struct SavedAudioReplayTests {
             (try? String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let modelName = option("saved-model.txt") ?? "openai_whisper-small"
-        let promptKey = "transcriptionPrompt"
-        let previousPrompt = UserDefaults.standard.string(forKey: promptKey)
-        UserDefaults.standard.set(option("saved-prompt.txt") ?? "", forKey: promptKey)
-        defer { UserDefaults.standard.set(previousPrompt, forKey: promptKey) }
-
         let modelManager = ModelManager()
         let loadStarted = ProcessInfo.processInfo.systemUptime
-        await modelManager.loadModel(modelName)
+        await modelManager.loadModel()
         let modelLoadSeconds = ProcessInfo.processInfo.systemUptime - loadStarted
-        try #require(modelManager.isModelLoaded(), "Model \(modelName) is not downloaded")
+        try #require(modelManager.isModelLoaded(), "The speech model could not be loaded")
 
         let store = SegmentProgressStore(rootDirectory: FileManager.default.temporaryDirectory
             .appendingPathComponent("voicely-replay-store-\(UUID().uuidString)"))
@@ -66,7 +60,7 @@ struct SavedAudioReplayTests {
             switch outcome {
             case .text: label = "text"
             case .noSpeech: label = "noSpeech"
-            case .whisperError(let reason): label = "error: \(reason ?? "unknown")"
+            case .engineError(let reason): label = "error: \(reason ?? "unknown")"
             case .modelUnavailable: label = "modelUnavailable"
             case .audioUnavailable: label = "audioUnavailable"
             case .cancelled: label = "cancelled"
@@ -121,7 +115,7 @@ struct SavedAudioReplayTests {
         submittedGaps.sort(by: >)
 
         var report = """
-        model \(modelName), prompt configured \(!(option("saved-prompt.txt") ?? "").isEmpty)
+        model \(modelManager.selectedModel)
         model load before job submission \(String(format: "%.1f", modelLoadSeconds)) s (reported separately)
         audio \(Int(audioSeconds)) s, wall \(Int(wall)) s, speed \(String(format: "%.2f", audioSeconds / wall))x
         segment attempts \(attempts.count), outcome \(note.transcriptionOutcome?.rawValue ?? "none"), error \(note.transcriptionLastErrorMessage ?? "-")

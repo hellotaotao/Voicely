@@ -19,7 +19,7 @@ enum RealRecordingReplayInput {
 }
 
 /// Replays a real recording through the live-transcription pipeline with a real
-/// Whisper model.
+/// speech model.
 @Suite(.serialized, .enabled(if: RealRecordingReplayInput.isConfigured))
 @MainActor
 struct RealRecordingReplayTests {
@@ -37,18 +37,16 @@ struct RealRecordingReplayTests {
     @Test func injectedLiveFailuresAreRecoveredInPlaceInOrder() async throws {
         let pcmURL = try Self.makeRecorderPCM(from: Self.audioURL)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
-        let modelName = (try? String(contentsOf: Self.replayDirectory.appendingPathComponent("model.txt"), encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "openai_whisper-small"
         let modelManager = ModelManager()
-        await modelManager.loadModel(modelName)
-        try #require(modelManager.isModelLoaded(), "Model \(modelName) is not downloaded")
+        await modelManager.loadModel()
+        try #require(modelManager.isModelLoaded(), "The speech model could not be loaded")
         let service = TranscriptionService(modelManager: modelManager)
-        let whisper = service.transcribeImpl
-        // Real Whisper failures (not the injected ones), per run.
+        let engine = service.transcribeImpl
+        // Real engine failures (not the injected ones), per run.
         var realFailures: [String] = []
         let decode: TranscriptionService.TranscribeImpl = { path, progress in
-            let raw = await whisper(path, progress)
-            if case .whisperError(let reason) = raw { realFailures.append(reason ?? "unknown") }
+            let raw = await engine(path, progress)
+            if case .engineError(let reason) = raw { realFailures.append(reason ?? "unknown") }
             return raw
         }
         service.transcribeImpl = decode
@@ -56,7 +54,7 @@ struct RealRecordingReplayTests {
         let clean = try await replay(pcmURL, service: service)
         let cleanFailures = realFailures
 
-        // A few live slices never reach Whisper, as a model that is still loading can cause.
+        // A few live slices never reach the engine, as a model that is still loading can cause.
         realFailures = []
         var calls = 0
         service.transcribeImpl = { path, progress in
@@ -67,7 +65,7 @@ struct RealRecordingReplayTests {
         let spotty = try await replay(pcmURL, service: service)
         let spottyFailures = realFailures
 
-        // No live slice reaches Whisper; all work happens at stop.
+        // No live slice reaches the engine; all work happens at stop.
         realFailures = []
         var failLive = true
         service.transcribeImpl = { path, progress in
@@ -75,14 +73,14 @@ struct RealRecordingReplayTests {
         }
         let allFailed = try await replay(pcmURL, service: service) { failLive = false }
         let allFailedFailures = realFailures
-        service.transcribeImpl = whisper
+        service.transcribeImpl = engine
 
         func lines(_ run: Run) -> Int { run.transcript.split(separator: "\n").count }
         let report = """
-        REPLAY model=\(modelName) audio=\(Self.audioSeconds(pcmURL))s
-        REPLAY clean: \(clean.seconds)s lines=\(lines(clean)) live failures=\(clean.liveFailures) unrecovered=\(clean.unrecovered) full=\(clean.requiresFullTranscription) whisper errors=\(cleanFailures)
-        REPLAY spotty: \(spotty.seconds)s lines=\(lines(spotty)) live failures=\(spotty.liveFailures) unrecovered=\(spotty.unrecovered) full=\(spotty.requiresFullTranscription) whisper errors=\(spottyFailures)
-        REPLAY all-failed: \(allFailed.seconds)s lines=\(lines(allFailed)) live failures=\(allFailed.liveFailures) unrecovered=\(allFailed.unrecovered) full=\(allFailed.requiresFullTranscription) whisper errors=\(allFailedFailures)
+        REPLAY model=\(modelManager.selectedModel) audio=\(Self.audioSeconds(pcmURL))s
+        REPLAY clean: \(clean.seconds)s lines=\(lines(clean)) live failures=\(clean.liveFailures) unrecovered=\(clean.unrecovered) full=\(clean.requiresFullTranscription) engine errors=\(cleanFailures)
+        REPLAY spotty: \(spotty.seconds)s lines=\(lines(spotty)) live failures=\(spotty.liveFailures) unrecovered=\(spotty.unrecovered) full=\(spotty.requiresFullTranscription) engine errors=\(spottyFailures)
+        REPLAY all-failed: \(allFailed.seconds)s lines=\(lines(allFailed)) live failures=\(allFailed.liveFailures) unrecovered=\(allFailed.unrecovered) full=\(allFailed.requiresFullTranscription) engine errors=\(allFailedFailures)
         """
         print(report)
         try? report.write(to: Self.replayDirectory.appendingPathComponent("report.txt"), atomically: true, encoding: .utf8)
@@ -91,7 +89,7 @@ struct RealRecordingReplayTests {
                 to: Self.replayDirectory.appendingPathComponent("\(name).txt"), atomically: true, encoding: .utf8)
         }
 
-        // Whisper's temperature fallback samples, so wording can differ between
+        // Decoding is not bit-for-bit repeatable, so wording can differ between
         // runs; what must hold is that undecoded slices are filled in place, in order.
         #expect(!clean.transcript.isEmpty)
         #expect(spotty.liveFailures >= 3)

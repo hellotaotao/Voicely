@@ -74,7 +74,7 @@ enum FirstLaunchOnboarding {
         FirstLaunchOnboardingPage(
             id: "private",
             title: "Transcribe privately",
-            subtitle: "Offline Whisper runs on this device, so meetings, ideas, and journals stay local.",
+            subtitle: "Speech recognition runs on this device, so meetings, ideas, and journals stay local.",
             systemImage: "lock.shield.fill",
             accentColor: .green
         ),

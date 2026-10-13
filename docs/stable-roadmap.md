@@ -17,7 +17,7 @@
 | ① 收敛基线 | 0.23.1 + 有限 Whisper 温度重试 + 逐段预览 | ✅ | 已提交至 `dev`（`6cc7c75`…`575b9b4`） |
 | ② 关键可靠性 | 保存、转码失败、收尾、取消、队列、断点恢复 | ✅ 实现<br>🧪 真机 | `7899dea`；Mac 实测通过，iPhone 真机本轮被明确豁免 |
 | ③ **定时停止与延长** | 按时长/结束时刻自动停止，提前提醒，随时延长 | ⬜ **下一个** | 代码无 `autoStop`/`countdown` 相关实现 |
-| ④ 千问主力版本 | 中文及中英混说完整闭环 | ⬜ | `Vendor/speech-swift` 存在，但 `project.pbxproj` 零引用，未接入工程 |
+| ④ 千问唯一引擎 | 千问替换 Whisper，Whisper 整体移除 | 🧪 `qwen-engine` 分支 | 2026-10-14 实现完成、未合并；Mac 实测通过，iPhone 真机未跑（见 ④ 详情） |
 | ⑤ Mac 专项 | 多声道转换 + 无信号提示 | ⚠️ | 手动 mixdown 已实现（`AudioRecordingService.swift:610`）；**录音中**实时无信号提示仍缺，只有录完后的静音提示 |
 | ⑥ 预约提醒录音 | 本地通知提醒，点通知打开准备界面 | ⬜ | 无 `UNUserNotificationCenter` 调用 |
 | ⑦ 反馈驱动的增强 | 系统入口完善等 | 🧪 | Live Activity / Shortcut / DeepLink 文件均已存在，真机验收未做 |
@@ -73,12 +73,25 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 
 涉及：`Voicely/ContentView.swift`、`Voicely/AudioRecordingService.swift`、`Voicely/RecordingActivityAttributes.swift`
 
-### ④ 千问主力版本
+### ④ 千问唯一引擎（`qwen-engine` 分支，2026-10-14）
 
-中文及中英混说，完整下载/加载/长音频/恢复闭环。排除自动模型路由、逐词定位。
-验收：同一 iPhone 的质量、速度与资源测试；通过后发布。
+2026-10-14 决定提前到 ③ 之前做，并且不做双引擎：千问 0.6B 是唯一引擎，Whisper/WhisperKit 整体移除。
 
-现状：`Vendor/speech-swift` 目录在，但没接进 Xcode 工程，等于从零接线。
+- **后端**：Apple 芯片的 Mac 走 MLX（GPU），其余一律走 CoreML（CPU+神经引擎，锁屏可用）。选择逻辑在 `Qwen3Backend`，模型由 `Qwen3ASRModelStore` 独占。
+- **切片**：单趟上限 15 s，分段 14 s，VAD 最早切点 7 s（原 30/29/15）。
+- **模型**：MLX 约 0.7 GB（`mlx-community/Qwen3-ASR-0.6B-4bit`），CoreML 约 0.95 GB（`aufklarer/Qwen3-ASR-CoreML` 的四个 mlmodelc + 分词器）。放在 Application Support/Qwen3ASR，不进备份。已下载的模型离线加载。
+- **CoreML 解码**用的是 P-0h 验证过的 MLX-free 路径（`Qwen3CoreMLModel`），已补重复惩罚 1.15 和每片 `autoreleasepool`。
+- **移除**：模型选择与模型列表页、自定义 prompt、计算单元选项、Benchmark 页、prompt 回声检测、温度重试相关逻辑。语言列表缩到千问支持的 30 种。旧 Whisper 模型文件在启动时清掉（`RetiredWhisperModels`）。
+- **部署目标**：iOS 18.0 / macOS 15.0（包的要求）。构建需要 Xcode 的 Metal Toolchain 组件。
+
+已验证（Mac）：310 个单元测试通过；`Qwen3RealModelTests` 用真实权重跑通 MLX 和 CoreML 两个后端；`RealRecordingReplayTests` 用真实模型跑通 5 分钟录音的边录边转与停止收尾（28 片，注入的失败全部原位恢复）；iOS 模拟器与真机架构 Release 均能编译。
+
+合并回 `dev` 之前还差：
+
+- **iPhone 真机**：前台和锁屏各录一条并转完。CoreML 路径从未在真机上跑过。
+- **模型下载路径**没有实跑（测试用的是本机已有的权重）。首次启动会自动下载约 0.95 GB，不区分蜂窝网络。
+- **切片边界的断句**：每 14 s 一片、每片一行，模型会给每片首词大写并补句号，句子中途被切开时读起来是断的。
+- 词级时间戳仍然没有（千问只有分片级）。
 
 ### ⑤ Mac 专项
 
@@ -277,6 +290,7 @@ Codex 审阅（gpt-6.1-sol，high，2026-10-13）另指出并已修：停止时�
 - vendored 包自带的 `transcribeWithoutMLX` 是坏的：把神经引擎返回的 Float16 当 Float32 读，输出乱码，且逐 token 预填只有 0.75× 实时。`docs/qwen-replay/Sources/QwenCoreML/main.swift` 里的 `transcribeMLXFree` 是可用的替代：批量预填、按 dtype 和 strides 读编码器输出，与原批量路径逐字一致。
 - 每个切片必须包 `autoreleasepool`，否则约 200 个切片后 CoreML 抛 "Failed to allocate memory IOSurface" 崩溃（一小时会议必中）。
 - CoreML 路径没有接重复惩罚：一段笑声会"哈"到 token 上限（单片 21 s）。需要在生成循环里补 repetition penalty 或 no-repeat n-gram。
+- Mac 上让 CoreML 用 GPU 并不更快（2026-10-14，会议 2 前 30 片，神经引擎基线 6.5×）：`.cpuAndGPU` 只有 2.5× 且 30 片里 10 片文字与神经引擎不同，`.all` 5.3× 且输出逐字相同（系统仍选了神经引擎）。同一块 GPU 上 MLX 是 29×，所以差距来自 CoreML 逐 token 调用的开销，不是硬件。开关是 `COMPUTE_UNITS=all|cpuAndGPU|cpuOnly`。
 - 未做：iPhone 真机（前台与锁屏）、词级时间戳、字错率。
 
 ### P-1 ⚠️ 转录指标：time ratio 与 speed 一直停在 "Measuring"

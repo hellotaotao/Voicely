@@ -4,7 +4,7 @@
 > 其他文档若与本文件冲突，一律以本文件为准。
 > 历史执行/验证记录已剥离到 [roadmap-log.md](roadmap-log.md)，本文件只写"要做什么、做到哪一步"。
 >
-> 状态标记最后核对：**2026-09-13**，逐条按当前 `dev` 分支代码核实，不凭记忆。**2026-09-19** 补记 0.23.9 已提交、0.23.10 录音收尾修复（P-0）与 stash 回退（P-6）；**2026-09-20** 补记 build 4 手动重转录后台支持（P-0a）；**2026-09-21** 补记 0.23.11 prompt 回声与收尾修复（P-0b）、后台任务停滞判定（P-0c）、重解期间的解码心跳（P-0d）；**2026-09-22** 补记自动恢复漏接后台任务（P-0e）。
+> 状态标记最后核对：**2026-09-13**，逐条按当前 `dev` 分支代码核实，不凭记忆。**2026-09-19** 补记 0.23.9 已提交、0.23.10 录音收尾修复（P-0）与 stash 回退（P-6）；**2026-09-20** 补记 build 4 手动重转录后台支持（P-0a）；**2026-09-21** 补记 0.23.11 prompt 回声与收尾修复（P-0b）、后台任务停滞判定（P-0c）、重解期间的解码心跳（P-0d）；**2026-09-22** 补记自动恢复漏接后台任务（P-0e）；**2026-10-13** 补记 0.23.12 收尾重试收窄（P-0g）与 Whisper/千问对比实测（P-0h）。
 
 标记含义：✅ 已完成 · 🚧 进行中 · 🧪 代码就位、真机验收未做 · ⬜ 未开始 · ⚠️ 部分完成
 
@@ -22,7 +22,7 @@
 | ⑥ 预约提醒录音 | 本地通知提醒，点通知打开准备界面 | ⬜ | 无 `UNUserNotificationCenter` 调用 |
 | ⑦ 反馈驱动的增强 | 系统入口完善等 | 🧪 | Live Activity / Shortcut / DeepLink 文件均已存在，真机验收未做 |
 
-**版本现状（2026-09-19）**：0.23.9 已于 09-11 上传 TestFlight，当时是从未提交的工作区直接打包的，源码 09-19 补提交为 `aaf8002`。0.23.10 = 录音收尾修复（P-0），build 4 另含手动重转录后台支持（P-0a）。0.23.11 = prompt 回声与收尾修复（P-0b）+ 后台任务进度上报（P-0c）；build 2 加解码心跳（P-0d）。以上均待真机验收。0.23.8 起的版本都**不含** 0.23.5–0.23.7 的改动（见 P-6）。
+**版本现状（2026-09-19）**：0.23.9 已于 09-11 上传 TestFlight，当时是从未提交的工作区直接打包的，源码 09-19 补提交为 `aaf8002`。0.23.10 = 录音收尾修复（P-0），build 4 另含手动重转录后台支持（P-0a）。0.23.11 = prompt 回声与收尾修复（P-0b）+ 后台任务进度上报（P-0c）；build 2 加解码心跳（P-0d）。0.23.12（2026-10-13）= 收尾不再重解被拒分片（P-0g）+ 自动恢复走后台任务（P-0e）+ iOS 去掉 GPU 选项（P-0f），后两项此前已提交未发布。以上均待真机验收。0.23.8 起的版本都**不含** 0.23.5–0.23.7 的改动（见 P-6）。
 
 ---
 
@@ -211,7 +211,7 @@ Suspending ... - required criterion is not satisfied.
 2. 这条录音在手机上约 0.74× 实时，43 分钟要跑约 58 分钟。dasd 给任务标的 `UserInitiated, 900s` 是否为 15 分钟上限仍未确认；若是，长录音需解锁续跑（checkpoint 在）。
 3. 速度本身的抓手是 `temperatureFallbackCount`（现为 3）：这条录音回退用满后 logprob 仍在 -1.15～-1.39，没变好。要不要降到 1，是质量与速度的取舍，待用户决定。
 
-### P-0e 🧪 自动恢复绕过 saved-audio 后台任务（2026-09-22，未发布）
+### P-0e 🧪 自动恢复绕过 saved-audio 后台任务（2026-09-22，随 0.23.12 发布）
 
 0.23.11 (2) TestFlight 真机：打开 App 后自动恢复转录，锁屏无进度提示、无失败提示，但转录不推进。`voicely-bg-2h.logarchive` 确认 22:14:17 与 22:39:19 进入 `running-suspended-NotVisible`，后一段直到 23:13:39 回前台才恢复；没有 continued-processing 启动记录。用户确认很可能走的是自动恢复。
 
@@ -221,13 +221,63 @@ Suspending ... - required criterion is not satisfied.
 
 真机验收：新包中保留一个未完成的重转任务，重启 App 触发自动恢复，不再点 Re-transcribe，直接锁屏；核对后台任务是否获批、锁屏期间 checkpoint 是否推进。自动化测试不能证明 iOS 实际批准或维持后台运行。
 
-### P-0f 🧪 iOS 去掉 GPU 计算选项和 Benchmark 页（2026-09-27，未发布）
+### P-0f 🧪 iOS 去掉 GPU 计算选项和 Benchmark 页（2026-09-27，随 0.23.12 发布）
 
 iOS 在 App 进后台或锁屏后会中止 GPU 任务：CoreML 直接抛 `Insufficient Permission (to submit GPU work from background)`，不会自动退到 CPU；iOS 26 的后台 GPU entitlement 目前只支持 iPad。录音中的实时转录（`IncrementalTranscriptionCoordinator`）对此没有防护，选 GPU 时锁屏期间的分段会失败，停止后才重试。
 
 改动：iOS/iPadOS 的 Encoder/Decoder Picker 只剩 CPU 和 Neural，Settings 不再显示 Run Benchmark（只剩 ANE 和 CPU 可比，没有意义）；Mac Catalyst 没有后台限制，GPU 和 Benchmark 都保留。计算单元本来就不持久化，启动总是默认 Neural，没有旧设置要迁移。`loadedModelSupportsBackgroundTranscription` 保留作兜底。
 
 真机验收（可选）：本项目从未实测过"GPU + 锁屏"的实际表现，外部证据见 Apple Developer Forums thread 757715。
+
+### P-0g 🧪 正文已完整却长时间停在 "Finalizing"（0.23.12）
+
+TestFlight 0.23.11 (2) 用户反馈：录音能成功，但停止后 "Finalizing" 挂很久，而正文看起来已经完整。原因（代码推断，未拉设备日志）：停止时每个实时失败的分片都要重解一遍，而失败分片在收尾期间不留痕迹（占位符要等重试全部结束才插入），所以正文读着连贯、后台其实还在重跑。一片最坏是「带 prompt + 去 prompt」× 4 次温度，手机上 45–78 秒。
+
+改动：停止时只重解 Whisper **没解过**的分片（模型还在加载、被取消、引擎抛错如锁屏时 GPU 被拒）。Whisper 解过但输出被判不可用的分片（`repetitive output` / `blank output`）不再重解，直接标占位符并带上原因；要补由用户点 Re-transcribe。`remainingAudioSeconds` 和 `finalizationProgress` 同步只算待重解的分片。
+
+真机验收：录一段带停顿的长录音，停止后 Finalizing 应只持续尾段解码的时间；若出现占位符，记下失败原因分布。
+
+同日追加（用户确认），把每个分片最坏的解码遍数从 16–24 降到 8（外层重试没了，温度回退保持 3）：
+
+- `temperatureFallbackCount` 曾改为 1，经 Codex 质疑后做了 1 对 3 的配对回放（辩论赛录音，带 prompt 那遍），**已改回 3**：回退 1 次时 19 / 115 片明显更偏离参考文本（去 prompt 的输出），反过来只有 1 片；以英文为主的分片 21 对 3；耗时 882 s 对 1295 s。P-0d 里"回退用满后 logprob 仍差"只说明用满的那些没救回来，没覆盖第 2、3 次回退救回来的。
+- 重转录路径（`SegmentedAudioTranscriber` 外层重试、单遍路径的自动重试）只对引擎抛错重试一次，被判不可用的输出不重试。失败文案相应从 "N segment(s) failed after retry" 改为 "N segment(s) failed"。
+
+VAD 门控的现状：`NeuralSpeechAnalyzer` 对整个 ≤29 秒分片只做放行/跳过，任意一帧（36 ms）语音概率 ≥ 0.55，或 0.40 以上累计 0.25 秒，整片就原样送进 Whisper。
+
+**VAD 门槛重放（2026-10-12，`VADGateReplayTests`，opt-in）**：那条 2602 秒辩论赛远场录音，Mac，large-v3 turbo 954MB，prompt `Claude Code`，`temperatureFallbackCount: 1`。按 app 的切法得 115 片，每片记 VAD 逐帧概率，再带 prompt、不带 prompt 各解一遍。原始数据在 test host 的 `tmp/voicely-replay/vad-report.jsonl`。
+
+- **提高 VAD 门槛不是抓手。** 现门槛 115 片全部放行。要求 ≥0.55 的语音累计 1 秒只拦 4 片、3 秒拦 9 片，而被拦的里面有真话：第 2 片语音累计只有 0.07 秒，去 prompt 却转出一句完整的"…评委将这一票给了正方"。远场语音的 VAD 概率本来就低，门槛区分不开"没人说话"和"人离得远"。
+- **问题在 prompt 本身。** 带 prompt 那遍有 10 片输出不可用（空、复读、乱码），其中 8 片去 prompt 能转出正文，5 片是 15–26 秒的满语音分片。另有 21 片带 prompt 的输出以英文为主（去 prompt 只有 1 片，且那片确实是 "Thank you"），例如把整段中文转成 "But in the Code of Law…"、"I'm sorry!" 连环复读。"Code" 一词在带 prompt 的输出里出现在 8 片，去 prompt 的输出里 0 片，全是 prompt 注入的。两遍文本相似度 ≥0.6 的只有 68 片（1579 秒），其余 47 片（1023 秒）有实质差异。
+- 耗时：带 prompt 882 秒，去 prompt 639 秒；单片解码超过 10 秒的，带 prompt 26 片，去 prompt 4 片。
+
+据此撤回了"prompt 回声直接判 `noSpeech`"：这条录音里判成回声的 2 片都不是静音，其中 1 片是 17 秒真话。回声和复读仍去 prompt 再解一遍。
+
+Codex 审阅（gpt-6.1-sol，high，2026-10-13）另指出并已修：停止时重试仍失败的引擎错误分片被标成占位符后仍算"待重试"，使 `finalizationProgress` 到不了 1、`remainingAudioSeconds` 不归零；补了三个测试（引擎连续失败只重试一次、引擎在停止时恢复的会话层测试、重转录路径只多解一次）。它还指出 WhisperKit 0.16.0 的 `noSpeechProb` 写死为 0，调 `noSpeechThreshold` 无效。
+
+未决：prompt 的用法。它现在被 prefill 进每个分片，这条录音里伤到的远多于帮到的（录音里没人说过 Claude Code）。候选：默认去 prompt 解码、只在用户明确需要时带；或带 prompt 的输出语言与去 prompt 的语言探测不一致时弃用。需用户定。
+
+### P-0h 📊 Whisper 与千问对比实测（2026-10-12/13，Mac）
+
+三条录音：辩论赛（中文远场，2602 s）、AI 会议（英文，3433 s）、会议 2（英文，2291 s，三条里最干净）。Whisper = large-v3 turbo 954MB，按 app 切片；千问 = Qwen3-ASR 0.6B，按 old-dev 的 14 s 切片规则。没有人工标准答案，质量来自指标和抽读。工具和脚本在 `docs/qwen-replay/`（依赖 old-dev 的 `Vendor/speech-swift`，用 `swift build --build-system native` 编译，MLX 的 metallib 需另备）。
+
+| | 辩论赛 | AI 会议 | 会议 2 |
+|---|---|---|---|
+| Whisper 带 prompt / 不带（解码秒数） | 882 / 639 | 916 / 966 | 445 / 474 |
+| 千问 MLX（GPU） | 96 s，27× 实时 | 97 s，36× | 79 s，29× |
+| 千问 CoreML（仅 CPU+神经引擎） | 416 s，6.3× | 504 s，6.8× | 359 s，6.4× |
+| Whisper 不带 prompt：空片 / 复读片 | 11 / 0 | 4 / 11 | 0 / 0 |
+| 千问 MLX：空片 / 复读片 | 1 / 0 | 0 / 0 | 0 / 0 |
+| 千问 CoreML 与 MLX 基本一致的切片 | 231 / 277 | 330 / 356 | 227 / 239 |
+
+结论与坑：
+
+- 录音干净时两个引擎质量接近（会议 2 上 Whisper 与千问 83% 分片一致）；录音差时 Whisper 出空片、复读、把带口音的英语判成波斯语/马来语，千问基本不出。千问自带标点。
+- Whisper 的自定义 prompt 和千问的 `context` 都会凭空注入 "Claude Code"；提示词功能换引擎后要重新设计。
+- **锁屏可用的是 CoreML 路径，速度约 6× 实时**，不再有 MLX 那 6–10 倍的优势，但最坏情况稳得多（会议上最慢切片 3.4 s）。峰值内存约 0.5 GB。
+- vendored 包自带的 `transcribeWithoutMLX` 是坏的：把神经引擎返回的 Float16 当 Float32 读，输出乱码，且逐 token 预填只有 0.75× 实时。`docs/qwen-replay/Sources/QwenCoreML/main.swift` 里的 `transcribeMLXFree` 是可用的替代：批量预填、按 dtype 和 strides 读编码器输出，与原批量路径逐字一致。
+- 每个切片必须包 `autoreleasepool`，否则约 200 个切片后 CoreML 抛 "Failed to allocate memory IOSurface" 崩溃（一小时会议必中）。
+- CoreML 路径没有接重复惩罚：一段笑声会"哈"到 token 上限（单片 21 s）。需要在生成循环里补 repetition penalty 或 no-repeat n-gram。
+- 未做：iPhone 真机（前台与锁屏）、词级时间戳、字错率。
 
 ### P-1 ⚠️ 转录指标：time ratio 与 speed 一直停在 "Measuring"
 

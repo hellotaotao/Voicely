@@ -449,7 +449,7 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
-    @Test @MainActor func blankWhisperOutputRetriesThenMarksFailedAndClearsMetadata() async {
+    @Test @MainActor func blankWhisperOutputMarksFailedWithoutRetryAndClearsMetadata() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         var attempts = 0
@@ -467,7 +467,7 @@ struct TranscriptionServiceTests {
         let didStart = await service.requestTranscription(for: note)
 
         #expect(didStart == true)
-        #expect(attempts == 2)  // first try + one automatic retry
+        #expect(attempts == 1)  // rejected output would only come back the same
         #expect(note.transcription.isEmpty)
         #expect(note.transcriptionState == .completed)
         #expect(note.transcriptionOutcome == .failed)
@@ -484,7 +484,8 @@ struct TranscriptionServiceTests {
         var attempts = 0
         service.transcribeImpl = { _, _ in
             attempts += 1
-            return attempts == 1 ? .whisperError("transient") : .text("recovered")
+            return attempts == 1
+                ? .whisperError(TranscriptionService.engineFailurePrefix + "transient") : .text("recovered")
         }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")

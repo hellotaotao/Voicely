@@ -1115,8 +1115,9 @@ private extension TranscriptionService {
 
         var outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
 
-        // A real Whisper error is often transient — retry once before giving up.
-        if case .whisperError = outcome, !wasTranscriptionCancelled() {
+        // An aborted decode is often transient — retry once before giving up.
+        // Output Whisper produced and we rejected would only come back the same.
+        if case .whisperError(let diagnostic) = outcome, Self.isEngineFailure(diagnostic), !wasTranscriptionCancelled() {
             outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
         }
 
@@ -1176,7 +1177,7 @@ private extension TranscriptionService {
             // A real error survived the retry. Don't pretend it succeeded, and don't
             // dump jargon on the user — keep the real reason internally for us.
             #if DEBUG
-            print("❌ [TranscriptionService] note \(noteID) failed after retry: \(diagnostic ?? "unknown error")")
+            print("❌ [TranscriptionService] note \(noteID) failed: \(diagnostic ?? "unknown error")")
             #endif
             if !hadExistingTranscript {
                 note.transcription = ""
@@ -1361,6 +1362,9 @@ private extension TranscriptionService {
                 task: .transcribe,
                 language: languageCode,
                 temperature: 0.0,
+                // Measured on a 43 min far-field replay: with one fallback instead of
+                // three, 19 of 115 slices drifted clearly further from the reference
+                // (wrong language, garbled text) for a 32% shorter decode.
                 temperatureFallbackCount: 3,
                 sampleLength: 224,
                 usePrefillPrompt: true,
@@ -1470,10 +1474,10 @@ private extension TranscriptionService {
             case .usable:
                 return .text(firstPassText)
             case .promptEcho, .degenerate:
-                // Both outcomes are what the conditioning prompt does to a slice
-                // with little intelligible speech: Whisper hands the prompt back,
-                // often on a loop. The prompt is the only input we can change, so
-                // decode once more without it instead of repeating the same pass.
+                // The prompt derails real speech as well as silence: on a 43 min
+                // replay, 8 of the 10 slices that ended up here held speech that
+                // the prompt-free pass transcribed. The prompt is the only input
+                // we can change, so decode once more without it.
                 print("Segment output looks prompt-driven; decoding again without the custom prompt")
                 let promptFreeText = try await decode(false)
                 if cancelRequested || Task.isCancelled {
@@ -1495,7 +1499,7 @@ private extension TranscriptionService {
         } catch {
             print("WhisperKit transcription error: \(error)")
             currentEngine = .notAvailable
-            return .whisperError("WhisperKit error: \(error.localizedDescription)")
+            return .whisperError(Self.engineFailurePrefix + error.localizedDescription)
         }
     }
 
@@ -1542,6 +1546,14 @@ extension TranscriptionService {
     /// Loose backstop, not a normal-speech quality gate: legitimate repeated
     /// terminology can exceed ratios of 2.0 and 2.4.
     static let repetitionCompressionLimit: Float = 8.0
+
+    /// Marks a diagnostic for a decode the engine aborted, as opposed to output
+    /// Whisper produced and we rejected. Only the former is worth another attempt.
+    nonisolated static let engineFailurePrefix = "WhisperKit error: "
+
+    nonisolated static func isEngineFailure(_ diagnostic: String?) -> Bool {
+        diagnostic?.hasPrefix(engineFailurePrefix) ?? false
+    }
 
     nonisolated static func validatedWhisperOutput(_ text: String) -> RawTranscription {
         // Decoder temperature fallback can exhaust its retries and still return

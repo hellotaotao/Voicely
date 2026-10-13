@@ -209,11 +209,32 @@ struct RecordingSessionTests {
         return (session, note, pcmURL)
     }
 
-    @Test func liveSliceRecoveredAtStopCompletesWithoutQueuingWholeRecording() async throws {
-        let script = IncrementalTranscriptionCoordinatorTests.ScriptedSliceResults(
-            ["first slice", nil, "recovered slice"])
-        let (session, note, pcmURL) = try await stopRecording(seconds: 40, script: script)
+    @Test func sliceTheEngineRejectedLiveIsRecoveredAtStopWithoutQueuingWholeRecording() async throws {
+        let (session, audio, collector) = makeSession()
+        session.continuedProcessingDriver = nil
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 40)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
+        audio.currentPCMFileURL = pcmURL
+        let decoder = TranscriptionService()
+        decoder.setModelManager(TranscriptionServiceTests.LoadedModelManager())
+        var calls = 0
+        decoder.transcribeImpl = { _, _ in
+            calls += 1
+            switch calls {
+            case 1: return .text("first slice")
+            case 2: return .whisperError(TranscriptionService.engineFailurePrefix + "GPU work refused")
+            default: return .text("recovered slice")
+            }
+        }
+        session.coordinatorFactory = { url in
+            IncrementalTranscriptionCoordinator(transcriptionService: decoder, recordingFileURL: url)
+        }
+        session.startRecording()
+        try await waitUntil { session.currentRecordingNote != nil }
+        let note = try #require(collector.notes.first)
+        audio.recordingDuration = 40
+        audio.currentFramePosition = AVAudioFramePosition(40 * 16_000)
+        session.stopRecording()
         try await waitUntil { !session.isRecording(note) }
 
         #expect(note.transcription == "first slice\nrecovered slice")
@@ -221,6 +242,7 @@ struct RecordingSessionTests {
         #expect(note.transcriptionOutcome != .failed)
         #expect(!note.pendingTranscription)
         #expect(!note.isTranscribing)
+        #expect(calls == 3)
     }
 
     @Test func failedLiveTailIsMarkedInPlaceInsteadOfQueuingWholeRecording() async throws {
@@ -233,7 +255,7 @@ struct RecordingSessionTests {
         #expect(note.transcription == "first slice\n\(gap)")
         #expect(note.transcriptionState == .completed)
         #expect(note.transcriptionOutcome == .failed)
-        #expect(note.transcriptionLastErrorMessage == "1 segment(s) failed after retry: unknown error ×1")
+        #expect(note.transcriptionLastErrorMessage == "1 segment(s) failed: unknown error ×1")
         #expect(!note.pendingTranscription)
         #expect(!note.isTranscribing)
     }

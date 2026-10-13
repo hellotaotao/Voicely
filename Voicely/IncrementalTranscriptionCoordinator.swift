@@ -62,7 +62,7 @@ final class IncrementalTranscriptionCoordinator {
     // MARK: Public state
 
     /// All transcribed text so far, in recording order. A slice that failed live
-    /// is absent until the final retry fills it in or marks it unavailable.
+    /// is absent until stop fills it in or marks it unavailable.
     var accumulatedTranscript: String {
         slices.compactMap(\.text).joined(separator: "\n")
     }
@@ -71,15 +71,15 @@ final class IncrementalTranscriptionCoordinator {
     /// audio, cancelled), so only the regular queue can recover the recording.
     private(set) var requiresFullTranscription = false
 
-    /// Slices Whisper still could not transcribe after the final retry. Their text
-    /// is a visible "[m:ss–m:ss transcription unavailable]" marker.
+    /// Slices Whisper ran on and could not transcribe. Their text is a visible
+    /// "[m:ss–m:ss transcription unavailable]" marker.
     private(set) var unrecoveredSliceCount = 0
 
     /// One entry per unrecovered slice, carrying Whisper's diagnostic so the note
     /// can name the cause. Release builds have no debug log to fall back on.
     private(set) var unrecoveredSliceRanges: [SegmentFailureRange] = []
 
-    /// Live slices that failed and are retried when the recording stops.
+    /// Live slices that failed and are not settled yet.
     var failedSliceCount: Int {
         slices.reduce(0) { $0 + ($1.failure == nil ? 0 : 1) }
     }
@@ -89,10 +89,10 @@ final class IncrementalTranscriptionCoordinator {
     var finalizationProgress: Double {
         guard let finalFrame, finalFrame > 0 else { return 0 }
         let settledFrames = slices.reduce(AVAudioFramePosition(0)) { total, slice in
-            slice.failure == nil || slice.text != nil ? total + (slice.endFrame - slice.startFrame) : total
+            slice.awaitsRetry ? total : total + (slice.endFrame - slice.startFrame)
         }
         // The slice being decoded is never settled yet — a tail slice is not in
-        // `slices` and a retried one is still marked failed — so its partial
+        // `slices` and a retried one still awaits its retry — so its partial
         // frames are not counted twice. Without them the reported value only
         // moves once per slice, and iOS expires a continued processing task that
         // reports nothing for ~30 s.
@@ -102,18 +102,12 @@ final class IncrementalTranscriptionCoordinator {
         return min(1, max(0, Double(settledFrames + decodingFrames) / Double(finalFrame)))
     }
 
-    /// Attempts per failed slice after recording stops, on top of the live attempt.
-    /// One is enough: the decoder already retries a prompt-driven failure without
-    /// the prompt, and everything past that is the same audio through the same
-    /// model at temperature 0 — identical output, minutes of extra work at stop.
-    static let finalRetryAttempts = 1
-
     /// Audio still to transcribe if the recording stops at `frame`: the part live
     /// transcription has not reached, the slice being transcribed, and slices
-    /// that failed live.
+    /// that could not be decoded live.
     func remainingAudioSeconds(upTo frame: AVAudioFramePosition) -> Double {
         let failedFrames = slices.reduce(AVAudioFramePosition(0)) { total, slice in
-            slice.failure == nil ? total : total + (slice.endFrame - slice.startFrame)
+            slice.awaitsRetry ? total + (slice.endFrame - slice.startFrame) : total
         }
         let inFlightFrames = inFlightSlice.map { $0.end - $0.start } ?? 0
         let unreachedFrames = max(0, frame - lastSegmentEndFrame)
@@ -174,9 +168,12 @@ final class IncrementalTranscriptionCoordinator {
     private var segmentProcessingWaiters: [CheckedContinuation<Void, Never>] = []
 
     private enum SliceFailure: Equatable {
-        /// Whisper ran and failed; a retry may succeed, otherwise the gap is marked.
+        /// Whisper ran and produced nothing usable; the gap is marked at stop.
         /// Carries Whisper's diagnostic so the note can name the cause later.
         case transcription(String?)
+        /// The engine threw instead of decoding, e.g. GPU work refused while the
+        /// phone is locked. Retried once at stop, when the app is in front again.
+        case engine(String?)
         /// The slice could not be decoded at all right now.
         case unavailable
     }
@@ -193,6 +190,16 @@ final class IncrementalTranscriptionCoordinator {
         let endFrame: AVAudioFramePosition
         var text: String?
         var failure: SliceFailure?
+
+        /// Whisper never got to judge this audio, so stop decodes it once more.
+        var awaitsRetry: Bool {
+            // A gap marker means the retry already ran and the slice is settled.
+            guard text == nil else { return false }
+            switch failure {
+            case .unavailable, .engine: return true
+            case .transcription, nil: return false
+            }
+        }
 
         init(startFrame: AVAudioFramePosition, endFrame: AVAudioFramePosition, result: SliceResult) {
             self.startFrame = startFrame
@@ -254,7 +261,7 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     /// Stop the timer, transcribe any remaining frames and retry slices that
-    /// failed live. Returns the complete accumulated transcript.
+    /// could not be decoded live. Returns the complete accumulated transcript.
     func stop(currentFrame: AVAudioFramePosition) async -> String {
         segmentTimer?.invalidate()
         segmentTimer = nil
@@ -264,7 +271,7 @@ final class IncrementalTranscriptionCoordinator {
             waitForCompletion: true,
             useVoiceActivityCut: false
         )
-        await retryFailedSlices()
+        await retryUndecodedSlices()
         settleRemainingFailures()
         finishTelemetry()
         return accumulatedTranscript
@@ -427,7 +434,8 @@ final class IncrementalTranscriptionCoordinator {
             case .noSpeech:
                 result = .silent
             case .whisperError(let diagnostic):
-                result = .failed(.transcription(diagnostic))
+                result = .failed(TranscriptionService.isEngineFailure(diagnostic)
+                    ? .engine(diagnostic) : .transcription(diagnostic))
             case .modelUnavailable, .audioUnavailable, .cancelled:
                 result = .failed(.unavailable)
             }
@@ -453,37 +461,35 @@ final class IncrementalTranscriptionCoordinator {
         decodingSlice = (slice.start, slice.end, clamped)
     }
 
-    /// Live slices can fail for transient reasons, e.g. while the phone is locked.
-    /// Retry each one in place so one bad slice never forces the whole recording
-    /// to be transcribed again.
-    private func retryFailedSlices() async {
-        for index in slices.indices where slices[index].failure != nil {
-            for _ in 0..<Self.finalRetryAttempts {
-                guard !telemetryFinished else { return }
-                let slice = slices[index]
-                var result = SliceResult.failed(slice.failure ?? .transcription(nil))
-                await performSliceWork { session in
-                    result = await transcribeSlice(from: slice.startFrame, to: slice.endFrame, session: session)
-                }
-                slices[index].apply(result)
-                guard slices[index].failure != nil else {
-                    if slices[index].text != nil {
-                        transcriptCallback?(accumulatedTranscript)
-                    }
-                    break
-                }
+    /// A slice Whisper never decoded (model still loading, cancelled, engine
+    /// error) gets one attempt in place, so it never forces the whole recording to
+    /// be transcribed again. A slice Whisper ran on and rejected is not retried: the
+    /// decoder has already used its temperature fallback and prompt-free pass on
+    /// it, and repeating that held "Finalizing" for minutes after the text was
+    /// complete.
+    private func retryUndecodedSlices() async {
+        for index in slices.indices where slices[index].awaitsRetry {
+            guard !telemetryFinished else { return }
+            let slice = slices[index]
+            var result = SliceResult.failed(slice.failure ?? .unavailable)
+            await performSliceWork { session in
+                result = await transcribeSlice(from: slice.startFrame, to: slice.endFrame, session: session)
+            }
+            slices[index].apply(result)
+            if slices[index].text != nil {
+                transcriptCallback?(accumulatedTranscript)
             }
         }
     }
 
-    /// Marks slices Whisper still cannot transcribe as visible gaps; anything that
-    /// could not be decoded at all hands the recording to the regular queue.
+    /// Marks slices Whisper could not transcribe as visible gaps; anything that
+    /// still could not be decoded at all hands the recording to the regular queue.
     private func settleRemainingFailures() {
         unrecoveredSliceCount = 0
         unrecoveredSliceRanges = []
         for index in slices.indices {
             switch slices[index].failure {
-            case .transcription(let diagnostic):
+            case .transcription(let diagnostic), .engine(let diagnostic):
                 unrecoveredSliceCount += 1
                 unrecoveredSliceRanges.append(SegmentFailureRange(
                     startFrame: slices[index].startFrame,

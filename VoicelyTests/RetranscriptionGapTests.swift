@@ -22,7 +22,7 @@ struct RetranscriptionGapTests {
 
         let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
-            // Segment 1 succeeds; segments 2 and 3 fail through their two retries.
+            // Segment 1 succeeds; segments 2 and 3 fail.
             await calls.incrementAndGet() == 1
                 ? .transcribed(.init(text: "slice 1", duration: 1, modelIdentifier: "m"))
                 : .whisperError("repetitive output")
@@ -31,7 +31,7 @@ struct RetranscriptionGapTests {
 
         #expect(note.transcriptionOutcome == .failed)
         #expect(note.transcriptionLastErrorMessage
-                == "2 segment(s) failed after retry: repetitive output ×2")
+                == "2 segment(s) failed: repetitive output ×2")
         let firstGap = SegmentedAudioTranscriber.placeholder(
             forStart: 29 * 16_000, end: 58 * 16_000, sampleRate: 16_000)
         #expect(note.transcription.contains("slice 1"))
@@ -47,15 +47,15 @@ struct RetranscriptionGapTests {
 
         let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
-            // Segment 1 succeeds, segment 2 loops (calls 2-4), segment 3 is blank (5-7).
+            // Segment 1 succeeds, segment 2 loops, segment 3 is blank.
             let n = await calls.incrementAndGet()
             if n == 1 { return .transcribed(.init(text: "slice 1", duration: 1, modelIdentifier: "m")) }
-            return n <= 4 ? .whisperError("repetitive output") : .whisperError("blank output")
+            return n == 2 ? .whisperError("repetitive output") : .whisperError("blank output")
         }
         await transcriber.transcribe(note: note, sourceURL: url)
 
         #expect(note.transcriptionLastErrorMessage
-                == "2 segment(s) failed after retry: repetitive output ×1, blank output ×1")
+                == "2 segment(s) failed: repetitive output ×1, blank output ×1")
     }
 
     /// A partially failed re-transcription still keeps the previous transcript and

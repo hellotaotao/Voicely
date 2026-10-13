@@ -550,32 +550,99 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(!coordinator.requiresFullTranscription)
     }
 
-    @Test @MainActor func failedLiveSliceIsRetriedAtStopInItsOriginalPosition() async throws {
+    @Test @MainActor func sliceWhisperRejectedLiveIsMarkedAtStopWithoutDecodingAgain() async throws {
         let pcmURL = try makeSilentCAF(seconds: 75)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
         coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
-        // Live: slice 1 succeeds, slice 2 fails. Stop: the tail, then slice 2 again.
-        let script = ScriptedSliceResults(["first", nil, "third", "second"])
+        // Live: slice 1 succeeds, slice 2 fails. Stop: only the tail is decoded.
+        let script = ScriptedSliceResults(["first", nil, "third"])
         coordinator.transcribeOverride = { @Sendable _ in await script.next() }
-        var published: [String] = []
-        coordinator.transcriptCallback = { published.append($0) }
 
         await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
         await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
         #expect(coordinator.failedSliceCount == 1)
         #expect(coordinator.accumulatedTranscript == "first")
+        #expect(coordinator.remainingAudioSeconds(upTo: 75 * 16_000) == 17)
 
         let transcript = await coordinator.stop(currentFrame: 75 * 16_000)
 
-        #expect(transcript == "first\nsecond\nthird")
-        #expect(published.last == "first\nsecond\nthird")
+        let gap = SegmentedAudioTranscriber.placeholder(forStart: 29 * 16_000, end: 58 * 16_000, sampleRate: 16_000)
+        #expect(transcript == "first\n\(gap)\nthird")
+        #expect(!coordinator.requiresFullTranscription)
+        #expect(coordinator.unrecoveredSliceCount == 1)
+        #expect(coordinator.finalizationProgress == 1)
+        #expect(await script.calls == 3)
+    }
+
+    final class SwitchableModelManager: ModelManager {
+        var loaded = false
+        override func isModelLoaded() -> Bool { loaded }
+    }
+
+    @Test @MainActor func sliceThatNeverReachedWhisperIsDecodedAtStopInItsOriginalPosition() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 75)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let service = TranscriptionService()
+        let modelManager = SwitchableModelManager()
+        service.setModelManager(modelManager)
+        var decoded = 0
+        var engineThrows = false
+        service.transcribeImpl = { _, _ in
+            if engineThrows { return .whisperError(TranscriptionService.engineFailurePrefix + "GPU work refused") }
+            decoded += 1
+            return .text("slice \(decoded)")
+        }
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 29 * 16_000 }
+        var published: [String] = []
+        coordinator.transcriptCallback = { published.append($0) }
+
+        // The model is still loading for slice 1; the engine throws on slice 2.
+        await coordinator.transcribeSegment(upToFrame: 30 * 16_000)
+        modelManager.loaded = true
+        engineThrows = true
+        await coordinator.transcribeSegment(upToFrame: 60 * 16_000)
+        engineThrows = false
+        #expect(coordinator.failedSliceCount == 2)
+        #expect(coordinator.remainingAudioSeconds(upTo: 75 * 16_000) == 75)
+
+        let transcript = await coordinator.stop(currentFrame: 75 * 16_000)
+
+        // Decode order was the tail, then slices 1 and 2 again.
+        #expect(transcript == "slice 2\nslice 3\nslice 1")
+        #expect(published.last == transcript)
         #expect(!coordinator.requiresFullTranscription)
         #expect(coordinator.unrecoveredSliceCount == 0)
         #expect(coordinator.failedSliceCount == 0)
         #expect(coordinator.finalizationProgress == 1)
-        #expect(await script.calls == 4)
+    }
+
+    @Test @MainActor func sliceTheEngineKeepsRejectingIsRetriedOnceThenSettledAsGap() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 40)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let service = TranscriptionService()
+        let modelManager = SwitchableModelManager()
+        modelManager.loaded = true
+        service.setModelManager(modelManager)
+        var calls = 0
+        service.transcribeImpl = { _, _ in
+            calls += 1
+            return calls == 1 ? .text("first slice")
+                : .whisperError(TranscriptionService.engineFailurePrefix + "GPU work refused")
+        }
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+
+        let transcript = await coordinator.stop(currentFrame: 40 * 16_000)
+
+        let gap = SegmentedAudioTranscriber.placeholder(forStart: 29 * 16_000, end: 40 * 16_000, sampleRate: 16_000)
+        #expect(transcript == "first slice\n\(gap)")
+        #expect(calls == 3)  // slice 1, the tail, and one retry of the tail
+        #expect(!coordinator.requiresFullTranscription)
+        #expect(coordinator.unrecoveredSliceCount == 1)
+        #expect(coordinator.finalizationProgress == 1)
+        #expect(coordinator.remainingAudioSeconds(upTo: 40 * 16_000) == 0)
     }
 
     @Test @MainActor func remainingAudioIncludesTheSliceStillBeingTranscribed() async throws {
@@ -613,7 +680,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(!coordinator.requiresFullTranscription)
         #expect(coordinator.unrecoveredSliceCount == 1)
         #expect(coordinator.finalizationProgress == 1)
-        #expect(await script.calls == 2 + IncrementalTranscriptionCoordinator.finalRetryAttempts)
+        #expect(await script.calls == 2)
     }
 
     @Test @MainActor func sliceThatCannotBeDecodedStillHandsRecordingToQueue() async throws {

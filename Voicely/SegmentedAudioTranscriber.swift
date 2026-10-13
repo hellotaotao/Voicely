@@ -282,10 +282,9 @@ final class SegmentedAudioTranscriber {
 
             activeSegment = (noteID, start, end, info.totalFrames)
             var outcome = await transcribeSegmentOutcome(segmentURL)
-            var retries = 0
-            while case .whisperError = outcome, retries < 2,
-                  !transcriptionService.isRunCancelled(noteID: noteID), !transcriptionService.isUserPaused(note), !Task.isCancelled {
-                retries += 1
+            // Only an aborted decode is worth repeating; rejected output is not.
+            if case .whisperError(let diagnostic) = outcome, TranscriptionService.isEngineFailure(diagnostic),
+               !transcriptionService.isRunCancelled(noteID: noteID), !transcriptionService.isUserPaused(note), !Task.isCancelled {
                 outcome = await transcribeSegmentOutcome(segmentURL)
             }
             try? FileManager.default.removeItem(at: segmentURL)
@@ -399,7 +398,7 @@ final class SegmentedAudioTranscriber {
     /// Names why slices failed, not just how many. Release builds have no debug
     /// log, so this message is the only place the cause survives.
     nonisolated static func failureSummary(for ranges: [SegmentFailureRange]) -> String {
-        let headline = "\(ranges.count) segment(s) failed after retry"
+        let headline = "\(ranges.count) segment(s) failed"
         var order: [String] = []
         var counts: [String: Int] = [:]
         for reason in ranges.map({ $0.reason ?? "unknown error" }) {

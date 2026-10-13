@@ -56,22 +56,22 @@ struct RealRecordingReplayTests {
         let clean = try await replay(pcmURL, service: service)
         let cleanFailures = realFailures
 
-        // A few live slices fail once, as a busy engine or a locked phone can cause.
+        // A few live slices never reach Whisper, as a model that is still loading can cause.
         realFailures = []
         var calls = 0
         service.transcribeImpl = { path, progress in
             calls += 1
-            if [2, 4, 7].contains(calls) { return .whisperError("injected") }
+            if [2, 4, 7].contains(calls) { return .modelUnavailable }
             return await decode(path, progress)
         }
         let spotty = try await replay(pcmURL, service: service)
         let spottyFailures = realFailures
 
-        // Every live slice fails (e.g. no GPU while locked); all work happens at stop.
+        // No live slice reaches Whisper; all work happens at stop.
         realFailures = []
         var failLive = true
         service.transcribeImpl = { path, progress in
-            failLive ? .whisperError("injected") : await decode(path, progress)
+            failLive ? .modelUnavailable : await decode(path, progress)
         }
         let allFailed = try await replay(pcmURL, service: service) { failLive = false }
         let allFailedFailures = realFailures
@@ -92,7 +92,7 @@ struct RealRecordingReplayTests {
         }
 
         // Whisper's temperature fallback samples, so wording can differ between
-        // runs; what must hold is that failed slices are filled in place, in order.
+        // runs; what must hold is that undecoded slices are filled in place, in order.
         #expect(!clean.transcript.isEmpty)
         #expect(spotty.liveFailures >= 3)
         #expect(!spotty.requiresFullTranscription)

@@ -37,7 +37,7 @@ struct SegmentedAudioTranscriberTests {
             now = now.addingTimeInterval(5)
             if calls == 1 {
                 #expect(service.transcriptionTelemetry.metrics.speedMultiplier == nil)
-                return .whisperError("retry")
+                return .whisperError(TranscriptionService.engineFailurePrefix + "retry")
             }
             if calls == 3 {
                 #expect(service.transcriptionTelemetry.metrics.processedAudioSeconds == 29)
@@ -64,7 +64,7 @@ struct SegmentedAudioTranscriberTests {
         var calls = 0
         transcriber.transcribeSegmentOutcome = { _ in
             calls += 1
-            return calls <= 3 ? .whisperError("failed") : .noSpeech
+            return calls == 1 ? .whisperError("failed") : .noSpeech
         }
         let note = VoiceNote(title: "Partial", audioFilePath: "")
         await transcriber.transcribe(note: note, sourceURL: url)
@@ -143,25 +143,46 @@ struct SegmentedAudioTranscriberTests {
 
     // MARK: Task 6 — retry, failed-range placeholder, noSpeech
 
-    @Test @MainActor func failedSegmentRetriesThenSkipsWithPlaceholder() async throws {
+    @Test @MainActor func rejectedSegmentIsSkippedWithPlaceholderWithoutRetry() async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)  // 3 segments
         let store = SegmentedAudioTestSupport.makeStore()
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
         let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
             let n = await calls.incrementAndGet()
-            // Segment 2 = calls 2,3,4 (initial + 2 retries) all fail; others succeed.
-            if (2...4).contains(n) { return .whisperError("boom") }
+            // Segment 2 is rejected once and not decoded again; others succeed.
+            if n == 2 { return .whisperError("boom") }
             return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "imported", audioFilePath: "")
 
         await transcriber.transcribe(note: note, sourceURL: url)
 
-        #expect(await calls.value == 5)               // seg1(1) + seg2(3) + seg3(1)
+        #expect(await calls.value == 3)
         #expect(note.transcriptionOutcome == .failed)
         #expect(note.transcription.contains("transcription unavailable"))
         #expect(note.transcription.hasPrefix("ok"))
+        #expect(note.transcription.hasSuffix("ok"))
+    }
+
+    @Test @MainActor func segmentTheEngineKeepsRejectingIsRetriedExactlyOnce() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 70)  // 3 segments
+        defer { try? FileManager.default.removeItem(at: url) }
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: SegmentedAudioTestSupport.makeStore())
+        let calls = Counter()
+        transcriber.transcribeSegmentOutcome = { _ in
+            let n = await calls.incrementAndGet()
+            // Segment 2 = calls 2 and 3 (first attempt + the single retry).
+            if n == 2 || n == 3 { return .whisperError(TranscriptionService.engineFailurePrefix + "boom") }
+            return .transcribed(.init(text: "ok", duration: 1, modelIdentifier: "m"))
+        }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(await calls.value == 4)
+        #expect(note.transcriptionOutcome == .failed)
+        #expect(note.transcription.contains("transcription unavailable"))
         #expect(note.transcription.hasSuffix("ok"))
     }
 
@@ -234,7 +255,7 @@ struct SegmentedAudioTranscriberTests {
         let calls = Counter()
         transcriber.transcribeSegmentOutcome = { _ in
             let n = await calls.incrementAndGet()
-            if (2...4).contains(n) { return .whisperError("boom") }   // segment 2 fails
+            if n == 2 { return .whisperError("boom") }   // segment 2 fails
             return .transcribed(.init(text: "new", duration: 1, modelIdentifier: "m"))
         }
         let note = VoiceNote(title: "rec", audioFilePath: "rec.m4a")
@@ -242,7 +263,7 @@ struct SegmentedAudioTranscriberTests {
 
         await transcriber.transcribe(note: note, sourceURL: url)
 
-        #expect(await calls.value == 5)  // All three segments attempted, with two retries.
+        #expect(await calls.value == 3)  // All three segments attempted once.
         #expect(note.transcription == "the original transcript")
         #expect(note.transcriptionOutcome == .failed)
         #expect(note.transcriptionLastErrorMessage != nil)

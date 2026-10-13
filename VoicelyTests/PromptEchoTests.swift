@@ -65,13 +65,13 @@ struct SegmentFailureSummaryTests {
             SegmentFailureRange(startFrame: 32_000, endFrame: 48_000, reason: "repetitive output")
         ]
         #expect(SegmentedAudioTranscriber.failureSummary(for: ranges)
-                == "3 segment(s) failed after retry: repetitive output ×2, blank output ×1")
+                == "3 segment(s) failed: repetitive output ×2, blank output ×1")
     }
 
     @Test func missingReasonsStillProduceAUsableSummary() {
         let ranges = [SegmentFailureRange(startFrame: 0, endFrame: 16_000)]
         #expect(SegmentedAudioTranscriber.failureSummary(for: ranges)
-                == "1 segment(s) failed after retry: unknown error ×1")
+                == "1 segment(s) failed: unknown error ×1")
     }
 
     @Test func sidecarsWrittenBeforeReasonsWereRecordedStillDecode() throws {

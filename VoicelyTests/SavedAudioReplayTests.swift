@@ -92,8 +92,11 @@ struct SavedAudioReplayTests {
         poller.cancel()
         await poller.value
         #expect(accepted)
-        #expect(driver.submissions == 1)
-        #expect(driver.handle.completions.count == 1)
+        // MLX needs the GPU, which iOS withdraws in the background, so its
+        // jobs never ask for background time.
+        let expectedSubmissions = modelManager.loadedModelSupportsBackgroundTranscription ? 1 : 0
+        #expect(driver.submissions == expectedSubmissions)
+        #expect(driver.handle.completions.count == expectedSubmissions)
 
         var gaps: [(start: TimeInterval, seconds: TimeInterval, units: Int)] = []
         var previous = started
@@ -135,6 +138,8 @@ struct SavedAudioReplayTests {
         }
         print("🔍 [SavedAudioReplay]\n" + report)
         try report.write(to: directory.appendingPathComponent("saved-report.txt"), atomically: true, encoding: .utf8)
+        try note.transcription.write(
+            to: directory.appendingPathComponent("saved-transcript.txt"), atomically: true, encoding: .utf8)
     }
 
     private static func audioSeconds(_ url: URL) throws -> Double {

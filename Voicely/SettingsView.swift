@@ -70,6 +70,26 @@ struct SettingsView: View {
             }
         }
         .tint(VoicelyTheme.accent)
+        .alert(
+            "Download Over Cellular?",
+            isPresented: Binding(
+                get: { modelManager.awaitingCellularApproval },
+                set: { isPresented in
+                    if !isPresented, modelManager.awaitingCellularApproval {
+                        modelManager.waitForInexpensiveNetwork()
+                    }
+                }
+            )
+        ) {
+            Button("Download Now") {
+                Task { await modelManager.approveCellularDownload() }
+            }
+            Button("Wait for Wi-Fi", role: .cancel) {
+                modelManager.waitForInexpensiveNetwork()
+            }
+        } message: {
+            Text("The speech model is \(modelManager.backend.approximateDownloadSizeText). Download it now, or wait for Wi-Fi and Voicely will start the download by itself.")
+        }
     }
 
     // MARK: - Section shell

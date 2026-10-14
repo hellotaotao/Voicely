@@ -28,8 +28,14 @@ enum Qwen3Backend: String, Sendable {
     case mlx
     case coreML
 
-    nonisolated static let current: Qwen3Backend = resolve(
-        isMacCatalyst: isMacCatalyst, gpuSupportsMLX: gpuSupportsMLX)
+    /// `VOICELY_BACKEND=coreML` (or `mlx`) forces a backend, so the iPhone's
+    /// CoreML path can be replayed on a Mac. Nothing sets it in normal use.
+    nonisolated static let current: Qwen3Backend = {
+        if let forced = ProcessInfo.processInfo.environment["VOICELY_BACKEND"].flatMap(Qwen3Backend.init(rawValue:)) {
+            return forced
+        }
+        return resolve(isMacCatalyst: isMacCatalyst, gpuSupportsMLX: gpuSupportsMLX)
+    }()
 
     nonisolated static func resolve(isMacCatalyst: Bool, gpuSupportsMLX: Bool) -> Qwen3Backend {
         isMacCatalyst && gpuSupportsMLX ? .mlx : .coreML
@@ -92,7 +98,12 @@ struct Qwen3SliceLimits: Equatable, Sendable {
     /// The cadence the unit-test fixtures are written for.
     nonisolated static let testFixtures = Qwen3SliceLimits(singlePassSeconds: 15, chunkSeconds: 14, minimumCutSeconds: 7)
 
-    nonisolated static let current = AppRuntime.isRunningTests ? testFixtures : production
+    /// `VOICELY_SLICE_LIMITS=production` makes a test run use the shipping
+    /// limits, for replays of real recordings; fixture-based tests fail under it.
+    nonisolated static let current: Qwen3SliceLimits = {
+        if ProcessInfo.processInfo.environment["VOICELY_SLICE_LIMITS"] == "production" { return production }
+        return AppRuntime.isRunningTests ? testFixtures : production
+    }()
 }
 
 // MARK: - Defaults & knobs
@@ -142,6 +153,16 @@ enum Qwen3ASRDefaults {
         "filipino": "Filipino", "persian": "Persian", "greek": "Greek",
         "hungarian": "Hungarian", "macedonian": "Macedonian", "romanian": "Romanian"
     ]
+
+    nonisolated static let selectedLanguageKey = "selectedLanguage"
+
+    /// A language saved from the longer Whisper list is treated as auto-detect;
+    /// storing "auto" makes Settings show what actually applies.
+    nonisolated static func migrateSelectedLanguage(in defaults: UserDefaults = .standard) {
+        guard let key = defaults.string(forKey: selectedLanguageKey), key != "auto",
+              languageNames[key] == nil else { return }
+        defaults.set("auto", forKey: selectedLanguageKey)
+    }
 
     /// Maps the stored "selectedLanguage" key to the model's language hint.
     /// nil means auto-detect, which also covers a key left over from the

@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Network
 import SwiftUI
 
 enum ModelState: CustomStringConvertible {
@@ -50,6 +51,11 @@ class ModelManager: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var isModelDownloaded: Bool
     @Published private(set) var isDeletingModel = false
+    /// An automatic download was held back because the connection is
+    /// cellular (or a personal hotspot); the UI asks before spending ~1 GB.
+    @Published private(set) var awaitingCellularApproval = false
+    /// The user chose to wait; the download starts once off cellular.
+    private(set) var isWaitingForInexpensiveNetwork = false
 
     let backend: Qwen3Backend
     /// The model this device runs. Kept as a property because notes record it.
@@ -60,26 +66,48 @@ class ModelManager: ObservableObject {
 
     private let store: Qwen3ASRModelStore
     private let injectedLoader: Loader?
+    private let isExpensiveNetwork: () async -> Bool
     private var activeLoad: Task<Void, Never>?
 
     init(
         backend: Qwen3Backend = .current,
         store: Qwen3ASRModelStore = .shared,
-        loader: Loader? = nil
+        loader: Loader? = nil,
+        isExpensiveNetwork: (() async -> Bool)? = nil
     ) {
         self.backend = backend
         self.store = store
         injectedLoader = loader
+        self.isExpensiveNetwork = isExpensiveNetwork ?? { await NetworkCostMonitor.shared.isExpensive() }
         isModelDownloaded = loader == nil && Qwen3ASRModelStore.isModelDownloaded(backend: backend)
+        if isExpensiveNetwork == nil {
+            NetworkCostMonitor.shared.onBecameInexpensive = { [weak self] in
+                Task { @MainActor in await self?.networkBecameInexpensive() }
+            }
+        }
     }
 
     /// Loads the model into memory, downloading it first if it isn't on disk.
-    /// Concurrent callers share one load.
-    func loadModel() async {
+    /// Concurrent callers share one load. A download on a cellular connection
+    /// waits for `approveCellularDownload()` unless the user already asked for
+    /// it (`userConfirmedCellular`).
+    func loadModel(userConfirmedCellular: Bool = false) async {
         if let activeLoad {
             await activeLoad.value
             return
         }
+        if !isModelDownloaded, !userConfirmedCellular, await isExpensiveNetwork() {
+            if !isWaitingForInexpensiveNetwork { awaitingCellularApproval = true }
+            return
+        }
+        // Another caller may have started the load while this one checked
+        // the network.
+        if let activeLoad {
+            await activeLoad.value
+            return
+        }
+        awaitingCellularApproval = false
+        isWaitingForInexpensiveNetwork = false
         guard !isDeletingModel else {
             errorMessage = "Cannot load the model while its files are being deleted. Please try again when deletion finishes."
             return
@@ -115,6 +143,24 @@ class ModelManager: ObservableObject {
         }
         activeLoad = task
         await task.value
+    }
+
+    /// The user agreed to download over cellular.
+    func approveCellularDownload() async {
+        awaitingCellularApproval = false
+        await loadModel(userConfirmedCellular: true)
+    }
+
+    /// The user would rather wait for Wi-Fi; the download starts by itself then.
+    func waitForInexpensiveNetwork() {
+        awaitingCellularApproval = false
+        isWaitingForInexpensiveNetwork = true
+    }
+
+    /// Called when the connection stops being cellular.
+    func networkBecameInexpensive() async {
+        guard isWaitingForInexpensiveNetwork || awaitingCellularApproval else { return }
+        await loadModel()
     }
 
     private func performLoad(progress: @escaping LoadProgress) async throws {
@@ -205,6 +251,50 @@ class ModelManager: ObservableObject {
             return modelIdentifier
         }
         return tokens.joined(separator: " ")
+    }
+}
+
+// MARK: - Network cost
+
+/// Whether the current connection is metered: cellular, or a Mac or iPad on
+/// a phone's personal hotspot.
+final class NetworkCostMonitor: @unchecked Sendable {
+    static let shared = NetworkCostMonitor()
+
+    private let monitor = NWPathMonitor()
+    private let lock = NSLock()
+    private var expensive = false
+    private var hasPath = false
+    private var onInexpensive: (@Sendable () -> Void)?
+
+    /// Waits briefly for the first path report, which arrives asynchronously
+    /// after launch; before it the answer would always be "not expensive".
+    func isExpensive() async -> Bool {
+        for _ in 0..<20 where !lock.withLock({ hasPath }) {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return lock.withLock { expensive }
+    }
+
+    /// Runs when the connection goes from metered to unmetered.
+    var onBecameInexpensive: (@Sendable () -> Void)? {
+        get { lock.withLock { onInexpensive } }
+        set { lock.withLock { onInexpensive = newValue } }
+    }
+
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            let nowExpensive = path.status == .satisfied && path.isExpensive
+            let (wasExpensive, callback) = self.lock.withLock { () -> (Bool, (@Sendable () -> Void)?) in
+                let previous = self.expensive
+                self.expensive = nowExpensive
+                self.hasPath = true
+                return (previous, self.onInexpensive)
+            }
+            if wasExpensive, !nowExpensive, path.status == .satisfied { callback?() }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.hellotaotao.Voicely.network-cost"))
     }
 }
 

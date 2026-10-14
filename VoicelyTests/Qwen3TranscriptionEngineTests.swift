@@ -335,3 +335,73 @@ struct RetiredWhisperModelsTests {
         #expect(FileManager.default.fileExists(atPath: recording.path))
     }
 }
+
+@MainActor
+struct CellularDownloadTests {
+    private final class Counter { var loads = 0 }
+
+    private func makeManager(expensive: Bool, counter: Counter) -> ModelManager {
+        ModelManager(loader: { _, _ in counter.loads += 1 }, isExpensiveNetwork: { expensive })
+    }
+
+    @Test func aDownloadOnCellularWaitsForApproval() async {
+        let counter = Counter()
+        let manager = makeManager(expensive: true, counter: counter)
+        await manager.loadModel()
+        #expect(counter.loads == 0)
+        #expect(manager.awaitingCellularApproval)
+        #expect(!manager.isModelLoaded())
+
+        await manager.approveCellularDownload()
+        #expect(counter.loads == 1)
+        #expect(!manager.awaitingCellularApproval)
+        #expect(manager.isModelLoaded())
+    }
+
+    @Test func choosingToWaitStopsFurtherPrompts() async {
+        let counter = Counter()
+        let manager = makeManager(expensive: true, counter: counter)
+        await manager.loadModel()
+        manager.waitForInexpensiveNetwork()
+        // Later automatic attempts stay quiet instead of asking again.
+        await manager.loadModel()
+        #expect(!manager.awaitingCellularApproval)
+        #expect(counter.loads == 0)
+    }
+
+    @Test func leavingCellularResumesAWaitingDownload() async {
+        var expensive = true
+        let counter = Counter()
+        let manager = ModelManager(loader: { _, _ in counter.loads += 1 }, isExpensiveNetwork: { expensive })
+        await manager.loadModel()
+        manager.waitForInexpensiveNetwork()
+        expensive = false
+        await manager.networkBecameInexpensive()
+        #expect(counter.loads == 1)
+        #expect(manager.isModelLoaded())
+    }
+
+    @Test func nothingIsAskedOnWiFi() async {
+        let counter = Counter()
+        let manager = makeManager(expensive: false, counter: counter)
+        await manager.loadModel()
+        #expect(counter.loads == 1)
+        #expect(!manager.awaitingCellularApproval)
+    }
+}
+
+struct LanguageMigrationTests {
+    @Test func aLanguageQwenDoesNotSupportFallsBackToAuto() throws {
+        let suite = "LanguageMigrationTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set("welsh", forKey: Qwen3ASRDefaults.selectedLanguageKey)
+        Qwen3ASRDefaults.migrateSelectedLanguage(in: defaults)
+        #expect(defaults.string(forKey: Qwen3ASRDefaults.selectedLanguageKey) == "auto")
+
+        defaults.set("chinese", forKey: Qwen3ASRDefaults.selectedLanguageKey)
+        Qwen3ASRDefaults.migrateSelectedLanguage(in: defaults)
+        #expect(defaults.string(forKey: Qwen3ASRDefaults.selectedLanguageKey) == "chinese")
+    }
+}

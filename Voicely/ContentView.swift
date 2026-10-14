@@ -120,6 +120,26 @@ struct ContentView: View {
             syncInitialSelection()
         }
         .alert(
+            "Download Over Cellular?",
+            isPresented: Binding(
+                get: { modelManager.awaitingCellularApproval && !showingSettings },
+                set: { isPresented in
+                    if !isPresented, modelManager.awaitingCellularApproval {
+                        modelManager.waitForInexpensiveNetwork()
+                    }
+                }
+            )
+        ) {
+            Button("Download Now") {
+                Task { await modelManager.approveCellularDownload() }
+            }
+            Button("Wait for Wi-Fi", role: .cancel) {
+                modelManager.waitForInexpensiveNetwork()
+            }
+        } message: {
+            Text("The speech model is \(modelManager.backend.approximateDownloadSizeText). Download it now, or wait for Wi-Fi and Voicely will start the download by itself.")
+        }
+        .alert(
             "Import Failed",
             isPresented: Binding(
                 get: { inboundAudioImportError != nil },
@@ -635,6 +655,7 @@ struct ContentView: View {
 
         transcriptionService.setModelManager(modelManager)
         Task.detached(priority: .utility) { RetiredWhisperModels.removeDownloadedFiles() }
+        Qwen3ASRDefaults.migrateSelectedLanguage()
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
         recordingSession.recoverInterruptedFinalizations(in: voiceNotes)
 

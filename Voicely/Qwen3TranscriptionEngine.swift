@@ -120,8 +120,9 @@ enum Qwen3ASRDefaults {
     /// Ceiling on MLX's pool of freed GPU buffers. Unbounded, it grew past
     /// 12 GB during one long recording; capped anywhere from 0 to 4 GB the
     /// decode ran at the same 24–28× with identical text, while the model's
-    /// own working set stayed at 1.9 GB (P-0k).
-    nonisolated static let mlxCacheLimitBytes = 512 * 1_048_576
+    /// own working set stayed at 1.9 GB (P-0k). Slices vary in length, so
+    /// freed buffers rarely fit a later request; none are kept.
+    nonisolated static let mlxCacheLimitBytes = 0
 
     nonisolated static let singlePassSecondsLimit = Qwen3SliceLimits.current.singlePassSeconds
     nonisolated static let chunkSeconds = Qwen3SliceLimits.current.chunkSeconds

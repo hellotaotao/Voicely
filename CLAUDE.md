@@ -23,8 +23,10 @@ xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' 
 # Archive for iOS (auto-appears in Xcode Organizer)
 xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' archive
 
-# Archive for Mac Catalyst (auto-appears in Xcode Organizer)
-xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=macOS,variant=Mac Catalyst' archive
+# Archive for Mac Catalyst (auto-appears in Xcode Organizer). Apple silicon only: the
+# vendored speech-swift uses Float16, which Intel Mac Catalyst lacks, and MLX needs Apple silicon.
+# ARCHS must be passed here because project build settings do not reach Swift package targets.
+xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=macOS,variant=Mac Catalyst' ARCHS=arm64 archive
 
 # Open in Xcode
 open Voicely.xcodeproj

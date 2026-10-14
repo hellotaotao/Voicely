@@ -126,17 +126,25 @@ struct Qwen3ASRDefaultsTests {
         }
     }
 
-    /// MLX loses text on slices over 15 s; CoreML is better off with slices
-    /// up to its encoder's 30 s window.
-    @Test func sliceLimitsFollowTheBackend() {
-        let mlx = Qwen3SliceLimits.limits(for: .mlx)
-        let coreML = Qwen3SliceLimits.limits(for: .coreML)
-        #expect(mlx == Qwen3SliceLimits(singlePassSeconds: 15, chunkSeconds: 14, minimumCutSeconds: 7))
-        #expect(coreML == Qwen3SliceLimits(singlePassSeconds: 30, chunkSeconds: 29, minimumCutSeconds: 15))
-        for limits in [mlx, coreML] {
+    /// Both backends take slices up to the CoreML encoder's 30 s window; the
+    /// unit tests run on the shorter cadence their fixtures are written for.
+    @Test func sliceLimits() {
+        #expect(Qwen3SliceLimits.production == Qwen3SliceLimits(singlePassSeconds: 30, chunkSeconds: 29, minimumCutSeconds: 15))
+        #expect(Qwen3SliceLimits.current == Qwen3SliceLimits.testFixtures)
+        for limits in [Qwen3SliceLimits.production, .testFixtures] {
             #expect(limits.minimumCutSeconds < limits.chunkSeconds)
             #expect(limits.chunkSeconds < limits.singlePassSeconds)
         }
+    }
+
+    /// The 4-bit weights drop text on long slices, and the package's
+    /// long-input n-gram block stalls them.
+    @Test func mlxUsesTheEightBitWeightsWithoutTheLongInputBlock() {
+        #expect(Qwen3ASRDefaults.mlxModelId.hasSuffix("-8bit"))
+        let options = Qwen3ASRModelStore.mlxOptions(languageHint: "English")
+        #expect(options.longInputThresholdSeconds == .infinity)
+        #expect(options.repetitionPenalty == Qwen3ASRDefaults.repetitionPenalty)
+        #expect(options.language == "English")
     }
 
     @Test func chunkSizingStaysInsideFastPath() {
@@ -288,6 +296,26 @@ struct ModelManagerLoadingTests {
         #expect(ModelManager.modelState(forLoadStatus: "Downloading CoreML encoder...", wasDownloaded: false) == .downloading)
         // The package says "Downloading" even when it only verifies local files.
         #expect(ModelManager.modelState(forLoadStatus: "Downloading CoreML encoder...", wasDownloaded: true) == .loading)
+    }
+}
+
+struct RetiredQwenFilesTests {
+    @Test func earlierWeightsAndUnversionedMarkersAreRemoved() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RetiredQwen-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let old = try Qwen3ASRModelStore.repositoryDirectory(for: "mlx-community/Qwen3-ASR-0.6B-4bit", base: base)
+        let current = try Qwen3ASRModelStore.repositoryDirectory(for: Qwen3ASRDefaults.mlxModelId, base: base)
+        FileManager.default.createFile(atPath: base.appendingPathComponent(".ready-mlx").path, contents: nil)
+        let marker = Qwen3ASRModelStore.readyMarkerURL(for: .mlx, base: base)
+        FileManager.default.createFile(atPath: marker.path, contents: nil)
+
+        Qwen3ASRModelStore.removeRetiredFiles(base: base)
+
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(!FileManager.default.fileExists(atPath: base.appendingPathComponent(".ready-mlx").path))
+        #expect(FileManager.default.fileExists(atPath: current.path))
+        #expect(FileManager.default.fileExists(atPath: marker.path))
     }
 }
 

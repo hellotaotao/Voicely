@@ -14,11 +14,14 @@ let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: A
 try file.read(into: buffer)
 let all = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
 
+// MODEL_ID picks another MLX conversion from the same cache (default: the app's).
+let modelId = ProcessInfo.processInfo.environment["MODEL_ID"] ?? "mlx-community/Qwen3-ASR-0.6B-4bit"
+let penalty = Float(ProcessInfo.processInfo.environment["REPETITION_PENALTY"] ?? "") ?? 1.15
 let cacheDir = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Caches/qwen3-speech/models/mlx-community/Qwen3-ASR-0.6B-4bit")
+    .appendingPathComponent("Library/Caches/qwen3-speech/models/\(modelId)")
 let loadStart = Date()
 let model = try await Qwen3ASRModel.fromPretrained(
-    modelId: "mlx-community/Qwen3-ASR-0.6B-4bit", cacheDir: cacheDir, offlineMode: true, progressHandler: nil)
+    modelId: modelId, cacheDir: cacheDir, offlineMode: true, progressHandler: nil)
 _ = model.transcribe(audio: [Float](repeating: 0, count: 8_000), sampleRate: 16_000,
                      options: Qwen3DecodingOptions(maxTokens: 4, repetitionPenalty: 1.15))
 FileHandle.standardError.write(Data("loaded in \(Date().timeIntervalSince(loadStart)) s\n".utf8))
@@ -32,7 +35,7 @@ for (index, cut) in cuts.enumerated() {
     func run(_ context: String?) -> (String, Double) {
         let began = Date()
         // Mirrors Qwen3ASRDefaults.decodingOptions in the old-dev engine.
-        var options = Qwen3DecodingOptions(language: nil, context: context, repetitionPenalty: 1.15)
+        var options = Qwen3DecodingOptions(language: nil, context: context, repetitionPenalty: penalty)
         // NO_LONG_INPUT_NGRAM=1 keeps slices over 15 s off the package's
         // automatic no-repeat-n-gram escalation.
         if ProcessInfo.processInfo.environment["NO_LONG_INPUT_NGRAM"] == "1" { options.longInputThresholdSeconds = .infinity }

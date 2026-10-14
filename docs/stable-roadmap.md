@@ -78,8 +78,8 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 2026-10-14 决定提前到 ③ 之前做，并且不做双引擎：千问 0.6B 是唯一引擎，Whisper/WhisperKit 整体移除。
 
 - **后端**：Apple 芯片的 Mac 走 MLX（GPU），其余一律走 CoreML（CPU+神经引擎，锁屏可用）。选择逻辑在 `Qwen3Backend`，模型由 `Qwen3ASRModelStore` 独占。
-- **切片**：按后端区分（`Qwen3SliceLimits`，依据见 P-0i）。CoreML：单趟 30 s、分段 29 s、VAD 最早切点 15 s。MLX：15 / 14 / 7 s。单元测试固定按 14 s 这组跑。
-- **模型**：MLX 约 0.7 GB（`mlx-community/Qwen3-ASR-0.6B-4bit`），CoreML 约 0.95 GB（`aufklarer/Qwen3-ASR-CoreML` 的四个 mlmodelc + 分词器）。放在 Application Support/Qwen3ASR，不进备份。已下载的模型离线加载。
+- **切片**：两个后端都是单趟 30 s、分段 29 s、VAD 最早切点 15 s（`Qwen3SliceLimits`，依据见 P-0i、P-0j）。单元测试固定按 15 / 14 / 7 s 这组夹具跑。
+- **模型**：MLX 约 1.0 GB（`mlx-community/Qwen3-ASR-0.6B-8bit`，P-0j；旧的 4-bit 在加载成功后自动删除），CoreML 约 0.95 GB（`aufklarer/Qwen3-ASR-CoreML` 的四个 mlmodelc + 分词器）。放在 Application Support/Qwen3ASR，不进备份。已下载的模型离线加载。
 - **CoreML 解码**用的是 P-0h 验证过的 MLX-free 路径（`Qwen3CoreMLModel`），已补重复惩罚 1.15 和每片 `autoreleasepool`。
 - **移除**：模型选择与模型列表页、自定义 prompt、计算单元选项、Benchmark 页、prompt 回声检测、温度重试相关逻辑。语言列表缩到千问支持的 30 种。旧 Whisper 模型文件在启动时清掉（`RetiredWhisperModels`）。
 - **部署目标**：iOS 18.0 / macOS 15.0（包的要求）。构建需要 Xcode 的 Metal Toolchain 组件。
@@ -90,7 +90,7 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 
 - **iPhone 真机**：前台和锁屏各录一条并转完。CoreML 路径从未在真机上跑过。
 - **模型下载路径**没有实跑（测试用的是本机已有的权重）。首次启动会自动下载约 0.95 GB，不区分蜂窝网络。
-- **Mac 上切片边界的断句**：MLX 仍是 14 s 一片、每片一行，模型会给每片首词大写并补句号，句子中途被切开时读起来是断的。iPhone 用 29 s 后明显缓解（P-0i）。
+- **完整流程的 29 s 实跑**：解码层面 29 s 已用真实模型验证（P-0i、P-0j），但 app 内的边录边转回放测试仍按 14 s 夹具跑，29 s 下的完整流程还没用真实模型走过。
 - 词级时间戳仍然没有（千问只有分片级）。
 
 ### ⑤ Mac 专项
@@ -311,6 +311,24 @@ Codex 审阅（gpt-6.1-sol，high，2026-10-13）另指出并已修：停止时�
 - **MLX 不能用 29 s**：超过 15 s 时包会自动加 no-repeat 3-gram，会出现单片解码几分钟、输出大小写错乱的乱文；关掉它之后仍有 3/368 片提前结束，只吐出一两句（同一片 CoreML 是完整的），还有一片 85 s。所以 MLX 保持 14 s。
 - 重复惩罚在 CoreML 上生效：辩论赛原来的 2 个复读片（最慢 21 s）消失，速度基本不变。
 - 没有人工标准答案，以上都是指标和抽读，不是字错率。
+
+### P-0j 📊 Mac 的 MLX 换 8-bit 后可以用 29 s 切片（2026-10-15，Mac）
+
+同样三条录音、P-0i 的切点。29 s 各组都关掉了包对 15 s 以上音频自动加的 no-repeat 3-gram，重复惩罚 1.15。每组只跑一遍，任务逐个运行。
+
+| | 速度 | 丢掉大半文字的切片 | 复读切片 | 单片 >10 s | 峰值内存 |
+|---|---|---|---|---|---|
+| 4-bit，14 s | 35–38× | 0 | 0 | 0 | 1.2–1.4 GB |
+| 4-bit，29 s | 35–37× | 3 | 1 | 0 | 1.2–1.4 GB |
+| 4-bit，29 s，无重复惩罚 | 35–37× | 2 | 5 | 0 | 1.2–1.3 GB |
+| **8-bit，29 s** | **27–28×** | **0** | **0** | **0** | 1.5–1.7 GB |
+| 8-bit，14 s | 26–29× | 0 | 0 | 0 | 1.6–1.7 GB |
+
+- 丢字是 4-bit 量化的问题：P-0i 里出事的三片（会议 2 #62、#74，AI 会议 #76）8-bit 都完整，内容与 CoreML 一致。
+- 卡死来自包自带的长音频 n-gram 限制，关掉即可；重复惩罚必须保留（去掉后辩论赛出现几十遍"现在，现在……"）。
+- P-0i 里关掉 n-gram 后还有一片 85 s，这次重跑没有复现，原因不明。
+- 代价：比 4-bit 慢约 25%，下载 1.0 GB（原 0.7 GB），内存多约 0.4 GB；仍是 CoreML 的约 4 倍。
+- 测试数据与工具在 `~/Library/Caches/voicely-qwen-bench`（`run.sh`、`analyze.py`）。
 
 ### P-1 ⚠️ 转录指标：time ratio 与 speed 一直停在 "Measuring"
 

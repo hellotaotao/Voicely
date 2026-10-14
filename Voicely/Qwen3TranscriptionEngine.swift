@@ -63,7 +63,7 @@ enum Qwen3Backend: String, Sendable {
 
     nonisolated var approximateDownloadSizeText: String {
         switch self {
-        case .mlx: "about 0.7 GB"
+        case .mlx: "about 1.0 GB"
         case .coreML: "about 0.95 GB"
         }
     }
@@ -74,10 +74,10 @@ enum Qwen3Backend: String, Sendable {
 /// How long a piece of audio one decode may take, and where the VAD may cut.
 ///
 /// Measured on three real recordings (about 2.3 hours, docs/stable-roadmap.md
-/// P-0i). CoreML handles slices up to its encoder's 30 s window: compared with
-/// 14 s slices it was faster, left no empty slices and cut on longer pauses.
-/// MLX does not: on slices over 15 s, 3 of 368 came back with most of their
-/// text missing and single slices took minutes, so it stays under 15 s.
+/// P-0i and P-0j). Both backends handle slices up to the CoreML encoder's
+/// 30 s window, and against 14 s slices they cut on longer pauses and leave no
+/// empty slices. MLX needs the 8-bit weights for that: the 4-bit ones returned
+/// 3 of 368 long slices with most of their text missing.
 struct Qwen3SliceLimits: Equatable, Sendable {
     /// Longest audio decoded in one pass without slicing.
     let singlePassSeconds: TimeInterval
@@ -86,25 +86,22 @@ struct Qwen3SliceLimits: Equatable, Sendable {
     /// Earliest point in a slice where the VAD may cut.
     let minimumCutSeconds: TimeInterval
 
-    nonisolated static func limits(for backend: Qwen3Backend) -> Qwen3SliceLimits {
-        switch backend {
-        case .mlx: Qwen3SliceLimits(singlePassSeconds: 15, chunkSeconds: 14, minimumCutSeconds: 7)
-        case .coreML: Qwen3SliceLimits(singlePassSeconds: 30, chunkSeconds: 29, minimumCutSeconds: 15)
-        }
-    }
+    nonisolated static let production = Qwen3SliceLimits(singlePassSeconds: 30, chunkSeconds: 29, minimumCutSeconds: 15)
+    /// The cadence the unit-test fixtures are written for.
+    nonisolated static let testFixtures = Qwen3SliceLimits(singlePassSeconds: 15, chunkSeconds: 14, minimumCutSeconds: 7)
 
-    /// Unit tests always run on the 14 s cadence their fixtures are written
-    /// for, whichever platform hosts them; `limits(for:)` is what ships.
-    nonisolated static let current = limits(for: AppRuntime.isRunningTests ? .mlx : .current)
+    nonisolated static let current = AppRuntime.isRunningTests ? testFixtures : production
 }
 
 // MARK: - Defaults & knobs
 
 enum Qwen3ASRDefaults {
-    /// 0.6B 4-bit MLX weights. Pinned alongside the vendored speech-swift
-    /// revision so weight layout and loader stay in sync. The CoreML backend
-    /// takes its tokenizer files from this repository too.
-    nonisolated static let mlxModelId = "mlx-community/Qwen3-ASR-0.6B-4bit"
+    /// 0.6B 8-bit MLX weights. The 4-bit conversion ends long slices early,
+    /// dropping most of their text (P-0j). The CoreML backend takes its
+    /// tokenizer files from this repository too.
+    nonisolated static let mlxModelId = "mlx-community/Qwen3-ASR-0.6B-8bit"
+    /// Weights earlier builds downloaded and nothing reads any more.
+    nonisolated static let retiredModelIds = ["mlx-community/Qwen3-ASR-0.6B-4bit"]
     nonisolated static let coreMLModelId = "aufklarer/Qwen3-ASR-CoreML"
     nonisolated static let tokenizerFiles = ["vocab.json", "merges.txt", "tokenizer_config.json"]
     nonisolated static let coreMLBundles = [
@@ -207,8 +204,26 @@ actor Qwen3ASRModelStore {
     /// Written once a download has loaded and warmed up. A snapshot that was
     /// interrupted leaves real-looking model folders behind, so file presence
     /// alone cannot tell a finished download from half of one.
+    /// The marker names the weights, so a marker left by an earlier model
+    /// cannot vouch for a later one's half-finished download.
     nonisolated static func readyMarkerURL(for backend: Qwen3Backend, base: URL) -> URL {
-        base.appendingPathComponent(".ready-\(backend.rawValue)")
+        let modelId = backend == .mlx ? Qwen3ASRDefaults.mlxModelId : Qwen3ASRDefaults.coreMLModelId
+        let name = modelId.split(separator: "/").last.map(String.init) ?? modelId
+        return base.appendingPathComponent(".ready-\(backend.rawValue)-\(name)")
+    }
+
+    /// Files from earlier builds: retired weights and unversioned markers.
+    nonisolated static func removeRetiredFiles(base: URL, fileManager: FileManager = .default) {
+        for modelId in Qwen3ASRDefaults.retiredModelIds {
+            var directory = base.appendingPathComponent("models", isDirectory: true)
+            for component in modelId.split(separator: "/") {
+                directory.appendPathComponent(String(component), isDirectory: true)
+            }
+            try? fileManager.removeItem(at: directory)
+        }
+        for backend in [Qwen3Backend.mlx, .coreML] {
+            try? fileManager.removeItem(at: base.appendingPathComponent(".ready-\(backend.rawValue)"))
+        }
     }
 
     nonisolated static func isModelDownloaded(
@@ -248,17 +263,13 @@ actor Qwen3ASRModelStore {
         try await load(allowDownload: true, progressHandler: progressHandler)
     }
 
-    /// Runs one inference on a slice of 16 kHz mono audio no longer than the
-    /// backend's `Qwen3SliceLimits`. The model never leaves this actor.
+    /// Runs one inference on a slice of 16 kHz mono audio no longer than
+    /// `Qwen3SliceLimits`. The model never leaves this actor.
     func transcribe(samples: [Float], languageHint: String?) async throws -> String {
         try await load(allowDownload: false, progressHandler: nil)
         if let mlxModel {
-            return mlxModel.transcribe(
-                audio: samples, sampleRate: 16_000,
-                options: Qwen3DecodingOptions(
-                    maxTokens: Qwen3ASRDefaults.maxTokens,
-                    language: languageHint,
-                    repetitionPenalty: Qwen3ASRDefaults.repetitionPenalty))
+            return mlxModel.transcribe(audio: samples, sampleRate: 16_000,
+                                       options: Self.mlxOptions(languageHint: languageHint))
         }
         guard let coreMLModel else { throw StoreError.modelNotDownloaded }
         // Each slice creates an MLState and several IOSurface-backed arrays;
@@ -267,6 +278,17 @@ actor Qwen3ASRModelStore {
         return try autoreleasepool {
             try coreMLModel.transcribe(samples, languageHint: languageHint)
         }
+    }
+
+    /// The package adds a no-repeat 3-gram block to audio over 15 s. On long
+    /// slices it made single decodes run for minutes and garble their text,
+    /// and the repetition penalty already covers what it guards against.
+    nonisolated static func mlxOptions(languageHint: String?, maxTokens: Int = Qwen3ASRDefaults.maxTokens) -> Qwen3DecodingOptions {
+        var options = Qwen3DecodingOptions(
+            maxTokens: maxTokens, language: languageHint,
+            repetitionPenalty: Qwen3ASRDefaults.repetitionPenalty)
+        options.longInputThresholdSeconds = .infinity
+        return options
     }
 
     func unloadModel() {
@@ -307,6 +329,7 @@ actor Qwen3ASRModelStore {
                     base: base, allowDownload: allowDownload, progressHandler: progressHandler)
             }
             Self.excludeFromBackup(base)
+            Self.removeRetiredFiles(base: base)
             FileManager.default.createFile(
                 atPath: Self.readyMarkerURL(for: backend, base: base).path, contents: nil)
             progressHandler?(1.0, "Ready")
@@ -332,7 +355,7 @@ actor Qwen3ASRModelStore {
         _ = model.transcribe(
             audio: [Float](repeating: 0, count: 8_000),
             sampleRate: 16_000,
-            options: Qwen3DecodingOptions(maxTokens: 4, repetitionPenalty: Qwen3ASRDefaults.repetitionPenalty)
+            options: mlxOptions(languageHint: nil, maxTokens: 4)
         )
         return model
     }

@@ -39,7 +39,7 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 ### Core Services (all `@MainActor`)
 
 - **ModelManager** – Downloads, loads, and deletes the Qwen3-ASR model and publishes its state. One model per device. Posts `Notification.Name.modelLoadedNotification` when ready.
-- **Qwen3ASRModelStore** (`Qwen3TranscriptionEngine.swift`, an actor) – Owns the loaded model and runs every inference. `Qwen3Backend` picks the runtime: MLX on the GPU on Apple-silicon Macs, CoreML on CPU + Neural Engine everywhere else (iOS takes the GPU away from a backgrounded app). Audio is always sliced to ≤14 s before it reaches the model.
+- **Qwen3ASRModelStore** (`Qwen3TranscriptionEngine.swift`, an actor) – Owns the loaded model and runs every inference. `Qwen3Backend` picks the runtime: MLX on the GPU on Apple-silicon Macs, CoreML on CPU + Neural Engine everywhere else (iOS takes the GPU away from a backgrounded app). Audio is sliced at neural-VAD cuts to ≤29 s (`Qwen3SliceLimits`) before it reaches the model; the Mac uses the 8-bit MLX weights, because the 4-bit ones drop text on long slices.
 - **TranscriptionService** – Orchestrates transcription via the model store. Depends on ModelManager for the loaded model. Supports cancellation, progress smoothing, and batch processing of pending notes.
 - **AudioRecordingService** – Handles AVAudioRecorder, microphone permissions, and recording state. Saves audio to iCloud Documents.
 - **AudioPlayerService** – Plays back recorded audio files.

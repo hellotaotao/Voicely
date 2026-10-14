@@ -9,9 +9,11 @@
 
 import AudioCommon
 import AVFoundation
+import Cmlx
 import CoreML
 import Foundation
 import Metal
+import MLX
 import Qwen3ASR
 
 // MARK: - Backend
@@ -114,6 +116,12 @@ enum Qwen3ASRDefaults {
     /// on silence or ambiguous audio, per the package's inference docs.
     nonisolated static let repetitionPenalty: Float = 1.15
     nonisolated static let maxTokens = 448
+
+    /// Ceiling on MLX's pool of freed GPU buffers. Unbounded, it grew past
+    /// 12 GB during one long recording; capped anywhere from 0 to 4 GB the
+    /// decode ran at the same 24–28× with identical text, while the model's
+    /// own working set stayed at 1.9 GB (P-0k).
+    nonisolated static let mlxCacheLimitBytes = 512 * 1_048_576
 
     nonisolated static let singlePassSecondsLimit = Qwen3SliceLimits.current.singlePassSeconds
     nonisolated static let chunkSeconds = Qwen3SliceLimits.current.chunkSeconds
@@ -292,7 +300,10 @@ actor Qwen3ASRModelStore {
     }
 
     func unloadModel() {
-        mlxModel?.unload()
+        if let mlxModel {
+            mlxModel.unload()
+            Memory.clearCache()
+        }
         mlxModel = nil
         coreMLModel = nil
     }
@@ -349,6 +360,7 @@ actor Qwen3ASRModelStore {
             offlineMode: !allowDownload,
             progressHandler: { progress, status in progressHandler?(progress * 0.97, status) }
         )
+        limitMLXMemory()
         // One tiny decode compiles the Metal pipelines so the first real
         // slice doesn't pay the warm-up cost.
         progressHandler?(0.98, "Warming up…")
@@ -358,6 +370,16 @@ actor Qwen3ASRModelStore {
             options: mlxOptions(languageHint: nil, maxTokens: 4)
         )
         return model
+    }
+
+    /// The package wires up to 90% of the GPU's working set so the OS cannot
+    /// page it out, and leaves the buffer cache unbounded for the 0.6B model.
+    /// A recorder that runs beside everything else must not hold memory the
+    /// rest of the Mac needs.
+    private static func limitMLXMemory() {
+        Memory.cacheLimit = Qwen3ASRDefaults.mlxCacheLimitBytes
+        var previous: size_t = 0
+        mlx_set_wired_limit(&previous, 0)
     }
 
     private static func loadCoreML(

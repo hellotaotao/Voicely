@@ -1,6 +1,20 @@
 import AVFoundation
 import Foundation
 import Qwen3ASR
+import MLX
+import Cmlx
+
+/// The process's real memory use, GPU buffers included (what `footprint` shows).
+func physFootprint() -> Int {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return result == KERN_SUCCESS ? Int(info.phys_footprint) : 0
+}
 
 // usage: QwenReplay <audio.caf 16k mono f32> <cuts.json [[start,end],...] in seconds> <out.jsonl> <context>
 let args = CommandLine.arguments
@@ -24,6 +38,11 @@ let model = try await Qwen3ASRModel.fromPretrained(
     modelId: modelId, cacheDir: cacheDir, offlineMode: true, progressHandler: nil)
 _ = model.transcribe(audio: [Float](repeating: 0, count: 8_000), sampleRate: 16_000,
                      options: Qwen3DecodingOptions(maxTokens: 4, repetitionPenalty: 1.15))
+// CACHE_LIMIT_MB caps MLX's buffer cache; UNPIN=1 drops the wired-memory pin the package sets.
+let environment = ProcessInfo.processInfo.environment
+if let mb = Int(environment["CACHE_LIMIT_MB"] ?? "") { Memory.cacheLimit = mb * 1_048_576 }
+if environment["UNPIN"] == "1" { var previous: size_t = 0; mlx_set_wired_limit(&previous, 0) }
+var maxFootprint = 0, maxCache = 0
 FileHandle.standardError.write(Data("loaded in \(Date().timeIntervalSince(loadStart)) s\n".utf8))
 
 FileManager.default.createFile(atPath: outURL.path, contents: nil)
@@ -47,6 +66,8 @@ for (index, cut) in cuts.enumerated() {
     let row: [String: Any] = ["index": index + 1, "start": cut[0], "end": cut[1],
                               "plain": plain, "plainSeconds": plainSeconds,
                               "hinted": hinted, "hintedSeconds": hintedSeconds]
+    maxFootprint = max(maxFootprint, physFootprint()); maxCache = max(maxCache, Memory.cacheMemory)
     try out.write(contentsOf: JSONSerialization.data(withJSONObject: row) + Data("\n".utf8))
     FileHandle.standardError.write(Data("slice \(index + 1)/\(cuts.count) \(Int(cut[0]))s plain=\(String(format: "%.1f", plainSeconds))s\n".utf8))
 }
+FileHandle.standardError.write(Data("MEMORY maxFootprintMB=\(maxFootprint / 1_048_576) peakActiveMB=\(Memory.peakMemory / 1_048_576) maxCacheMB=\(maxCache / 1_048_576) cacheLimitMB=\(Memory.cacheLimit / 1_048_576)\n".utf8))

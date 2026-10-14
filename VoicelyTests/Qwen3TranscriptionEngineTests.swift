@@ -126,6 +126,19 @@ struct Qwen3ASRDefaultsTests {
         }
     }
 
+    /// MLX loses text on slices over 15 s; CoreML is better off with slices
+    /// up to its encoder's 30 s window.
+    @Test func sliceLimitsFollowTheBackend() {
+        let mlx = Qwen3SliceLimits.limits(for: .mlx)
+        let coreML = Qwen3SliceLimits.limits(for: .coreML)
+        #expect(mlx == Qwen3SliceLimits(singlePassSeconds: 15, chunkSeconds: 14, minimumCutSeconds: 7))
+        #expect(coreML == Qwen3SliceLimits(singlePassSeconds: 30, chunkSeconds: 29, minimumCutSeconds: 15))
+        for limits in [mlx, coreML] {
+            #expect(limits.minimumCutSeconds < limits.chunkSeconds)
+            #expect(limits.chunkSeconds < limits.singlePassSeconds)
+        }
+    }
+
     @Test func chunkSizingStaysInsideFastPath() {
         #expect(Qwen3ASRDefaults.chunkSeconds < Qwen3ASRDefaults.singlePassSecondsLimit)
         #expect(Qwen3ASRDefaults.minimumChunkCutSeconds < Qwen3ASRDefaults.chunkSeconds)

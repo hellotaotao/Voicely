@@ -1286,7 +1286,7 @@ private extension TranscriptionService {
         let languageHint = Qwen3ASRDefaults.languageHint(
             forSelectedLanguageKey: UserDefaults.standard.string(forKey: "selectedLanguage"))
         // Callers slice to the engine's limit; anything longer is cut here so
-        // the model never falls onto its slow long-input path.
+        // the model never sees more than it handles reliably.
         let chunkSamples = Int(Qwen3ASRDefaults.singlePassSecondsLimit * 16_000)
         var pieces: [String] = []
         var offset = 0

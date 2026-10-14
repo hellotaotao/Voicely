@@ -40,7 +40,7 @@ struct Qwen3RealModelTests {
         let loadSeconds = ProcessInfo.processInfo.systemUptime - loadStart
 
         let samples = try Qwen3AudioPCM.loadPCM16kMono(url: Qwen3RealModelInput.audioURL)
-        let slice = Int(Qwen3ASRDefaults.chunkSeconds) * 16_000
+        let slice = Int(Qwen3SliceLimits.limits(for: backend).chunkSeconds) * 16_000
         var pieces: [String] = []
         var audioSeconds = 0.0
         let decodeStart = ProcessInfo.processInfo.systemUptime

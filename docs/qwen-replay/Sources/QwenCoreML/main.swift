@@ -33,6 +33,9 @@ let model = try await CoreMLASRModel.fromPretrained(
 try model.warmUp()
 FileHandle.standardError.write(Data("loaded in \(Date().timeIntervalSince(loadStart)) s\n".utf8))
 
+// REPETITION_PENALTY=1 turns the penalty off to reproduce the first runs.
+let penalty = Float(ProcessInfo.processInfo.environment["REPETITION_PENALTY"] ?? "") ?? 1.15
+var tokenCounts: [Int] = []
 let tokenizer = Qwen3Tokenizer()
 try tokenizer.load(from: cacheDir.appendingPathComponent("vocab.json"))
 
@@ -73,16 +76,36 @@ func transcribeMLXFree(_ audio: [Float], maxTokens: Int = 448) throws -> String 
         consumed += n
     }
     logits = try decoder.decoderPrefillTokens(suffix)
+    // Same greedy pick as the app: repetition penalty 1.15 over emitted tokens.
+    func pick(_ logits: MLMultiArray, seen: Set<Int32>, excluding: Int32?) -> Int32 {
+        let count = logits.shape.last?.intValue ?? logits.count
+        let stride = logits.strides.last?.intValue ?? 1
+        let half = logits.dataType == .float16
+        let p16 = logits.dataPointer.assumingMemoryBound(to: Float16.self)
+        let p32 = logits.dataPointer.assumingMemoryBound(to: Float.self)
+        var best: Int32 = 0
+        var bestValue = -Float.infinity
+        for index in 0..<count {
+            let token = Int32(index)
+            if token == excluding { continue }
+            var value = half ? Float(p16[index * stride]) : p32[index * stride]
+            if value.isNaN { continue }
+            if penalty > 1, seen.contains(token) { value = value > 0 ? value / penalty : value * penalty }
+            if value > bestValue { bestValue = value; best = token }
+        }
+        return best
+    }
     var tokens: [Int32] = []
-    var next = decoder.argmax(logits: logits)
-    if next == imEnd { next = decoder.argmax(logits: logits, skipping: imEnd) }
-    tokens.append(next)
-    for _ in 1..<maxTokens {
+    var seen = Set<Int32>()
+    var next = pick(logits, seen: seen, excluding: imEnd)
+    for _ in 0..<maxTokens {
+        tokens.append(next)
+        seen.insert(next)
         if next == imEnd { break }
         logits = try decoder.decoderStep(embedding: try decoder.embed(tokenId: next))
-        next = decoder.argmax(logits: logits)
-        tokens.append(next)
+        next = pick(logits, seen: seen, excluding: nil)
     }
+    tokenCounts.append(tokens.count)
     let raw = tokenizer.decode(tokens: tokens.map { Int($0) })
     if let range = raw.range(of: "<asr_text>") {
         return String(raw[range.upperBound...]).trimmingCharacters(in: .whitespaces)
@@ -106,7 +129,7 @@ for (index, cut) in cuts.enumerated() {
         ? ((try? model.transcribe(audio: samples, sampleRate: 16_000)) ?? "[error]") : ""
     let batchedSeconds = Date().timeIntervalSince(began)
     let row: [String: Any] = ["index": index + 1, "start": cut[0], "end": cut[1],
-                              "plain": noMLX, "plainSeconds": noMLXSeconds,
+                              "plain": noMLX, "plainSeconds": noMLXSeconds, "tokens": tokenCounts.last ?? 0,
                               "hinted": batched, "hintedSeconds": batchedSeconds]
     try out.write(contentsOf: JSONSerialization.data(withJSONObject: row) + Data("\n".utf8))
     FileHandle.standardError.write(Data("slice \(index + 1)/\(cuts.count) \(String(format: "%.1f", cut[1] - cut[0]))s audio: noMLX=\(String(format: "%.1f", noMLXSeconds))s batched=\(String(format: "%.1f", batchedSeconds))s\n".utf8))

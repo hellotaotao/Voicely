@@ -2,8 +2,9 @@ import AVFoundation
 import Foundation
 
 /// Drives transcription of an imported, already-complete audio file.
-/// Files ≤15 s run in a single pass (no sidecar); longer files are sliced into
-/// ≤14 s neural-VAD segments with a resume sidecar written after each one.
+/// Files within the engine's single-pass limit run in one pass (no sidecar);
+/// longer files are sliced at neural-VAD cuts (`Qwen3SliceLimits`) with a
+/// resume sidecar written after each slice.
 /// The imported file is never stored in iCloud — a throwaway working copy is
 /// used during transcription and removed on completion.
 @MainActor
@@ -171,7 +172,7 @@ final class SegmentedAudioTranscriber {
         }
     }
 
-    // MARK: - Single pass (≤15 s)
+    // MARK: - Single pass
 
     private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome, hadExistingTranscript: Bool) {
         switch outcome {
@@ -216,7 +217,7 @@ final class SegmentedAudioTranscriber {
         note.clearTransientTranscriptionFlags()
     }
 
-    // MARK: - Segmented (>15 s)
+    // MARK: - Segmented
 
     private func transcribeSegmented(note: VoiceNote, sourceURL: URL, info: AudioInfo, hadExistingTranscript: Bool) async {
         guard let session = telemetrySession else { return }

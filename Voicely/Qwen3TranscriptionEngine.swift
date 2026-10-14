@@ -69,6 +69,35 @@ enum Qwen3Backend: String, Sendable {
     }
 }
 
+// MARK: - Slice limits
+
+/// How long a piece of audio one decode may take, and where the VAD may cut.
+///
+/// Measured on three real recordings (about 2.3 hours, docs/stable-roadmap.md
+/// P-0i). CoreML handles slices up to its encoder's 30 s window: compared with
+/// 14 s slices it was faster, left no empty slices and cut on longer pauses.
+/// MLX does not: on slices over 15 s, 3 of 368 came back with most of their
+/// text missing and single slices took minutes, so it stays under 15 s.
+struct Qwen3SliceLimits: Equatable, Sendable {
+    /// Longest audio decoded in one pass without slicing.
+    let singlePassSeconds: TimeInterval
+    /// Longest slice; a VAD cut may end it sooner.
+    let chunkSeconds: TimeInterval
+    /// Earliest point in a slice where the VAD may cut.
+    let minimumCutSeconds: TimeInterval
+
+    nonisolated static func limits(for backend: Qwen3Backend) -> Qwen3SliceLimits {
+        switch backend {
+        case .mlx: Qwen3SliceLimits(singlePassSeconds: 15, chunkSeconds: 14, minimumCutSeconds: 7)
+        case .coreML: Qwen3SliceLimits(singlePassSeconds: 30, chunkSeconds: 29, minimumCutSeconds: 15)
+        }
+    }
+
+    /// Unit tests always run on the 14 s cadence their fixtures are written
+    /// for, whichever platform hosts them; `limits(for:)` is what ships.
+    nonisolated static let current = limits(for: AppRuntime.isRunningTests ? .mlx : .current)
+}
+
 // MARK: - Defaults & knobs
 
 enum Qwen3ASRDefaults {
@@ -89,11 +118,9 @@ enum Qwen3ASRDefaults {
     nonisolated static let repetitionPenalty: Float = 1.15
     nonisolated static let maxTokens = 448
 
-    /// Qwen3-ASR escalates to a slower decoding path above 15 s of audio, so
-    /// every slice stays under it, with room for the VAD to pick the cut.
-    nonisolated static let singlePassSecondsLimit: TimeInterval = 15
-    nonisolated static let chunkSeconds: TimeInterval = 14
-    nonisolated static let minimumChunkCutSeconds: TimeInterval = 7
+    nonisolated static let singlePassSecondsLimit = Qwen3SliceLimits.current.singlePassSeconds
+    nonisolated static let chunkSeconds = Qwen3SliceLimits.current.chunkSeconds
+    nonisolated static let minimumChunkCutSeconds = Qwen3SliceLimits.current.minimumCutSeconds
 
     /// Languages Qwen3-ASR was trained on, keyed the way Settings stores the
     /// choice. The value is the name the model's prompt expects.
@@ -221,8 +248,8 @@ actor Qwen3ASRModelStore {
         try await load(allowDownload: true, progressHandler: progressHandler)
     }
 
-    /// Runs one inference on up to 15 s of 16 kHz mono audio. The model never
-    /// leaves this actor.
+    /// Runs one inference on a slice of 16 kHz mono audio no longer than the
+    /// backend's `Qwen3SliceLimits`. The model never leaves this actor.
     func transcribe(samples: [Float], languageHint: String?) async throws -> String {
         try await load(allowDownload: false, progressHandler: nil)
         if let mlxModel {

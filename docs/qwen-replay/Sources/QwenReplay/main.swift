@@ -32,12 +32,15 @@ for (index, cut) in cuts.enumerated() {
     func run(_ context: String?) -> (String, Double) {
         let began = Date()
         // Mirrors Qwen3ASRDefaults.decodingOptions in the old-dev engine.
-        let text = model.transcribe(audio: samples, sampleRate: 16_000,
-            options: Qwen3DecodingOptions(language: nil, context: context, repetitionPenalty: 1.15))
+        var options = Qwen3DecodingOptions(language: nil, context: context, repetitionPenalty: 1.15)
+        // NO_LONG_INPUT_NGRAM=1 keeps slices over 15 s off the package's
+        // automatic no-repeat-n-gram escalation.
+        if ProcessInfo.processInfo.environment["NO_LONG_INPUT_NGRAM"] == "1" { options.longInputThresholdSeconds = .infinity }
+        let text = model.transcribe(audio: samples, sampleRate: 16_000, options: options)
         return (text, Date().timeIntervalSince(began))
     }
     let (plain, plainSeconds) = run(nil)
-    let (hinted, hintedSeconds) = run(context)
+    let (hinted, hintedSeconds) = context.isEmpty ? ("", 0) : run(context)
     let row: [String: Any] = ["index": index + 1, "start": cut[0], "end": cut[1],
                               "plain": plain, "plainSeconds": plainSeconds,
                               "hinted": hinted, "hintedSeconds": hintedSeconds]

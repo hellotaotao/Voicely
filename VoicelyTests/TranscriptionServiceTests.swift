@@ -20,21 +20,21 @@ struct TranscriptionServiceTests {
         }
     }
 
-    @Test func repeatedWhisperOutputIsNotAcceptedAsSuccess() {
+    @Test func repeatedEngineOutputIsNotAcceptedAsSuccess() {
         let text = "First segment. " + String(repeating: "Claude Code, ", count: 80)
         if case .engineError = TranscriptionService.validatedEngineOutput(text) {} else {
             Issue.record("Degenerate decoder output must not replace the transcript")
         }
     }
 
-    @Test func repeatedUnicodeWhisperOutputIsNotAcceptedAsSuccess() {
+    @Test func repeatedUnicodeEngineOutputIsNotAcceptedAsSuccess() {
         let text = "First segment. " + String(repeating: "ḕ", count: 80)
         if case .engineError = TranscriptionService.validatedEngineOutput(text) {} else {
             Issue.record("Repeated Unicode output must be rejected")
         }
     }
 
-    @Test func ordinaryWhisperOutputIsPreserved() {
+    @Test func ordinaryEngineOutputIsPreserved() {
         let text = "The first meeting starts at three. The second meeting starts at four."
         if case .text(let result) = TranscriptionService.validatedEngineOutput(text) {
             #expect(result == text)
@@ -125,7 +125,7 @@ struct TranscriptionServiceTests {
 
         let result = await service.transcribeAudio(filePath: "file.m4a")
 
-        // 整段非语音:如实保留 Whisper 原文,不抹成单一 [BLANK_AUDIO]。
+        // A clip that is all non-speech keeps the engine's own words instead of one [BLANK_AUDIO].
         #expect(result?.text == "[Silence]\n[BLANK_AUDIO]\n(humming)")
     }
 
@@ -448,13 +448,13 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
-    @Test @MainActor func blankWhisperOutputMarksFailedWithoutRetryAndClearsMetadata() async {
+    @Test @MainActor func blankEngineOutputMarksFailedWithoutRetryAndClearsMetadata() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)
         var attempts = 0
         service.transcribeImpl = { _, _ in
             attempts += 1
-            return "   \n"  // Whisper ran but produced nothing usable → a real error
+            return "   \n"  // The engine ran but produced nothing usable → a real error
         }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")

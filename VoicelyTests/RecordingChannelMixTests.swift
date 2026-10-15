@@ -44,7 +44,7 @@ struct RecordingChannelMixTests {
     }
 
     @Test(arguments: [false, true], [0, 1, -1])
-    func monoResamplingProducesNonzeroWhisperAudio(interleaved: Bool, activeChannel: Int) throws {
+    func monoResamplingProducesNonzeroModelAudio(interleaved: Bool, activeChannel: Int) throws {
         let input = try buffer(channels: 2, interleaved: interleaved, activeChannel: activeChannel)
         let mono = try #require(AudioRecordingService.mixedDownToMono(input))
         let target = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32,

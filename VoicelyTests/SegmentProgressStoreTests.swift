@@ -174,7 +174,8 @@ struct SegmentProgressStoreTests {
         next.accumulatedText = "Another fragment"
         store.save(next, for: id)
         try store.resetProgressPreservingAttempt(for: id)
-        #expect(store.listRetainedAttempts(for: id).map(\.text) == ["Another fragment", "Recovered fragment"])
+        // Only the latest attempt is kept.
+        #expect(store.listRetainedAttempts(for: id).map(\.text) == ["Another fragment"])
         store.deleteRetainedAttempts(for: id)
         #expect(store.listRetainedAttempts(for: id).isEmpty)
     }

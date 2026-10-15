@@ -29,13 +29,6 @@ struct SettingsView: View {
                 VStack(spacing: 20) {
                     modelHeroCard
 
-                    settingsSection(
-                        title: "Language",
-                        identifier: AccessibilityIdentifiers.Settings.languageSection
-                    ) {
-                        languageRow
-                    }
-
                     privacyNoticeCard
 
                     settingsSection(
@@ -43,6 +36,13 @@ struct SettingsView: View {
                         identifier: AccessibilityIdentifiers.Settings.aboutSection
                     ) {
                         appInfoContent
+                    }
+
+                    settingsSection(
+                        title: "Advanced",
+                        identifier: AccessibilityIdentifiers.Settings.languageSection
+                    ) {
+                        languageRow
                     }
 
                     settingsSection(
@@ -262,9 +262,10 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Speech Language")
                     .font(.subheadline.weight(.medium))
-                Text("Expected language of your recordings")
+                Text("Auto Detect handles mixed languages, such as Chinese with English. Choose a language only if Auto Detect keeps getting it wrong; while one is chosen, the recording screen shows it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Picker("", selection: $selectedLanguage) {

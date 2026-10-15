@@ -154,45 +154,10 @@ struct IncrementalTranscriptionCoordinatorTests {
 
     // MARK: Helpers
 
-    @Test func defaultIntervalHelperUsesEngineSafeCadence() {
+    @Test func liveCadenceFollowsTheSliceLimits() {
         #expect(IncrementalTranscriptionTiming.defaultIntervalSeconds == 14)
         #expect(IncrementalTranscriptionTiming.minimumCutSeconds == 7)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(30) == 14)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(20) == 14)
-        #expect(IncrementalTranscriptionTiming.sanitizedIntervalSeconds(10) == 14)
     }
-
-    @Test func storedIntervalChoicesNoLongerChangeRuntimeCadence() throws {
-        let suiteName = "VoicelyFixedIncrementalTimingTests_\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults.set(20, forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey)
-
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 14)
-
-        defaults.set(30, forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey)
-
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 14)
-
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-
-    @Test func legacyMinuteMigrationDoesNotCreateTenSecondChunks() throws {
-        let suiteName = "VoicelyIncrementalTimingTests_\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults.set(10, forKey: IncrementalTranscriptionTiming.legacyIntervalMinutesStorageKey)
-
-        let migratedSeconds = IncrementalTranscriptionTiming.migrateLegacyMinuteValueIfNeeded(in: defaults)
-
-        #expect(migratedSeconds == 14)
-        #expect(migratedSeconds != 10)
-        #expect(defaults.integer(forKey: IncrementalTranscriptionTiming.intervalSecondsStorageKey) == 14)
-        #expect(IncrementalTranscriptionTiming.resolvedIntervalSeconds(from: defaults) == 14)
-
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-
 
     @Test func voiceActivityCutWaitsWhileBatchIsStillFilling() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
@@ -551,7 +516,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(!coordinator.requiresFullTranscription)
     }
 
-    @Test @MainActor func sliceWhisperRejectedLiveIsMarkedAtStopWithoutDecodingAgain() async throws {
+    @Test @MainActor func sliceTheEngineRejectedLiveIsMarkedAtStopWithoutDecodingAgain() async throws {
         let pcmURL = try makeSilentCAF(seconds: 36)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
@@ -582,7 +547,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         override func isModelLoaded() -> Bool { loaded }
     }
 
-    @Test @MainActor func sliceThatNeverReachedWhisperIsDecodedAtStopInItsOriginalPosition() async throws {
+    @Test @MainActor func sliceThatNeverReachedTheEngineIsDecodedAtStopInItsOriginalPosition() async throws {
         let pcmURL = try makeSilentCAF(seconds: 36)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let service = TranscriptionService()

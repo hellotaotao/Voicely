@@ -45,7 +45,7 @@ struct FirstLaunchOnboardingTests {
 
         #expect(optimizing.visualState == .active)
         #expect(optimizing.title == "Optimizing offline transcription")
-        #expect(optimizing.detail == "Core ML is preparing the selected model for this device.")
+        #expect(optimizing.detail == "Voicely is preparing the speech model for this device.")
         #expect(optimizing.progress == 0.82)
 
         let ready = FirstLaunchOnboarding.modelSetupStatus(
@@ -56,7 +56,7 @@ struct FirstLaunchOnboardingTests {
 
         #expect(ready.visualState == .ready)
         #expect(ready.title == "Offline transcription ready")
-        #expect(ready.detail == "The selected model is loaded and ready to use.")
+        #expect(ready.detail == "The speech model is loaded and ready to use.")
         #expect(ready.progress == nil)
     }
 

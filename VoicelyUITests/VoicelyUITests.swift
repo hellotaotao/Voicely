@@ -18,7 +18,7 @@ final class VoicelyUITests: XCTestCase {
         static let settingsScreen = "SettingsScreen"
         static let settingsDoneButton = "SettingsDoneButton"
         static let activeModelCard = "ActiveModelCard"
-        static let transcriptionSettingsSection = "TranscriptionSettingsSection"
+        static let languageSettingsSection = "LanguageSettingsSection"
         static let noteRow = "VoiceNoteRow"
         static let noteDetailScreen = "NoteDetailScreen"
         static let noteDetailTitle = "NoteDetailTitle"
@@ -147,7 +147,7 @@ final class VoicelyUITests: XCTestCase {
         app.buttons[ID.settingsButton].firstMatch.tap()
         XCTAssertTrue(app.element(id: ID.settingsScreen).waitForExistence(timeout: 5))
         XCTAssertTrue(app.element(id: ID.activeModelCard).exists)
-        XCTAssertTrue(app.element(id: ID.transcriptionSettingsSection).exists)
+        XCTAssertTrue(app.element(id: ID.languageSettingsSection).exists)
         attachScreenshot(named: "Settings Screen", app: app)
 
         app.buttons[ID.settingsDoneButton].firstMatch.tap()
@@ -196,7 +196,7 @@ final class VoicelyUITests: XCTestCase {
         XCTAssertTrue(app.element(id: ID.noteDetailMetadata).exists)
         XCTAssertTrue(app.staticTexts["1m 23s"].exists)
         XCTAssertTrue(app.staticTexts["Transcript"].exists)
-        XCTAssertTrue(app.staticTexts["Small"].exists)
+        XCTAssertTrue(app.staticTexts["Whisper Small"].exists)
         XCTAssertTrue(app.element(id: ID.transcriptionCard).exists)
         XCTAssertTrue(app.element(id: ID.transcriptionBody).exists)
         XCTAssertTrue(app.staticTexts[transcript].exists)
@@ -227,7 +227,7 @@ final class VoicelyUITests: XCTestCase {
         let row = app.element(id: ID.noteRow)
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.tap()
-        let disclosure = app.buttons["Saved results from earlier attempts"]
+        let disclosure = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "View the unfinished result")).firstMatch
         app.scrollToElement(disclosure)
         XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
         disclosure.tap()
@@ -354,14 +354,19 @@ final class VoicelyUITests: XCTestCase {
         let row = app.element(id: ID.noteRow)
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.tap()
+        // A re-transcription shows the new text first; the current transcript
+        // stays one tap away and is replaced only when the run completes.
         let previewText = app.staticTexts["TranscriptionPreview"]
         app.scrollToElement(previewText)
         XCTAssertTrue(previewText.waitForExistence(timeout: 5))
         XCTAssertEqual(previewText.label, preview)
+        XCTAssertFalse(app.staticTexts[original].exists)
+        let toggle = app.buttons["RetranscriptionToggle"]
+        XCTAssertTrue(toggle.exists)
+        toggle.tap()
         let savedText = app.staticTexts[ID.transcriptionBody]
-        XCTAssertTrue(savedText.exists)
+        XCTAssertTrue(savedText.waitForExistence(timeout: 5))
         XCTAssertEqual(savedText.label, original)
-        XCTAssertTrue(app.staticTexts["Partial transcript — transcription in progress"].exists)
         XCTAssertFalse(app.textViews["TranscriptEditor"].exists)
         XCTAssertTrue(app.buttons[ID.copyTranscriptionButton].exists)
         XCTAssertTrue(app.staticTexts["12.0× realtime"].exists)
@@ -428,7 +433,7 @@ final class VoicelyUITests: XCTestCase {
 
         XCTAssertTrue(app.element(id: ID.settingsScreen).waitForExistence(timeout: 5))
         XCTAssertTrue(app.element(id: ID.activeModelCard).exists)
-        XCTAssertTrue(app.element(id: ID.transcriptionSettingsSection).exists)
+        XCTAssertTrue(app.element(id: ID.languageSettingsSection).exists)
     }
 
     @MainActor

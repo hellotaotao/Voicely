@@ -127,35 +127,35 @@ enum FirstLaunchOnboarding {
             return FirstLaunchModelSetupStatus(
                 visualState: .idle,
                 title: "Checking offline transcription",
-                detail: "Voicely will prepare the selected model when setup starts.",
+                detail: "Voicely will prepare the speech model when setup starts.",
                 progress: nil
             )
         case .loading:
             return FirstLaunchModelSetupStatus(
                 visualState: .active,
                 title: "Loading offline transcription",
-                detail: "The selected model is being loaded into memory.",
+                detail: "The speech model is being loaded into memory.",
                 progress: clampedProgress(progress)
             )
         case .downloading:
             return FirstLaunchModelSetupStatus(
                 visualState: .active,
                 title: "Downloading offline model",
-                detail: "Voicely is fetching the selected model for local transcription.",
+                detail: "Voicely is fetching the speech model for local transcription.",
                 progress: clampedProgress(progress)
             )
         case .prewarming:
             return FirstLaunchModelSetupStatus(
                 visualState: .active,
                 title: "Optimizing offline transcription",
-                detail: "Core ML is preparing the selected model for this device.",
+                detail: "Voicely is preparing the speech model for this device.",
                 progress: clampedProgress(progress)
             )
         case .loaded:
             return FirstLaunchModelSetupStatus(
                 visualState: .ready,
                 title: "Offline transcription ready",
-                detail: "The selected model is loaded and ready to use.",
+                detail: "The speech model is loaded and ready to use.",
                 progress: nil
             )
         }

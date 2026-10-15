@@ -22,8 +22,8 @@ struct LocalTranscriptFinalizerTests {
         #expect(result?.overlapMergeCount == 0)
     }
 
-    @Test func keepsWhisperNonSpeechVerbatimWhenWholeClipIsNonSpeech() {
-        // 整段都是非语音:如实保留 Whisper 原文(相邻去重),不再抹成 [BLANK_AUDIO]。
+    @Test func keepsNonSpeechVerbatimWhenWholeClipIsNonSpeech() {
+        // A clip that is all non-speech keeps the engine's own words (adjacent duplicates removed) instead of [BLANK_AUDIO].
         #expect(LocalTranscriptFinalizer.finalizeTranscript("(music)\n(music)")?.text == "(music)")
         #expect(LocalTranscriptFinalizer.finalizeTranscript("[Laughter]")?.text == "[Laughter]")
     }

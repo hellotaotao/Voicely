@@ -1096,6 +1096,9 @@ struct VoiceNoteRow: View {
 // MARK: - Recording Controls
 
 struct RecordingControls: View {
+    /// A chosen language overrides auto-detect for every recording, which is
+    /// easy to forget, so the control shows it instead of the model name.
+    @AppStorage(Qwen3ASRDefaults.selectedLanguageKey) private var selectedLanguage = "auto"
     @ObservedObject var session: RecordingSession
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
@@ -1217,6 +1220,10 @@ struct RecordingControls: View {
             )
     }
 
+    private var forcedLanguageName: String? {
+        Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguage)
+    }
+
     private var idleLayout: some View {
         HStack(spacing: 10) {
             Button {
@@ -1224,15 +1231,15 @@ struct RecordingControls: View {
             } label: {
                 HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(statusTint)
+                        .fill(forcedLanguageName == nil ? statusTint : .orange)
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("Model")
+                        Text(forcedLanguageName == nil ? "Model" : "Language set to")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-                        Text(selectedModelDisplayName)
+                        Text(forcedLanguageName ?? selectedModelDisplayName)
                             .font(.footnote.weight(.medium))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(forcedLanguageName == nil ? Color.primary : Color.orange)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 6)
@@ -1254,7 +1261,8 @@ struct RecordingControls: View {
                 .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Speech Model \(selectedModelDisplayName)")
+            .accessibilityLabel(forcedLanguageName.map { "Speech language set to \($0)" }
+                                ?? "Speech Model \(selectedModelDisplayName)")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
 
             recordButton
@@ -1643,6 +1651,10 @@ struct VoiceNoteDetailView: View {
                 store.save(.init(lastFrame: 464_000, totalFrames: 960_000,
                     accumulatedText: text, failedRanges: [], updatedAt: Date()), for: note.id)
                 try? store.resetProgressPreservingAttempt(for: note.id)
+                // The attempt is offered from a failed re-transcription's notice.
+                note.completeTranscription()
+                note.transcriptionOutcome = .failed
+                note.markTranscriptionFailure("re-transcription did not complete successfully; kept previous transcript")
                 refreshRetainedAttempts()
             }
             if AppRuntime.isRunningTests,
@@ -1932,9 +1944,6 @@ struct VoiceNoteDetailView: View {
                         )
                     }
                     transcriptionBody
-                    if !retainedAttempts.isEmpty {
-                        retainedAttemptsView
-                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
@@ -1949,30 +1958,28 @@ struct VoiceNoteDetailView: View {
         retainedAttempts = transcriptionService.segmentProgressStore.listRetainedAttempts(for: note.id)
     }
 
-    private var retainedAttemptsView: some View {
-        DisclosureGroup("Saved results from earlier attempts") {
-            VStack(alignment: .leading, spacing: 16) {
-                ForEach(retainedAttempts) { attempt in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(attempt.updatedAt, style: .date)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("Partial result — kept separately from your transcript")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(attempt.text)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("RetainedAttemptText")
-                        Button("Copy saved result") {
-                            UIPasteboard.general.string = attempt.text
-                        }
-                        .accessibilityIdentifier("CopyRetainedAttempt")
+    /// The latest unfinished re-transcription, offered from the failure
+    /// notice. Its text stays apart from the transcript.
+    @ViewBuilder
+    private var latestRetainedAttemptView: some View {
+        if let attempt = retainedAttempts.first {
+            let share = attempt.progress.totalFrames > 0
+                ? Int(Double(attempt.progress.lastFrame) / Double(attempt.progress.totalFrames) * 100) : 0
+            DisclosureGroup("View the unfinished result (\(share)% of the recording)") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(attempt.text)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("RetainedAttemptText")
+                    Button("Copy unfinished result") {
+                        UIPasteboard.general.string = attempt.text
                     }
+                    .accessibilityIdentifier("CopyRetainedAttempt")
                 }
+                .padding(.top, 8)
             }
-            .padding(.top, 8)
+            .font(.footnote)
+            .padding(.bottom, 8)
         }
-        .padding(.top, 12)
     }
 
     @ViewBuilder
@@ -2320,6 +2327,7 @@ struct VoiceNoteDetailView: View {
                 .font(.footnote)
                 .foregroundStyle(.orange)
                 .accessibilityIdentifier("RetainedTranscriptWarning")
+            latestRetainedAttemptView
         } else if note.transcriptionOutcome == .failed {
             Label("Transcription did not finish successfully. Retained text may be incomplete.",
                   systemImage: "exclamationmark.triangle")

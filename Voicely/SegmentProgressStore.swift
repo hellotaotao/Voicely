@@ -75,6 +75,8 @@ final class SegmentProgressStore {
             .appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
+    /// Newest first. Archiving keeps only the latest attempt, but notes from
+    /// earlier versions can still hold several.
     func listRetainedAttempts(for id: UUID) -> [RetainedTranscriptionAttempt] {
         let urls = (try? fileManager.contentsOfDirectory(
             at: retainedAttemptsDirectory(for: id), includingPropertiesForKeys: nil)) ?? []
@@ -113,6 +115,12 @@ final class SegmentProgressStore {
         let snapshot = RetainedTranscriptionAttempt(id: key, progress: progress)
         // Atomic replacement also repairs an interrupted/corrupt previous copy.
         try encoder.encode(snapshot).write(to: destination, options: .atomic)
+        // Only the latest attempt is worth offering; older partial results
+        // pile up without anyone reading them.
+        let older = (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        for url in older where url.pathExtension == "json" && url.lastPathComponent != destination.lastPathComponent {
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     func resetProgressPreservingAttempt(for id: UUID) throws {

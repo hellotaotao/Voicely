@@ -7,38 +7,10 @@ import AVFoundation
 import Foundation
 
 struct IncrementalTranscriptionTiming {
-    static let intervalSecondsStorageKey = "incrementalTranscriptionIntervalSeconds"
-    static let legacyIntervalMinutesStorageKey = "incrementalTranscriptionInterval"
     static let defaultIntervalSeconds = Int(Qwen3ASRDefaults.chunkSeconds)
     /// Earliest position inside a full batch where a VAD cut is allowed,
     /// so every chunk sent to the engine carries at least this much audio.
     static let minimumCutSeconds = Int(Qwen3ASRDefaults.minimumChunkCutSeconds)
-
-    static func sanitizedIntervalSeconds(_: Int) -> Int {
-        defaultIntervalSeconds
-    }
-
-    static func resolvedIntervalSeconds(from _: UserDefaults = .standard) -> Int {
-        return defaultIntervalSeconds
-    }
-
-    @discardableResult
-    static func migrateLegacyMinuteValueIfNeeded(in defaults: UserDefaults = .standard) -> Int {
-        let resolvedSeconds = defaultIntervalSeconds
-        let storedSeconds = defaults.object(forKey: intervalSecondsStorageKey) as? Int
-
-        if storedSeconds != resolvedSeconds {
-            defaults.set(resolvedSeconds, forKey: intervalSecondsStorageKey)
-        }
-
-        return resolvedSeconds
-    }
-
-    static func migratedIntervalSeconds(fromLegacyMinutes _: Int) -> Int {
-        // Legacy values represented minutes. Do not reinterpret them as seconds.
-        // Reset to the current recommended chunk cadence.
-        defaultIntervalSeconds
-    }
 }
 
 struct IncrementalVoiceActivityCutConfiguration: Sendable {

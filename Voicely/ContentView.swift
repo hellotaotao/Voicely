@@ -1409,6 +1409,9 @@ struct VoiceNoteDetailView: View {
     @State private var showLoadModelPrompt = false
     @State private var showingShareSheet = false
     @State private var isEditing = false
+    /// During a re-transcription the new text is shown; this switches back
+    /// to the transcript that stays in place until the new one completes.
+    @State private var showsCurrentTranscriptDuringRetranscription = false
     @State private var showingRetranscribeConfirmation = false
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
@@ -1676,6 +1679,7 @@ struct VoiceNoteDetailView: View {
             loadAudioFile()
         }
         .onChange(of: note.id) { _, _ in
+            showsCurrentTranscriptDuringRetranscription = false
             refreshRetainedAttempts()
             if isEditing { isEditing = false }
             editedTitle = note.title
@@ -2072,10 +2076,64 @@ struct VoiceNoteDetailView: View {
     private var transcriptionBody: some View {
         // Canonical text stays independent of the retry status and partial preview.
         transcriptionStatusBody
-        if hasVisibleTranscript { savedTranscriptBody }
-        if isLocallyTranscribing, note.transcriptionState != .cancelled {
-            transcriptionPreviewBody
+        if isRetranscribing {
+            retranscriptionBody
+        } else {
+            if hasVisibleTranscript { savedTranscriptBody }
+            if isLocallyTranscribing, note.transcriptionState != .cancelled {
+                transcriptionPreviewBody
+            }
         }
+    }
+
+    /// A finished transcript is being transcribed again. It is only replaced
+    /// when the new run completes, so until then the new text is a preview.
+    private var isRetranscribing: Bool {
+        isLocallyTranscribing && note.transcriptionState != .cancelled && hasVisibleTranscript
+            && !isRecordingInProgress && !isLiveUpdatingTranscript && !isEditing
+    }
+
+    @ViewBuilder
+    private var retranscriptionBody: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.secondary)
+            Text(showsCurrentTranscriptDuringRetranscription
+                 ? "Current transcript. It is replaced only if the new transcription finishes."
+                 : "New transcript, still in progress. The current one is kept until this finishes.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button(showsCurrentTranscriptDuringRetranscription ? "Show New" : "Show Current") {
+                showsCurrentTranscriptDuringRetranscription.toggle()
+            }
+            .font(.footnote.weight(.medium))
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("RetranscriptionToggle")
+        }
+        .padding(.bottom, 4)
+        if showsCurrentTranscriptDuringRetranscription {
+            SavedTranscriptText(text: note.transcription)
+                .equatable()
+        } else if let preview = transcriptionService.transcriptionPreview(for: note.id), !preview.isEmpty {
+            Text(preview)
+                .font(.body)
+                .lineSpacing(6)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("TranscriptionPreview")
+        } else {
+            Text("The new transcript appears here as the audio is transcribed.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Re-transcription failures keep the previous transcript intact; their
+    /// diagnostics end with this phrase.
+    private var failureKeptPreviousTranscript: Bool {
+        note.transcriptionLastErrorMessage?.hasSuffix("kept previous transcript") == true
     }
 
     @ViewBuilder
@@ -2256,7 +2314,13 @@ struct VoiceNoteDetailView: View {
 
     @ViewBuilder
     private var savedTranscriptBody: some View {
-        if note.transcriptionOutcome == .failed {
+        if note.transcriptionOutcome == .failed, failureKeptPreviousTranscript {
+            Label("Re-transcription did not finish. The transcript below is unchanged.",
+                  systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("RetainedTranscriptWarning")
+        } else if note.transcriptionOutcome == .failed {
             Label("Transcription did not finish successfully. Retained text may be incomplete.",
                   systemImage: "exclamationmark.triangle")
                 .font(.footnote)

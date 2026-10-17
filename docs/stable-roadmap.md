@@ -17,7 +17,7 @@
 | ① 收敛基线 | 0.23.1 + 有限 Whisper 温度重试 + 逐段预览 | ✅ | 已提交至 `dev`（`6cc7c75`…`575b9b4`） |
 | ② 关键可靠性 | 保存、转码失败、收尾、取消、队列、断点恢复 | ✅ 实现<br>🧪 真机 | `7899dea`；Mac 实测通过，iPhone 真机本轮被明确豁免 |
 | ③ **定时停止与延长** | 按时长/结束时刻自动停止，提前提醒，随时延长 | ⬜ **下一个** | 代码无 `autoStop`/`countdown` 相关实现 |
-| ④ 千问唯一引擎 | 千问替换 Whisper，Whisper 整体移除 | 🧪 `qwen-engine` 分支 | 2026-10-14 实现完成、未合并；Mac 实测通过，iPhone 真机未跑（见 ④ 详情） |
+| ④ 千问唯一引擎 | 千问替换 Whisper，Whisper 整体移除 | ✅ 实现<br>🧪 真机 | 2026-10-17 已 fast-forward 合入 `dev`（`67d6c03`）；Mac 实测通过，iPhone 验收移到发布前专项（见 ④ 详情） |
 | ⑤ Mac 专项 | 多声道转换 + 无信号提示 | ⚠️ | 手动 mixdown 已实现（`AudioRecordingService.swift:610`）；**录音中**实时无信号提示仍缺，只有录完后的静音提示 |
 | ⑥ 预约提醒录音 | 本地通知提醒，点通知打开准备界面 | ⬜ | 无 `UNUserNotificationCenter` 调用 |
 | ⑦ 反馈驱动的增强 | 系统入口完善等 | 🧪 | Live Activity / Shortcut / DeepLink 文件均已存在，真机验收未做 |
@@ -73,7 +73,7 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 
 涉及：`Voicely/ContentView.swift`、`Voicely/AudioRecordingService.swift`、`Voicely/RecordingActivityAttributes.swift`
 
-### ④ 千问唯一引擎（`qwen-engine` 分支，2026-10-14）
+### ④ 千问唯一引擎（2026-10-14 实现，2026-10-17 合入 `dev`）
 
 2026-10-14 决定提前到 ③ 之前做，并且不做双引擎：千问 0.6B 是唯一引擎，Whisper/WhisperKit 整体移除。
 
@@ -86,7 +86,7 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 
 已验证（Mac）：310 个单元测试通过；`Qwen3RealModelTests` 用真实权重跑通 MLX 和 CoreML 两个后端；`RealRecordingReplayTests` 用真实模型跑通 5 分钟录音的边录边转与停止收尾（28 片，注入的失败全部原位恢复）；iOS 模拟器与真机架构 Release 均能编译。
 
-合并回 `dev` 之前还差：
+2026-10-17 已合入 `dev`，之后在 `dev` 上开发。按 Mac 优先的开发规则，下面的 iPhone 项不再阻塞合并，改为发布前专项验收：
 
 - **iPhone 真机**：前台和锁屏各录一条并转完。CoreML 路径从未在真机上跑过。
 - **模型下载路径**没有实跑（测试用的是本机已有的权重）。首次启动会自动下载约 0.95 GB，不区分蜂窝网络。

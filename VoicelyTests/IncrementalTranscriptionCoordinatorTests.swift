@@ -218,9 +218,8 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        #expect(cutFrame > 144_000)
-        // The silence ends on a VAD frame boundary, up to one frame past 9.8 s.
-        #expect(cutFrame <= 156_800 + 576)
+        // Cut in the middle of the pause (9.4 s), within one VAD frame.
+        #expect(abs(cutFrame - 150_400) <= 576)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -241,9 +240,9 @@ struct IncrementalTranscriptionCoordinatorTests {
             neuralVoiceActivityDetector: fakeVAD
         )
 
-        // Equal-confidence silences: the later one wins so less audio carries over.
-        #expect(cutFrame > 176_000)
-        #expect(cutFrame <= 192_000 + 576)
+        // Equal-confidence silences: the later one wins so less audio carries
+        // over, cut in its middle (11.5 s).
+        #expect(abs(cutFrame - 184_000) <= 576)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -266,6 +265,52 @@ struct IncrementalTranscriptionCoordinatorTests {
 
         // Batch is capped at targetSegmentSeconds (14 s = 224 000 frames).
         #expect(cutFrame == 224_000)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
+    @Test func voiceActivityCutFallsBackToDeepestShortDipInsteadOfBatchEnd() throws {
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 30.0, amplitude: 0.08)
+        ])
+        // Both dips are shorter than the 0.35 s minimum pause; the deeper one
+        // at 4.0–4.2 s into the window (11.0–11.2 s) wins.
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 7,
+            quietRanges: [(2.0..<2.2, 0.20), (4.0..<4.2, 0.02)]
+        ))
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: 480_000,
+            neuralVoiceActivityDetector: fakeVAD
+        )
+
+        #expect(abs(cutFrame - 177_600) <= 576)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
+    @Test func voiceActivityCutPrefersFullPauseOverDeeperShortDip() throws {
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 30.0, amplitude: 0.08)
+        ])
+        // A shallow 0.6 s pause at 2.0–2.6 s (9.0–9.6 s) beats a 0.15 s dip
+        // that is deeper.
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 7,
+            quietRanges: [(2.0..<2.6, 0.25), (4.0..<4.15, 0.0)]
+        ))
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: 480_000,
+            neuralVoiceActivityDetector: fakeVAD
+        )
+
+        #expect(abs(cutFrame - 148_800) <= 576)
 
         try? FileManager.default.removeItem(at: pcmURL)
     }
@@ -299,16 +344,25 @@ struct IncrementalTranscriptionCoordinatorTests {
         silentRanges: [Range<Double>],
         frameSeconds: Double = Double(SileroNeuralVoiceActivityDetector.chunkSize) / Double(SileroNeuralVoiceActivityDetector.sampleRate)
     ) -> [(startFrame: Int, endFrame: Int, speechProbability: Double)] {
+        makeNeuralVADFrames(seconds: seconds, quietRanges: silentRanges.map { ($0, 0.02) }, frameSeconds: frameSeconds)
+    }
+
+    /// Speech at 0.82 everywhere except `quietRanges`, which carry their own probability.
+    static func makeNeuralVADFrames(
+        seconds: Double,
+        quietRanges: [(range: Range<Double>, probability: Double)],
+        frameSeconds: Double = Double(SileroNeuralVoiceActivityDetector.chunkSize) / Double(SileroNeuralVoiceActivityDetector.sampleRate)
+    ) -> [(startFrame: Int, endFrame: Int, speechProbability: Double)] {
         var frames: [(startFrame: Int, endFrame: Int, speechProbability: Double)] = []
         var time = 0.0
         while time < seconds {
             let endTime = min(seconds, time + frameSeconds)
             let midpoint = (time + endTime) / 2
-            let isSilent = silentRanges.contains { $0.contains(midpoint) }
+            let quiet = quietRanges.first { $0.range.contains(midpoint) }
             frames.append((
                 startFrame: Int((time * 16_000).rounded()),
                 endFrame: Int((endTime * 16_000).rounded()),
-                speechProbability: isSilent ? 0.02 : 0.82
+                speechProbability: quiet?.probability ?? 0.82
             ))
             time = endTime
         }

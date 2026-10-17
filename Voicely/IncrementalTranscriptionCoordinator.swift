@@ -624,7 +624,8 @@ final class IncrementalTranscriptionCoordinator {
     ///
     /// The coordinator accumulates `targetSegmentSeconds` of audio, then this
     /// runs Silero VAD once over [start + minimumCutSeconds, batch end] and cuts
-    /// at the best silence found, or at the batch end when no silence exists.
+    /// in the middle of the best pause found, falling back to the deepest short
+    /// dip, and to the batch end only when no frame is below the threshold.
     /// Audio past the cut carries over into the next batch.
     ///
     /// Returns `startFrame` while the batch is still filling, which tells the
@@ -706,48 +707,69 @@ final class IncrementalTranscriptionCoordinator {
         return samples
     }
 
+    /// Picks the pause to cut at and cuts in its middle, so neither slice clips
+    /// a word that starts or ends at the pause's edge.
+    ///
+    /// Pauses at least `minimumSilenceFrames` long are preferred. When there is
+    /// none, the best shorter dip below the threshold is used instead: in
+    /// far-field, fast speech a whole window can hold only 0.1–0.3 s gaps, and
+    /// cutting at one of them beats cutting at the batch end, which can land
+    /// inside a word. Returns nil only when no frame is below the threshold.
     nonisolated private static func bestNeuralSilenceCutCandidate(
         in vadFrames: [NeuralVoiceActivityFrame],
         speechProbabilityThreshold: Double,
         minimumSilenceFrames: Int
     ) -> VoiceActivityCutCandidate? {
-        var silenceStartFrame: Int?
-        var silenceProbabilities: [Double] = []
-        var bestCandidate: VoiceActivityCutCandidate?
+        struct QuietRun {
+            var startFrame: Int
+            var endFrame: Int
+            var probabilitySum: Double
+            var frameCount: Int
+        }
 
-        func considerCandidate(endFrame: Int) {
-            guard let silenceStartFrame else { return }
-            let durationFrames = endFrame - silenceStartFrame
-            guard durationFrames >= minimumSilenceFrames else { return }
-            let averageSpeechProbability = silenceProbabilities.isEmpty
-                ? speechProbabilityThreshold
-                : silenceProbabilities.reduce(0, +) / Double(silenceProbabilities.count)
+        var runs: [QuietRun] = []
+        var currentRun: QuietRun?
+        for frame in vadFrames {
+            if frame.speechProbability <= speechProbabilityThreshold {
+                if currentRun == nil {
+                    currentRun = QuietRun(startFrame: frame.startFrame, endFrame: frame.endFrame,
+                                          probabilitySum: 0, frameCount: 0)
+                }
+                currentRun?.endFrame = frame.endFrame
+                currentRun?.probabilitySum += frame.speechProbability
+                currentRun?.frameCount += 1
+            } else if let run = currentRun {
+                runs.append(run)
+                currentRun = nil
+            }
+        }
+        if let currentRun { runs.append(currentRun) }
+
+        // Depth dominates, length breaks near-ties.
+        func confidence(of run: QuietRun) -> Double {
+            let averageSpeechProbability = run.probabilitySum / Double(max(run.frameCount, 1))
             let silenceConfidence = max(
                 0,
                 min(1, (speechProbabilityThreshold - averageSpeechProbability) / max(speechProbabilityThreshold, 0.000_001))
             )
+            let durationFrames = run.endFrame - run.startFrame
             let durationConfidence = min(1, Double(durationFrames) / Double(max(minimumSilenceFrames * 2, 1)))
-            let confidence = min(1, 0.75 * silenceConfidence + 0.25 * durationConfidence)
-            let candidate = VoiceActivityCutCandidate(localFrame: endFrame, confidence: confidence)
+            return min(1, 0.75 * silenceConfidence + 0.25 * durationConfidence)
+        }
+
+        let longPauses = runs.filter { $0.endFrame - $0.startFrame >= minimumSilenceFrames }
+        let pool = longPauses.isEmpty ? runs : longPauses
+        var bestCandidate: VoiceActivityCutCandidate?
+        for run in pool {
+            let candidate = VoiceActivityCutCandidate(
+                localFrame: (run.startFrame + run.endFrame) / 2,
+                confidence: confidence(of: run)
+            )
+            // Equal pauses: the later one wins so less audio carries over.
             if bestCandidate == nil || candidate.confidence >= bestCandidate!.confidence {
                 bestCandidate = candidate
             }
         }
-
-        for frame in vadFrames {
-            if frame.speechProbability <= speechProbabilityThreshold {
-                if silenceStartFrame == nil {
-                    silenceStartFrame = frame.startFrame
-                    silenceProbabilities.removeAll()
-                }
-                silenceProbabilities.append(frame.speechProbability)
-                considerCandidate(endFrame: frame.endFrame)
-            } else {
-                silenceStartFrame = nil
-                silenceProbabilities.removeAll()
-            }
-        }
-
         return bestCandidate
     }
 

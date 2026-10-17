@@ -7,12 +7,15 @@
 - `Voicely.xcodeproj/` is the Xcode project definition.
 - `build/` is build output and can be ignored.
 
+## Development Target: Mac First
+Develop and verify on the Mac (Catalyst) build by default. Build, run unit tests, and check changes in the running Mac app; do not run the iOS Simulator or ask for an iPhone to be connected during day-to-day work. iPhone compatibility and performance (CoreML path, background/lock-screen behavior, memory) get dedicated testing shortly before a release. Record iPhone-specific concerns in `docs/stable-roadmap.md` instead of treating them as blockers for the current change.
+
 ## Build, Test, and Development Commands
-- `open Voicely.xcodeproj` opens the project in Xcode for running on device/simulator.
-- `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' build` builds for iOS Simulator.
-- `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' build` builds for Mac.
-- `xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' test` runs all tests (unit + UI) on iOS Simulator.
+- `open Voicely.xcodeproj` opens the project in Xcode.
+- `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' build` builds for Mac (the default development target).
 - `xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -only-testing:VoicelyTests test` runs unit tests on Mac (UI tests are not supported on Mac Catalyst).
+- Pre-release iPhone checks only: `xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' build` builds for iOS Simulator.
+- Pre-release iPhone checks only: `xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' test` runs all tests (unit + UI) on iOS Simulator.
 - `xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' archive` archives for iOS (auto-appears in Xcode Organizer).
 - `xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=macOS,variant=Mac Catalyst' archive` archives for Mac Catalyst (auto-appears in Xcode Organizer).
 
@@ -31,7 +34,7 @@ If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared 
 ## Commit & Pull Request Guidelines
 - Commits use short, imperative sentences (e.g., “Add CloudKit sync status monitoring”).
 - PRs should include a concise description, key changes, and testing notes.
-- For UI changes, include simulator screenshots or a short screen recording.
+- For UI changes, include Mac app screenshots or a short screen recording.
 
 ## Configuration & Security Notes
 - CloudKit/iCloud features are used; avoid checking in secrets or local credentials.

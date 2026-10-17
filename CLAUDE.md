@@ -2,23 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Target: Mac First
+
+Develop and verify on the Mac (Catalyst) build by default. Build, run unit tests, and check changes in the running Mac app; do not run the iOS Simulator or ask for an iPhone to be connected during day-to-day work. iPhone compatibility and performance (CoreML path, background/lock-screen behavior, memory) get dedicated testing shortly before a release. Record iPhone-specific concerns in `docs/stable-roadmap.md` instead of treating them as blockers for the current change.
+
 ## Build & Test Commands
 
 ```bash
-# Build for iOS Simulator
-xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' build
-
-# Build for Mac (Catalyst)
+# Build for Mac (Catalyst) — the default development target
 xcodebuild -scheme Voicely -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' build
-
-# Run all tests on iOS Simulator (unit + UI)
-xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' test
 
 # Run unit tests on Mac (UI tests are not supported on Mac Catalyst)
 xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -only-testing:VoicelyTests test
 
-# Run specific test file
-xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:VoicelyTests/TranscriptionServiceTests test
+# Run specific test file on Mac
+xcodebuild -scheme Voicely -destination 'platform=macOS,variant=Mac Catalyst' -only-testing:VoicelyTests/TranscriptionServiceTests test
+
+# Pre-release iPhone checks only: build for iOS Simulator
+xcodebuild -scheme Voicely -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' build
+
+# Pre-release iPhone checks only: run all tests on iOS Simulator (unit + UI)
+xcodebuild -scheme Voicely -destination 'platform=iOS Simulator,name=iPhone 17' test
 
 # Archive for iOS (auto-appears in Xcode Organizer)
 xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' archive

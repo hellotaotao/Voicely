@@ -315,6 +315,49 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
+    /// Records how much audio the detector was given.
+    final class CapturingNeuralVAD: NeuralVoiceActivityDetecting {
+        let frames: [NeuralVoiceActivityFrame]
+        private(set) var receivedSampleCount = 0
+
+        init(frameProbabilities: [(startFrame: Int, endFrame: Int, speechProbability: Double)]) {
+            frames = frameProbabilities.map {
+                NeuralVoiceActivityFrame(startFrame: $0.startFrame, endFrame: $0.endFrame,
+                                         speechProbability: $0.speechProbability)
+            }
+        }
+
+        func speechProbabilities(in samples: [Float]) throws -> [NeuralVoiceActivityFrame] {
+            receivedSampleCount = samples.count
+            return frames
+        }
+    }
+
+    @Test func voiceActivityCutResamplesNon16kAudioAndCutsInSourceFrames() throws {
+        let sampleRate = 44_100.0
+        let pcmURL = try makeEnergyPatternCAF(segments: [(seconds: 30.0, amplitude: 0.08)], sampleRate: sampleRate)
+        // Pause at 2.0–2.8 s into the 7 s window, in 16 kHz VAD samples.
+        let vad = CapturingNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 7,
+            silentRanges: [2.0..<2.8]
+        ))
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: AVAudioFramePosition(30 * sampleRate),
+            neuralVoiceActivityDetector: vad
+        )
+
+        // The detector saw the 7 s window at 16 kHz, not at 44.1 kHz.
+        #expect(abs(vad.receivedSampleCount - 112_000) <= 1_100)
+        // Middle of the pause (9.4 s into the recording) in 44.1 kHz frames,
+        // within one VAD frame.
+        #expect(abs(cutFrame - 414_540) <= 1_588)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
     @Test func voiceActivityCutCapsBatchAtTargetEvenWhenMoreAudioIsAvailable() throws {
         let pcmURL = try makeEnergyPatternCAF(segments: [
             (seconds: 40.0, amplitude: 0.08)
@@ -370,15 +413,15 @@ struct IncrementalTranscriptionCoordinatorTests {
     }
 
     /// Creates a Float32 16 kHz mono CAF file with explicit energy segments.
-    func makeEnergyPatternCAF(segments: [(seconds: Double, amplitude: Float)]) throws -> URL {
+    func makeEnergyPatternCAF(segments: [(seconds: Double, amplitude: Float)], sampleRate: Double = 16000) throws -> URL {
         let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: 16000,
+            sampleRate: sampleRate,
             channels: 1,
             interleaved: false
         )!
         let totalFrames = segments.reduce(0) { partialResult, segment in
-            partialResult + Int((segment.seconds * 16000).rounded())
+            partialResult + Int((segment.seconds * sampleRate).rounded())
         }
         let buffer = AVAudioPCMBuffer(
             pcmFormat: format,
@@ -389,7 +432,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         let samples = buffer.floatChannelData![0]
         var cursor = 0
         for segment in segments {
-            let segmentFrames = Int((segment.seconds * 16000).rounded())
+            let segmentFrames = Int((segment.seconds * sampleRate).rounded())
             let end = min(totalFrames, cursor + segmentFrames)
             for frame in cursor..<end {
                 samples[frame] = segment.amplitude

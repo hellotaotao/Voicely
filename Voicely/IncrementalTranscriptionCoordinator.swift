@@ -667,24 +667,71 @@ final class IncrementalTranscriptionCoordinator {
             let samples = monoFloatSamples(from: buffer)
             guard !samples.isEmpty else { return batchEndFrame }
 
+            // Silero only reads 16 kHz audio; imported files keep their own rate.
+            let vadSampleRate = Double(SileroNeuralVoiceActivityDetector.sampleRate)
+            let vadSamples = sampleRate == vadSampleRate
+                ? samples
+                : try resampled(samples, from: sampleRate, to: vadSampleRate)
             let detector = try neuralVoiceActivityDetector ?? SileroNeuralVoiceActivityDetector()
-            let vadFrames = try detector.speechProbabilities(in: samples)
+            let vadFrames = try detector.speechProbabilities(in: vadSamples)
             let candidate = bestNeuralSilenceCutCandidate(
                 in: vadFrames,
                 speechProbabilityThreshold: configuration.speechProbabilityThreshold,
-                minimumSilenceFrames: max(1, Int(configuration.minimumSilenceSeconds * sampleRate))
+                minimumSilenceFrames: max(1, Int(configuration.minimumSilenceSeconds * vadSampleRate))
             )
 
             guard let candidate else {
                 return batchEndFrame
             }
 
-            let cutFrame = analysisStartFrame + AVAudioFramePosition(candidate.localFrame)
+            // The candidate counts 16 kHz samples; cut in the file's own frames.
+            let localFrame = (Double(candidate.localFrame) * sampleRate / vadSampleRate).rounded()
+            let cutFrame = analysisStartFrame + AVAudioFramePosition(localFrame)
             return min(max(cutFrame, analysisStartFrame), batchEndFrame)
         } catch {
             debugLog("⚠️ [IncrementalCoordinator] Neural VAD cut failed: \(error)")
             return targetFrame
         }
+    }
+
+    nonisolated private static func resampled(
+        _ samples: [Float],
+        from sourceRate: Double,
+        to targetRate: Double
+    ) throws -> [Float] {
+        guard let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sourceRate,
+                                               channels: 1, interleaved: false),
+              let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetRate,
+                                               channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: sourceFormat, to: targetFormat),
+              let input = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(samples.count)),
+              let output = AVAudioPCMBuffer(
+                pcmFormat: targetFormat,
+                frameCapacity: AVAudioFrameCount((Double(samples.count) * targetRate / sourceRate).rounded(.up)) + 1_024
+              ) else {
+            throw NeuralSpeechAnalyzerError.audioConversionUnavailable
+        }
+        input.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { source in
+            input.floatChannelData![0].update(from: source.baseAddress!, count: samples.count)
+        }
+
+        var didProvideInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            if didProvideInput {
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            didProvideInput = true
+            inputStatus.pointee = .haveData
+            return input
+        }
+        if let conversionError { throw conversionError }
+        guard status != .error, let channelData = output.floatChannelData else {
+            throw NeuralSpeechAnalyzerError.audioConversionUnavailable
+        }
+        return Array(UnsafeBufferPointer(start: channelData[0], count: Int(output.frameLength)))
     }
 
     nonisolated private static func monoFloatSamples(from buffer: AVAudioPCMBuffer) -> [Float] {

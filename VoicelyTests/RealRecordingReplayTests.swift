@@ -9,8 +9,7 @@ import Testing
 @testable import Voicely
 
 /// Opt-in, local-only input for `RealRecordingReplayTests`: copy an audio file to
-/// `<tmp>/voicely-replay/recording.m4a` (inside the test host's container) and,
-/// optionally, a model folder name to `<tmp>/voicely-replay/model.txt`.
+/// `<tmp>/voicely-replay/recording.m4a` (inside the test host's container).
 enum RealRecordingReplayInput {
     static let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("voicely-replay", isDirectory: true)

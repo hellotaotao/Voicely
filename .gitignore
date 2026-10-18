@@ -5,3 +5,4 @@ docs/agent-reviews/
 
 # Xcode user state
 xcuserdata/
+.build/

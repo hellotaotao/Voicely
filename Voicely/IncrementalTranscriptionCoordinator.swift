@@ -435,10 +435,9 @@ final class IncrementalTranscriptionCoordinator {
 
     /// A slice the engine never decoded (model still loading, cancelled, engine
     /// error) gets one attempt in place, so it never forces the whole recording to
-    /// be transcribed again. A slice the engine ran on and rejected is not retried: the
-    /// decoder has already used its temperature fallback and prompt-free pass on
-    /// it, and repeating that held "Finalizing" for minutes after the text was
-    /// complete.
+    /// be transcribed again. A slice the engine ran on and rejected is not retried:
+    /// decoding is deterministic, so it would be rejected again, and repeating it
+    /// held "Finalizing" for minutes after the text was complete.
     private func retryUndecodedSlices() async {
         for index in slices.indices where slices[index].awaitsRetry {
             guard !telemetryFinished else { return }

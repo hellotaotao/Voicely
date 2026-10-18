@@ -613,8 +613,8 @@ class TranscriptionService: ObservableObject {
 
         let task = Task { [weak self] in
             await self?.transcribeImpl(filePath) { fraction in
-                // Decoder windows and prompted passes can finish before output
-                // validation or a retry. Only an accepted outcome completes audio.
+                // The decoder can reach the end before its output is validated.
+                // Only an accepted outcome completes audio.
                 let pending = fraction.isFinite ? min(max(fraction, 0), 0.99) : 0
                 progressCallback(pending)
             }
@@ -1313,7 +1313,7 @@ private extension TranscriptionService {
     }
 
     func smoothProgress(to target: Float, progressCallback: @escaping (Float) -> Void) {
-        // A completed decoder pass may still need validation and prompt-free retry.
+        // A finished decoder pass may still be rejected, so it stops short of 100%.
         let clamped = target.isFinite ? min(0.99, max(0.0, target)) : 0
         if clamped <= transcriptionProgress {
             return

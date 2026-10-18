@@ -30,7 +30,7 @@ struct ContinuedProcessingProgressTests {
             call += 1
             transcriber.reportSegmentProgress(0.5)
             observed.append(service.progressByNoteID[note.id] ?? -1)
-            // A retry or temperature fallback restarts the decoder at zero; the
+            // A retry restarts the decoder at zero; the
             // reported progress must not move backwards.
             transcriber.reportSegmentProgress(0.2)
             observed.append(service.progressByNoteID[note.id] ?? -1)
@@ -112,7 +112,7 @@ struct ContinuedProcessingProgressTests {
         service.transcribeImpl = { _, progress in
             progress(1)
             #expect(values.allSatisfy { $0 < 1 })
-            // A prompt-free retry starts at zero after the first pass finished.
+            // A retry starts at zero after the first pass finished.
             progress(0.2)
             progress(1)
             #expect(values.allSatisfy { $0 < 1 })

@@ -9,9 +9,7 @@ import Testing
 @testable import Voicely
 
 /// Opt-in, local-only input for `SavedAudioReplayTests`: copy an audio file to
-/// `<tmp>/voicely-replay/saved.m4a` (inside the test host's container) and,
-/// optionally, a model folder name to `saved-model.txt` and a transcription
-/// prompt to `saved-prompt.txt`.
+/// `<tmp>/voicely-replay/saved.m4a` (inside the test host's container).
 enum SavedAudioReplayInput {
     static let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("voicely-replay", isDirectory: true)
@@ -33,10 +31,6 @@ struct SavedAudioReplayTests {
 
     @Test func reportHowLongProgressStandsStill() async throws {
         let directory = SavedAudioReplayInput.directory
-        func option(_ name: String) -> String? {
-            (try? String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
         let modelManager = ModelManager()
         let loadStarted = ProcessInfo.processInfo.systemUptime
         await modelManager.loadModel()

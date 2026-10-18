@@ -9,8 +9,8 @@ import Testing
 @testable import Voicely
 
 /// Release builds have no debug log, so the note's failure message is the only
-/// place a per-slice cause survives. A bare count could not tell a prompt-driven
-/// decoder loop apart from unreadable audio.
+/// place a per-slice cause survives. A bare count could not tell a repetition
+/// loop apart from unreadable audio.
 @Suite(.serialized)
 struct RetranscriptionGapTests {
     @Test @MainActor func failureMessageNamesEachCause() async throws {

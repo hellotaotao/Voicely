@@ -880,6 +880,16 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(detector.callCount >= 4)
     }
 
+    @Test func speechPresenceSeparatesSpeechUncertaintyAndSilence() throws {
+        let fileURL = try makeSilentCAF(seconds: 20)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        // Confirmed speech, far-field speech under the speech rule, and silence.
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.82)) == .speech)
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.35)) == .uncertain)
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.08)) == .silence)
+    }
+
     @Test func neuralSpeechAnalyzerRejectsConfidentSilence() throws {
         let detector = FakeNeuralVAD(frameProbabilities: Self.makeVADFrames(
             durationSeconds: 1.0,

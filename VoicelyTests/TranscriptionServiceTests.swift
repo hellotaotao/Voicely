@@ -106,6 +106,35 @@ struct TranscriptionServiceTests {
         #expect(service.transcriptionProgress == 0.0)
     }
 
+    @Test func uncertainAudioKeepsSentencesAndDropsFragments() {
+        // Fragments the decoder writes over near-silence.
+        for fragment in ["嗯。", "No.", "To uh"] {
+            guard case .noSpeech = TranscriptionService.gatedOutput(fragment, presence: .uncertain) else {
+                Issue.record("\(fragment) should count as no speech"); continue
+            }
+        }
+        // Far-field speech the VAD scored under the speech rule.
+        guard case .text = TranscriptionService.gatedOutput("下面公布分项比赛第一轮内容票投票结果。", presence: .uncertain),
+              case .text = TranscriptionService.gatedOutput("Hey, Bobo. Oh no!", presence: .uncertain) else {
+            Issue.record("whole sentences from uncertain audio should be kept"); return
+        }
+        // Confirmed speech keeps even a single word.
+        guard case .text("嗯。") = TranscriptionService.gatedOutput("嗯。", presence: .speech) else {
+            Issue.record("short output from confirmed speech should be kept"); return
+        }
+        guard case .noSpeech = TranscriptionService.gatedOutput(" 。 ", presence: .speech) else {
+            Issue.record("punctuation-only output is no speech"); return
+        }
+    }
+
+    @Test func wordCountTreatsEachCJKCharacterAsAWord() {
+        #expect(TranscriptionService.wordCount("嗯。") == 1)
+        #expect(TranscriptionService.wordCount("No.") == 1)
+        #expect(TranscriptionService.wordCount("Hey, Bobo. Oh no!") == 4)
+        #expect(TranscriptionService.wordCount("用 GPU 跑") == 3)
+        #expect(TranscriptionService.wordCount("こんにちは") == 5)
+    }
+
     @Test @MainActor func transcribeAudioKeepsNoSpeechMarkerLinesAlongsideSpeech() async {
         let service = makeService(deviceID: "device-a")
         service.transcribeImpl = { _, _ in

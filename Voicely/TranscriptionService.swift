@@ -1244,14 +1244,15 @@ private extension TranscriptionService {
         }
         updateProgressOnMain(0.01)
 
-        // The decoder is never allowed to answer with an empty transcript, so
-        // silence has to be turned away before it gets there.
+        // The decoder is never allowed to answer with an empty transcript and
+        // writes something even for silence, so confident silence is turned
+        // away here and output from uncertain audio is checked afterwards.
         let vadStart = ProcessInfo.processInfo.systemUptime
-        let containsProbableSpeech = await Task.detached(priority: .utility) {
-            NeuralSpeechAnalyzer.safelyContainsProbableSpeech(at: audioURL)
+        let presence = await Task.detached(priority: .utility) {
+            NeuralSpeechAnalyzer.safelySpeechPresence(at: audioURL)
         }.value
-        Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=vadFinished seconds=\(ProcessInfo.processInfo.systemUptime - vadStart) speech=\(containsProbableSpeech)")
-        guard containsProbableSpeech else {
+        Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=vadFinished seconds=\(ProcessInfo.processInfo.systemUptime - vadStart) presence=\(String(describing: presence), privacy: .public)")
+        guard presence != .silence else {
             updateProgressOnMain(1.0)
             return .noSpeech
         }
@@ -1297,13 +1298,7 @@ private extension TranscriptionService {
             return .engineError(Self.engineFailurePrefix + error.localizedDescription)
         }
 
-        let text = pieces.joined(separator: " ")
-        guard LocalTranscriptFinalizer.hasContent(text) else {
-            // Only whitespace or punctuation. This slice is noise, not a
-            // decoder failure, and must not fail the whole note.
-            return .noSpeech
-        }
-        return Self.validatedEngineOutput(text)
+        return Self.gatedOutput(pieces.joined(separator: " "), presence: presence)
     }
 
     func resetProgressSmoothing() {
@@ -1366,6 +1361,42 @@ extension TranscriptionService {
               let compressed = try? (data as NSData).compressed(using: .zlib),
               compressed.length > 0 else { return 0 }
         return Float(data.count) / Float(compressed.length)
+    }
+
+    /// Words (each CJK character counts as one) that output from uncertain audio
+    /// needs to count as speech. On near-silence the decoder writes fragments
+    /// such as "嗯。" or "No."; far-field speech that the VAD scores low came out
+    /// as whole sentences (13 words, 31 characters) in the calibration recordings.
+    nonisolated static let minimumUncertainWords = 3
+
+    /// Engine output after the speech gate. Text that is only whitespace or
+    /// punctuation is noise, not a decoder failure, and must not fail the note.
+    nonisolated static func gatedOutput(_ text: String, presence: SpeechPresence) -> RawTranscription {
+        guard LocalTranscriptFinalizer.hasContent(text) else { return .noSpeech }
+        if presence == .uncertain, wordCount(text) < minimumUncertainWords { return .noSpeech }
+        return validatedEngineOutput(text)
+    }
+
+    /// Runs of letters or digits count as one word; each CJK character counts as one.
+    nonisolated static func wordCount(_ text: String) -> Int {
+        var count = 0
+        var inWord = false
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            let isCJK = scalar.properties.isIdeographic
+                || (0x3040...0x30FF).contains(value)   // Hiragana, Katakana
+                || (0xAC00...0xD7AF).contains(value)   // Hangul syllables
+            if isCJK {
+                count += 1
+                inWord = false
+            } else if CharacterSet.alphanumerics.contains(scalar) {
+                if !inWord { count += 1 }
+                inWord = true
+            } else {
+                inWord = false
+            }
+        }
+        return count
     }
 
     nonisolated static func validatedEngineOutput(_ text: String) -> RawTranscription {

@@ -10,38 +10,57 @@ enum NeuralSpeechAnalyzerError: Error {
     case audioConversionUnavailable
 }
 
+/// How sure the VAD is that a slice holds speech.
+enum SpeechPresence: Equatable {
+    case speech
+    /// Some activity, but below the speech rule. The slice is transcribed, and
+    /// only output that is more than a fragment is kept.
+    case uncertain
+    /// Confident silence; the slice is not transcribed.
+    case silence
+}
+
 enum NeuralSpeechAnalyzer {
     /// EverLog-style conservative VAD gate: only skip audio when neural VAD is confidently silent.
     /// Confirmed speech passes immediately; uncertain activity must persist briefly.
     private static let speechThreshold = 0.55
     private static let silenceThreshold = 0.40
     private static let minimumSpeechSeconds = 0.25
+    /// Below this peak probability a slice is confident silence. Calibrated on
+    /// three meeting recordings: every slice with speech peaked at 0.43 or more
+    /// (far-field speech sits at 0.43–0.50, under the speech rule), while digital
+    /// silence and white noise peaked at 0.04–0.08 and the quietest real gap at 0.35.
+    static let uncertainSpeechThreshold = 0.30
     /// Source-side read size for the streaming scan. Peak memory stays constant
     /// for any file length instead of loading the whole recording at once.
     private static let streamingChunkSeconds = 10.0
 
-    static func safelyContainsProbableSpeech(at fileURL: URL) -> Bool {
+    /// A failed scan counts as speech: dropping audio is worse than decoding it.
+    static func safelySpeechPresence(at fileURL: URL) -> SpeechPresence {
         do {
-            return try containsProbableSpeech(at: fileURL)
+            return try speechPresence(at: fileURL, detector: SileroNeuralVoiceActivityDetector())
         } catch {
             debugLog("⚠️ [NeuralSpeechAnalyzer] Neural VAD preflight failed: \(error)")
-            return true
+            return .speech
         }
     }
 
-    static func containsProbableSpeech(at fileURL: URL) throws -> Bool {
-        try containsProbableSpeech(at: fileURL, detector: SileroNeuralVoiceActivityDetector())
-    }
-
-    /// Streams the file chunk by chunk — convert to 16 kHz mono, score with the
-    /// detector, stop at the first probable-speech frame — so a full scan only
-    /// happens when the recording truly contains no speech.
     static func containsProbableSpeech(
         at fileURL: URL,
         detector: NeuralVoiceActivityDetecting
     ) throws -> Bool {
+        try speechPresence(at: fileURL, detector: detector) == .speech
+    }
+
+    /// Streams the file chunk by chunk — convert to 16 kHz mono, score with the
+    /// detector, stop at the first probable-speech frame — so a full scan only
+    /// happens when the recording contains no confirmed speech.
+    static func speechPresence(
+        at fileURL: URL,
+        detector: NeuralVoiceActivityDetecting
+    ) throws -> SpeechPresence {
         let sourceFile = try AVAudioFile(forReading: fileURL)
-        guard sourceFile.length > 0 else { return false }
+        guard sourceFile.length > 0 else { return .silence }
 
         let sourceFormat = sourceFile.processingFormat
         guard let outputFormat = AVAudioFormat(
@@ -68,6 +87,7 @@ enum NeuralSpeechAnalyzer {
         // chunk, so zero-padding happens at most once — at the end of the file.
         var pendingSamples: [Float] = []
         var uncertainSpeechSeconds: TimeInterval = 0
+        var peakProbability = 0.0
 
         while sourceFile.framePosition < sourceFile.length {
             inputBuffer.frameLength = 0
@@ -102,15 +122,17 @@ enum NeuralSpeechAnalyzer {
                 let windowedSamples = Array(pendingSamples.prefix(usableCount))
                 pendingSamples.removeFirst(usableCount)
                 if try containsProbableSpeech(in: windowedSamples, detector: detector,
-                    uncertainSpeechSeconds: &uncertainSpeechSeconds) {
-                    return true
+                    uncertainSpeechSeconds: &uncertainSpeechSeconds, peakProbability: &peakProbability) {
+                    return .speech
                 }
             }
         }
 
-        guard !pendingSamples.isEmpty else { return false }
-        return try containsProbableSpeech(in: pendingSamples, detector: detector,
-            uncertainSpeechSeconds: &uncertainSpeechSeconds)
+        if !pendingSamples.isEmpty, try containsProbableSpeech(in: pendingSamples, detector: detector,
+            uncertainSpeechSeconds: &uncertainSpeechSeconds, peakProbability: &peakProbability) {
+            return .speech
+        }
+        return peakProbability >= uncertainSpeechThreshold ? .uncertain : .silence
     }
 
     static func containsProbableSpeech(
@@ -121,10 +143,11 @@ enum NeuralSpeechAnalyzer {
         minimumSpeechSeconds: TimeInterval = Self.minimumSpeechSeconds
     ) throws -> Bool {
         var uncertainSpeechSeconds: TimeInterval = 0
+        var peakProbability = 0.0
         return try containsProbableSpeech(in: samples, detector: detector,
             speechThreshold: speechThreshold, silenceThreshold: silenceThreshold,
             minimumSpeechSeconds: minimumSpeechSeconds,
-            uncertainSpeechSeconds: &uncertainSpeechSeconds)
+            uncertainSpeechSeconds: &uncertainSpeechSeconds, peakProbability: &peakProbability)
     }
 
     private static func containsProbableSpeech(
@@ -133,7 +156,8 @@ enum NeuralSpeechAnalyzer {
         speechThreshold: Double = Self.speechThreshold,
         silenceThreshold: Double = Self.silenceThreshold,
         minimumSpeechSeconds: TimeInterval = Self.minimumSpeechSeconds,
-        uncertainSpeechSeconds: inout TimeInterval
+        uncertainSpeechSeconds: inout TimeInterval,
+        peakProbability: inout Double
     ) throws -> Bool {
         guard !samples.isEmpty else { return false }
 
@@ -143,6 +167,7 @@ enum NeuralSpeechAnalyzer {
         let secondsPerSample = 1.0 / Double(SileroNeuralVoiceActivityDetector.sampleRate)
 
         for frame in vadFrames {
+            peakProbability = max(peakProbability, frame.speechProbability)
             if frame.speechProbability >= speechThreshold {
                 return true
             }

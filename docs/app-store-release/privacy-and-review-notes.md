@@ -76,14 +76,12 @@ For a first official release, use conservative App Privacy answers:
 Current generated Info.plist build-setting strings:
 
 - `NSMicrophoneUsageDescription`: "This app needs access to your microphone to record voice notes for transcription."
-- `NSSpeechRecognitionUsageDescription`: "This app uses speech recognition to transcribe your voice notes."
 
 Recommended App Review rationale:
 
 - Microphone access is required only when the user records audio.
 - Recorded audio is used to create a voice note and provide local transcription.
 - The app uses WhisperKit/Core ML for transcription rather than a cloud transcription service.
-- Speech recognition wording exists in build settings, but the inspected implementation does not use Apple's Speech framework. Consider updating the string before final archive if the product owner wants clearer wording, for example: "Voicely uses on-device transcription to turn your recordings into text."
 
 ## Export Compliance Notes
 

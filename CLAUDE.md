@@ -85,6 +85,6 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 
 ## Roadmap and To Do
 
-`docs/stable-roadmap.md` is the single source of truth for the release order (phases 一~七), all open tasks, and the verified list of what is already done. If any other document conflicts with it, the roadmap wins. Add new to-dos there, not to `AGENTS.md` or `todo.md`.
+`docs/stable-roadmap.md` is the single source of truth for the release order (phases 一~七), all open tasks, and the verified list of what is already done. If any other document conflicts with it, the roadmap wins. Add new to-dos there, not to `AGENTS.md`.
 
 Historical execution and verification records live in `docs/roadmap-log.md`.

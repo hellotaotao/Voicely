@@ -125,14 +125,6 @@ extension VoiceNote {
         return ModelManager.displayName(for: transcriptionModelIdentifier)
     }
 
-    var averageProcessingTimeRatioLabel: String? {
-        guard transcriptionTelemetrySampleCount > 0 else {
-            return nil
-        }
-
-        return "\(Int(transcriptionAverageProcessingTimeRatioPercent.rounded()))% avg"
-    }
-
     var averageTranscriptionSpeedLabel: String? {
         guard transcriptionTelemetrySampleCount > 0 else {
             return nil

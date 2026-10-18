@@ -189,14 +189,6 @@ class ModelManager: ObservableObject {
         return wasDownloaded ? .loading : .downloading
     }
 
-    /// Frees the model's memory; the files stay on disk.
-    func unloadModel() async {
-        guard activeLoad == nil else { return }
-        await store.unloadModel()
-        modelState = .unloaded
-        loadingProgressValue = 0
-    }
-
     func deleteModel() async {
         guard activeLoad == nil else {
             errorMessage = "The model is still loading. Please try deleting it again when loading finishes."

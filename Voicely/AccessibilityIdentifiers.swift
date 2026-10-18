@@ -9,7 +9,6 @@ enum AccessibilityIdentifiers {
     }
 
     enum Navigation {
-        static let libraryScreen = "LibraryScreen"
         static let settingsButton = "SettingsButton"
     }
 
@@ -51,7 +50,6 @@ enum AccessibilityIdentifiers {
         static let screen = "SettingsScreen"
         static let doneButton = "SettingsDoneButton"
         static let activeModelCard = "ActiveModelCard"
-        static let modelPicker = "ModelPicker"
         static let languageSection = "LanguageSettingsSection"
         static let aboutSection = "AboutSettingsSection"
         static let speechLanguagePicker = "SpeechLanguagePicker"

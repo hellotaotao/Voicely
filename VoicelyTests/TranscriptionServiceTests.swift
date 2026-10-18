@@ -443,7 +443,6 @@ struct TranscriptionServiceTests {
         #expect(didStart == true)
         #expect(note.transcription == "Telemetry result")
         #expect(note.transcriptionTelemetrySampleCount == 1)
-        #expect(note.averageProcessingTimeRatioLabel == "50% avg")
         #expect(note.averageTranscriptionSpeedLabel == "2.0× avg")
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }

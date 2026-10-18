@@ -115,7 +115,6 @@ class TranscriptionService: ObservableObject {
     /// resume sidecars are consistent across imports and re-transcriptions.
     let segmentProgressStore: SegmentProgressStore
 
-    private static let ownershipMigrationDefaultsKey = "VoicelyOwnershipMigrationV1"
 
     private var currentTranscriptionTask: Task<RawTranscription?, Never>?
     private var cancelRequested = false
@@ -198,16 +197,12 @@ class TranscriptionService: ObservableObject {
 
     func migrateLegacyOwnershipIfNeeded(notes: [VoiceNote]) {
         let now = nowProvider()
-        var migratedAny = false
 
         for note in notes {
-            if recoverInterruptedLiveRecordingIfNeeded(note, now: now) {
-                migratedAny = true
-            }
+            _ = recoverInterruptedLiveRecordingIfNeeded(note, now: now)
         }
 
         for note in notes where !note.hasOwnershipState {
-            migratedAny = true
             note.transcriptionOriginDeviceID = note.transcriptionOriginDeviceID ?? currentDeviceID
 
             if !note.transcription.isEmpty {
@@ -219,10 +214,6 @@ class TranscriptionService: ObservableObject {
             }
 
             note.clearTransientTranscriptionFlags()
-        }
-
-        if migratedAny {
-            UserDefaults.standard.set(true, forKey: Self.ownershipMigrationDefaultsKey)
         }
     }
 
@@ -558,12 +549,6 @@ class TranscriptionService: ObservableObject {
         }
 
         return note.transcriptionState == .claimed && leaseHasExpired(note, now: now)
-    }
-
-    func unloadSpeechModel() async {
-        await modelManager?.unloadModel()
-        currentEngine = .notAvailable
-        loadingProgress = 0.0
     }
 
     func isEngineAvailable() -> Bool {

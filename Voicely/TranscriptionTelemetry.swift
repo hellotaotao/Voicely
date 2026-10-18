@@ -42,14 +42,6 @@ struct TranscriptionTelemetryMetrics: Equatable {
         return max(0, Int(percentage.rounded()))
     }
 
-    var processingTimeRatioLabel: String {
-        guard let processingTimeRatioPercent else {
-            return "Measuring"
-        }
-
-        return "\(processingTimeRatioPercent)%"
-    }
-
     var speedMultiplier: Double? {
         guard elapsedSeconds.isFinite, elapsedSeconds > 0,
               processedAudioSeconds.isFinite, processedAudioSeconds > 0 else {

@@ -10,7 +10,38 @@ import Testing
 import SwiftData
 @testable import Voicely
 
+@Suite(.serialized)
 struct CloudStorageManagerTests {
+    @Test @MainActor func localToCloudMigrationRunsOnceThenSkipsTheScan() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let localURL = rootURL.appendingPathComponent("local", isDirectory: true)
+        let cloudURL = rootURL.appendingPathComponent("cloud", isDirectory: true)
+        try fileManager.createDirectory(at: localURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: cloudURL, withIntermediateDirectories: true)
+        let migrationKey = "VoicelyLocalToCloudMigrationV1"
+        UserDefaults.standard.removeObject(forKey: migrationKey)
+        defer {
+            UserDefaults.standard.removeObject(forKey: migrationKey)
+            try? fileManager.removeItem(at: rootURL)
+        }
+        let manager = CloudStorageManager(
+            testLocalContainerURL: localURL,
+            testCloudContainerURL: cloudURL,
+            testCloudEnabled: true
+        )
+
+        try Data([1]).write(to: localURL.appendingPathComponent("first.m4a"))
+        await manager.migrateLocalFilesToCloudIfNeeded()
+        #expect(fileManager.fileExists(atPath: cloudURL.appendingPathComponent("first.m4a").path))
+
+        // Once done, later launches skip the directory scan entirely.
+        try Data([2]).write(to: localURL.appendingPathComponent("second.m4a"))
+        await manager.migrateLocalFilesToCloudIfNeeded()
+        #expect(!fileManager.fileExists(atPath: cloudURL.appendingPathComponent("second.m4a").path))
+        #expect(fileManager.fileExists(atPath: localURL.appendingPathComponent("second.m4a").path))
+    }
+
     @Test @MainActor func deleteFileRemovesMatchingLocalAndCloudCopies() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(

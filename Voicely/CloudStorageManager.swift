@@ -322,16 +322,11 @@ class CloudStorageManager: ObservableObject {
         return sanitizedTitle.isEmpty ? "Imported Audio" : sanitizedTitle
     }
     
-    // Move existing local files to iCloud
-    func migrateLocalFilesToCloud() async {
-        await migrateLocalFilesToCloudIfNeeded(force: true)
-    }
-
-    // Run local-to-cloud migration only once unless forced.
-    func migrateLocalFilesToCloudIfNeeded(force: Bool = false) async {
+    // Move local audio files to iCloud, once per iCloud enablement.
+    func migrateLocalFilesToCloudIfNeeded() async {
         guard syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL else { return }
 
-        if !force, UserDefaults.standard.bool(forKey: Self.localToCloudMigrationDefaultsKey) {
+        if UserDefaults.standard.bool(forKey: Self.localToCloudMigrationDefaultsKey) {
             return
         }
 
@@ -352,13 +347,6 @@ class CloudStorageManager: ObservableObject {
         } catch {
             print("Failed to migrate files: \(error)")
         }
-    }
-    
-    // Check if a file exists in cloud storage
-    func fileExistsInCloud(filename: String) -> Bool {
-        guard syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL else { return false }
-        let fileURL = cloudURL.appendingPathComponent(filename)
-        return fileManager.fileExists(atPath: fileURL.path)
     }
     
     // Get the full URL for a file

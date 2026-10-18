@@ -25,7 +25,6 @@ enum VoicelyTheme {
     static let subtleBorder = Color.primary.opacity(0.05)
 
     static let cornerLarge: CGFloat = 20
-    static let cornerMedium: CGFloat = 14
     static let cornerSmall: CGFloat = 10
 }
 
@@ -181,30 +180,5 @@ struct SectionHeaderLabel: View {
             .tracking(0.9)
             .foregroundStyle(.secondary)
             .textCase(.uppercase)
-    }
-}
-
-// MARK: - Circle icon button
-
-struct CircleIconButton: View {
-    let systemImage: String
-    var size: CGFloat = 36
-    var iconSize: Font = .subheadline
-    var tint: Color = .primary
-    var background: Color? = nil
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(iconSize.weight(.medium))
-                .foregroundStyle(tint)
-                .frame(width: size, height: size)
-                .background(
-                    Circle().fill(background ?? Color.primary.opacity(0.06))
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
     }
 }

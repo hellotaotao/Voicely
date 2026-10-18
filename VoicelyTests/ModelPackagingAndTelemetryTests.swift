@@ -102,7 +102,6 @@ struct ModelPackagingAndTelemetryTests {
         )
 
         #expect(note.transcriptionTelemetrySampleCount == 2)
-        #expect(note.averageProcessingTimeRatioLabel == "38% avg")
         #expect(note.averageTranscriptionSpeedLabel == "3.0× avg")
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
         #expect(note.transcriptionThermalStateLabel == "Fair")
@@ -136,7 +135,6 @@ struct ModelPackagingAndTelemetryTests {
         )
 
         #expect(metrics.processingTimeRatioPercent == 25)
-        #expect(metrics.processingTimeRatioLabel == "25%")
         #expect(metrics.speedLabel == "4.0× realtime")
     }
 

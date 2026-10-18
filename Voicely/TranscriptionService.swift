@@ -1244,9 +1244,9 @@ private extension TranscriptionService {
         }
         updateProgressOnMain(0.01)
 
-        // The decoder is never allowed to answer with an empty transcript and
-        // writes something even for silence, so confident silence is turned
-        // away here and output from uncertain audio is checked afterwards.
+        // An empty transcript cannot be relied on to mark silence: CoreML always
+        // writes something and MLX often does. Confident silence is turned away
+        // here, and output from uncertain audio is checked afterwards.
         let vadStart = ProcessInfo.processInfo.systemUptime
         let presence = await Task.detached(priority: .utility) {
             NeuralSpeechAnalyzer.safelySpeechPresence(at: audioURL)
@@ -1377,19 +1377,23 @@ extension TranscriptionService {
         return validatedEngineOutput(text)
     }
 
-    /// Runs of letters or digits count as one word; each CJK character counts as one.
+    /// Runs of letters or digits count as one word; each CJK character (Han,
+    /// kana including half-width, Hangul in composed or decomposed form) counts
+    /// as one. Counts by grapheme, so combining marks never add a word, and
+    /// punctuation such as the katakana middle dot never counts.
     nonisolated static func wordCount(_ text: String) -> Int {
         var count = 0
         var inWord = false
-        for scalar in text.unicodeScalars {
-            let value = scalar.value
-            let isCJK = scalar.properties.isIdeographic
-                || (0x3040...0x30FF).contains(value)   // Hiragana, Katakana
-                || (0xAC00...0xD7AF).contains(value)   // Hangul syllables
-            if isCJK {
+        for character in text {
+            guard let scalar = character.unicodeScalars.first,
+                  !character.isPunctuation, !character.isWhitespace, !character.isSymbol else {
+                inWord = false
+                continue
+            }
+            if isCJKCharacter(scalar) {
                 count += 1
                 inWord = false
-            } else if CharacterSet.alphanumerics.contains(scalar) {
+            } else if character.isLetter || character.isNumber {
                 if !inWord { count += 1 }
                 inWord = true
             } else {
@@ -1397,6 +1401,21 @@ extension TranscriptionService {
             }
         }
         return count
+    }
+
+    private nonisolated static func isCJKCharacter(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isIdeographic { return true }
+        switch scalar.value {
+        case 0x3041...0x309F,   // Hiragana
+             0x30A0...0x30FF,   // Katakana
+             0xFF66...0xFF9D,   // Half-width katakana
+             0x1100...0x11FF,   // Hangul Jamo (decomposed syllables)
+             0x3130...0x318F,   // Hangul compatibility Jamo
+             0xAC00...0xD7A3:   // Hangul syllables
+            return true
+        default:
+            return false
+        }
     }
 
     nonisolated static func validatedEngineOutput(_ text: String) -> RawTranscription {

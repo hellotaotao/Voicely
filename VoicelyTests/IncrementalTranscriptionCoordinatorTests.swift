@@ -890,6 +890,52 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.08)) == .silence)
     }
 
+    /// Returns one frame per call, scored by the call index and sample count.
+    final class ScriptedNeuralVAD: NeuralVoiceActivityDetecting {
+        private(set) var callCount = 0
+        let probability: (_ call: Int, _ sampleCount: Int) -> Double
+
+        init(probability: @escaping (_ call: Int, _ sampleCount: Int) -> Double) {
+            self.probability = probability
+        }
+
+        func speechProbabilities(in samples: [Float]) throws -> [NeuralVoiceActivityFrame] {
+            defer { callCount += 1 }
+            return [NeuralVoiceActivityFrame(startFrame: 0, endFrame: samples.count,
+                                             speechProbability: probability(callCount, samples.count))]
+        }
+    }
+
+    @Test func speechPresenceBoundariesAndChunkPositions() throws {
+        let fileURL = try makeSilentCAF(seconds: 35)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        // The threshold itself is uncertain; just under it is silence.
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(
+            speechProbability: NeuralSpeechAnalyzer.uncertainSpeechThreshold)) == .uncertain)
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(
+            speechProbability: NeuralSpeechAnalyzer.uncertainSpeechThreshold - 0.001)) == .silence)
+
+        // An uncertain peak counts wherever it falls: the first chunk, or the
+        // short tail read after the last whole VAD window.
+        let early = ScriptedNeuralVAD { call, _ in call == 0 ? 0.35 : 0.05 }
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: early) == .uncertain)
+        #expect(early.callCount >= 4)
+        let tail = ScriptedNeuralVAD { _, count in count < SileroNeuralVoiceActivityDetector.chunkSize ? 0.35 : 0.05 }
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: tail) == .uncertain)
+
+        // Uncertain is not speech for the Boolean check.
+        #expect(try NeuralSpeechAnalyzer.containsProbableSpeech(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.35)) == false)
+    }
+
+    @Test func speechPresenceOfEmptyFileIsSilence() throws {
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_empty_\(UUID().uuidString).caf")
+        do { _ = try AVAudioFile(forWriting: fileURL, settings: format.settings) }
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.9)) == .silence)
+    }
+
     @Test func neuralSpeechAnalyzerRejectsConfidentSilence() throws {
         let detector = FakeNeuralVAD(frameProbabilities: Self.makeVADFrames(
             durationSeconds: 1.0,

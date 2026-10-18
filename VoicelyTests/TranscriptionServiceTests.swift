@@ -133,6 +133,21 @@ struct TranscriptionServiceTests {
         #expect(TranscriptionService.wordCount("Hey, Bobo. Oh no!") == 4)
         #expect(TranscriptionService.wordCount("用 GPU 跑") == 3)
         #expect(TranscriptionService.wordCount("こんにちは") == 5)
+        // Punctuation, half-width kana, and decomposed Hangul.
+        #expect(TranscriptionService.wordCount("はい・・") == 2)
+        #expect(TranscriptionService.wordCount("ｺﾝﾆﾁﾊ") == 5)
+        #expect(TranscriptionService.wordCount("안녕하세요") == 5)
+        #expect(TranscriptionService.wordCount("안녕하세요".decomposedStringWithCanonicalMapping) == 5)
+        #expect(TranscriptionService.wordCount("😀 ok") == 1)
+    }
+
+    @Test func uncertainAudioKeepsOutputOfExactlyThreeWords() {
+        guard case .text = TranscriptionService.gatedOutput("好的吧", presence: .uncertain) else {
+            Issue.record("three words is enough"); return
+        }
+        guard case .noSpeech = TranscriptionService.gatedOutput("好的。", presence: .uncertain) else {
+            Issue.record("two words is a fragment"); return
+        }
     }
 
     @Test @MainActor func transcribeAudioKeepsNoSpeechMarkerLinesAlongsideSpeech() async {

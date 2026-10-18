@@ -91,10 +91,9 @@ struct VoiceNoteAutoTitleTests {
         #expect(VoiceNoteAutoTitle.derive(from: "   \n  ") == nil)
     }
 
-    @Test func returnsNilForNonSpeechOnlyTranscript() {
-        // Non-speech never becomes a title: markers such as (music) or (laughter) and the old [BLANK_AUDIO] are skipped.
-        #expect(VoiceNoteAutoTitle.derive(from: "(music)") == nil)
-        #expect(VoiceNoteAutoTitle.derive(from: "[Laughter]") == nil)
-        #expect(VoiceNoteAutoTitle.derive(from: LocalTranscriptFinalizer.blankAudioTranscript) == nil)
+    @Test func titlesFromNonSpeechMarkersButNotFromPunctuation() {
+        // Non-speech markers are what the engine heard, so they title the note like any text.
+        #expect(VoiceNoteAutoTitle.derive(from: "(music)") == "(music)")
+        #expect(VoiceNoteAutoTitle.derive(from: "。…") == nil)
     }
 }

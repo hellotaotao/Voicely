@@ -106,7 +106,7 @@ struct TranscriptionServiceTests {
         #expect(service.transcriptionProgress == 0.0)
     }
 
-    @Test @MainActor func transcribeAudioRemovesNoSpeechMarkerLines() async {
+    @Test @MainActor func transcribeAudioKeepsNoSpeechMarkerLinesAlongsideSpeech() async {
         let service = makeService(deviceID: "device-a")
         service.transcribeImpl = { _, _ in
             "hello\n[BLANK_AUDIO]\n(humming)"
@@ -114,7 +114,7 @@ struct TranscriptionServiceTests {
 
         let result = await service.transcribeAudio(filePath: "file.m4a")
 
-        #expect(result?.text == "hello")
+        #expect(result?.text == "hello\n[BLANK_AUDIO]\n(humming)")
     }
 
     @Test @MainActor func transcribeAudioKeepsNonSpeechMarkersVerbatim() async {

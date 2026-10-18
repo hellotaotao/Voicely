@@ -297,7 +297,7 @@ final class SegmentedAudioTranscriber {
             }
             switch outcome {
             case .transcribed(let result):
-                if let text = IncrementalTranscriptionCoordinator.sanitizedSegmentText(result.text) {
+                if let text = IncrementalTranscriptionCoordinator.finalizedSegmentText(result.text) {
                     pieces.append(text)
                 }
                 producedAnyText = true

@@ -793,7 +793,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(coordinator.accumulatedTranscript == "first\nsecond")
     }
 
-    @Test @MainActor func noAudioPlaceholderDoesNotPolluteAccumulatedTranscript() async throws {
+    @Test @MainActor func nonSpeechMarkerIsKeptInAccumulatedTranscript() async throws {
         let pcmURL = try makeSilentCAF(seconds: 15)
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(
@@ -804,12 +804,13 @@ struct IncrementalTranscriptionCoordinatorTests {
 
         await coordinator.transcribeSegment(upToFrame: 240_000)
 
-        #expect(coordinator.accumulatedTranscript.isEmpty)
+        #expect(coordinator.accumulatedTranscript == "[no audio]")
     }
 
-    @Test func noSpeechPlaceholdersAreRemovedFromSegmentText() {
-        #expect(IncrementalTranscriptionCoordinator.sanitizedSegmentText(" [Silence]\n[BLANK_AUDIO]\n(humming) ") == nil)
-        #expect(IncrementalTranscriptionCoordinator.sanitizedSegmentText("hello\n[BLANK_AUDIO]\n(music)") == "hello")
+    @Test func segmentTextKeepsNonSpeechMarkersAndDropsPunctuationOnly() {
+        #expect(IncrementalTranscriptionCoordinator.finalizedSegmentText(" [Silence]\n[BLANK_AUDIO]\n(humming) ") == "[Silence]\n[BLANK_AUDIO]\n(humming)")
+        #expect(IncrementalTranscriptionCoordinator.finalizedSegmentText("hello\n[BLANK_AUDIO]\n(music)") == "hello\n[BLANK_AUDIO]\n(music)")
+        #expect(IncrementalTranscriptionCoordinator.finalizedSegmentText(" 。 ") == nil)
     }
 
     @Test func neuralSpeechAnalyzerStreamsFileAndStopsAtFirstSpeech() throws {

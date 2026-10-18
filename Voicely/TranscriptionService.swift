@@ -1313,9 +1313,9 @@ private extension TranscriptionService {
         }
 
         let text = pieces.joined(separator: " ")
-        guard TranscriptSanitizer.cleanedTranscript(text) != nil else {
-            // Nothing intelligible. This slice is noise, not a decoder failure,
-            // and must not fail the whole note.
+        guard LocalTranscriptFinalizer.hasContent(text) else {
+            // Only whitespace or punctuation. This slice is noise, not a
+            // decoder failure, and must not fail the whole note.
             return .noSpeech
         }
         return Self.validatedEngineOutput(text)

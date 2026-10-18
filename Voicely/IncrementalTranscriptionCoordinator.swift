@@ -391,7 +391,7 @@ final class IncrementalTranscriptionCoordinator {
         defer { decodingSlice = nil }
         if let override = transcribeOverride {
             if let text = await override(sliceURL.path) {
-                result = Self.sanitizedSegmentText(text).map(SliceResult.text) ?? .silent
+                result = Self.finalizedSegmentText(text).map(SliceResult.text) ?? .silent
             } else {
                 result = .failed(.transcription(nil))
             }
@@ -402,7 +402,7 @@ final class IncrementalTranscriptionCoordinator {
                 telemetrySession: session)
             switch outcome {
             case .transcribed(let transcription):
-                result = Self.sanitizedSegmentText(transcription.text).map(SliceResult.text) ?? .silent
+                result = Self.finalizedSegmentText(transcription.text).map(SliceResult.text) ?? .silent
             case .noSpeech:
                 result = .silent
             case .engineError(let diagnostic):
@@ -773,14 +773,9 @@ final class IncrementalTranscriptionCoordinator {
         return bestCandidate
     }
 
-    nonisolated static func sanitizedSegmentText(_ text: String?) -> String? {
-        // A segment with no real speech (the whole thing is non-speech) is dropped
-        // rather than accumulating a placeholder into the live transcript. Decided by
-        // meaning (sanitizer finds no speech), not by matching a placeholder string.
-        guard let finalized = LocalTranscriptFinalizer.finalizedText(text),
-              TranscriptSanitizer.cleanedTranscript(finalized) != nil else {
-            return nil
-        }
-        return finalized
+    /// A slice's text as it joins the transcript, or nil when it holds only
+    /// whitespace or punctuation.
+    nonisolated static func finalizedSegmentText(_ text: String?) -> String? {
+        LocalTranscriptFinalizer.finalizedText(text)
     }
 }

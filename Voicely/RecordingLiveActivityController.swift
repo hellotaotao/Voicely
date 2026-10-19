@@ -17,12 +17,16 @@ final class RecordingLiveActivityController {
 
     private init() {}
 
+    /// Carried into every state update so pause/resume keep showing the planned stop.
+    private var scheduledEndDate: Date?
+
     #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
     private var activity: Activity<RecordingActivityAttributes>?
     #endif
 
     func start(recordingID: UUID, title: String, elapsedDuration: TimeInterval = 0) {
         #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
+        scheduledEndDate = nil
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         let attributes = RecordingActivityAttributes(recordingID: recordingID, title: title)
@@ -48,7 +52,13 @@ final class RecordingLiveActivityController {
         update(recordingState: .recording, elapsedDuration: elapsedDuration)
     }
 
+    func updateScheduledEnd(_ endDate: Date?, isPaused: Bool, elapsedDuration: TimeInterval) {
+        scheduledEndDate = endDate
+        update(recordingState: isPaused ? .paused : .recording, elapsedDuration: elapsedDuration)
+    }
+
     func end(elapsedDuration: TimeInterval) {
+        scheduledEndDate = nil
         #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
         guard let activity else { return }
 
@@ -80,7 +90,7 @@ final class RecordingLiveActivityController {
             recordingState: recordingState,
             timerBaseDate: Date().addingTimeInterval(-elapsedDuration),
             elapsedDuration: elapsedDuration,
-            scheduledEndDate: nil
+            scheduledEndDate: scheduledEndDate
         )
 
         Task {

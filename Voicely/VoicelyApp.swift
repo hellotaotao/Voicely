@@ -192,6 +192,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return true
         }
 
+        RecordingStopNotifier.shared.install()
+
 #if DEBUG
         print("🔍 [DEBUG] App did finish launching")
 #endif

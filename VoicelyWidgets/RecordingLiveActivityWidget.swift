@@ -85,7 +85,7 @@ private struct RecordingLiveActivityLockScreenView: View {
                     .font(.headline)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
-                Text(context.attributes.title)
+                Text(lockScreenSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -109,6 +109,14 @@ private struct RecordingLiveActivityLockScreenView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+    }
+
+    private var lockScreenSubtitle: String {
+        guard let endDate = context.state.scheduledEndDate,
+              context.state.recordingState != .stopping else {
+            return context.attributes.title
+        }
+        return "Stops at \(endDate.formatted(date: .omitted, time: .shortened))"
     }
 
     private var lockScreenTitle: String {

@@ -158,6 +158,11 @@ final class RecordingSession: ObservableObject {
     @Published private(set) var isStartingRecording = false
     @Published private(set) var recordingStartedAt: Date?
 
+    /// The stop the user picked before starting; applied when the next recording begins.
+    @Published var pendingStopPlan: RecordingStopPlan?
+    /// The active recording's scheduled stop, or nil when it runs until stopped by hand.
+    @Published private(set) var stopSchedule: RecordingStopSchedule?
+
     // MARK: Dependencies
 
     private let audioService: RecordingAudioControlling
@@ -167,6 +172,10 @@ final class RecordingSession: ObservableObject {
     @Published private var preparingAudioNoteIDs: Set<UUID> = []
 
     private var coordinator: IncrementalTranscriptionCoordinator?
+    private var stopScheduleTask: Task<Void, Never>?
+    private let stopNotifier: RecordingStopNotifying
+    /// Injectable so tests can move time without waiting.
+    var now: () -> Date = Date.init
 
     /// Called when a note is created (on start, or — defensively — on stop if no
     /// in-progress note exists). The owner inserts it into the model context and
@@ -187,9 +196,15 @@ final class RecordingSession: ObservableObject {
 
     // MARK: Init
 
-    init(audioService: RecordingAudioControlling, transcriptionService: TranscriptionService) {
+    init(
+        audioService: RecordingAudioControlling,
+        transcriptionService: TranscriptionService,
+        stopNotifier: RecordingStopNotifying? = nil
+    ) {
         self.audioService = audioService
         self.transcriptionService = transcriptionService
+        self.stopNotifier = stopNotifier
+            ?? (AppRuntime.isRunningTests ? SilentRecordingStopNotifier() : RecordingStopNotifier.shared)
         self.coordinatorFactory = { url in
             IncrementalTranscriptionCoordinator(
                 transcriptionService: transcriptionService,
@@ -311,6 +326,105 @@ final class RecordingSession: ObservableObject {
         coordinator = coord
         registerLiveActivityControls()
         coord.start(intervalSeconds: incrementalIntervalSeconds)
+
+        if let plan = pendingStopPlan {
+            pendingStopPlan = nil
+            applyStopSchedule(RecordingStopSchedule(endDate: plan.endDate(startingAt: now())))
+        }
+    }
+
+    // MARK: Scheduled stop
+
+    /// Chooses the stop for the next recording; nil clears it.
+    func setPendingStopPlan(_ plan: RecordingStopPlan?) {
+        pendingStopPlan = plan
+        if plan != nil { stopNotifier.requestAuthorizationIfNeeded() }
+    }
+
+    /// Adds or replaces the stop of the active recording.
+    func scheduleStop(_ plan: RecordingStopPlan) {
+        guard audioService.isRecording, currentRecordingNote != nil else { return }
+        stopNotifier.requestAuthorizationIfNeeded()
+        var schedule = stopSchedule ?? RecordingStopSchedule(endDate: now())
+        schedule.reschedule(to: plan.endDate(startingAt: now()), now: now())
+        applyStopSchedule(schedule)
+    }
+
+    func extendScheduledStop(by seconds: TimeInterval) {
+        guard var schedule = stopSchedule else { return }
+        schedule.extend(by: seconds, now: now())
+        applyStopSchedule(schedule)
+    }
+
+    func cancelScheduledStop() {
+        guard stopSchedule != nil else { return }
+        clearStopSchedule()
+        updateLiveActivitySchedule()
+    }
+
+    /// Stops the recording once its end has passed. Driven by a one-second
+    /// ticker that compares against the wall clock, so a late tick (app in the
+    /// background, Mac woken from sleep) still stops as soon as it runs.
+    func evaluateStopSchedule() {
+        guard let schedule = stopSchedule, audioService.isRecording else { return }
+        guard schedule.shouldStop(at: now()) else { return }
+        debugLog("⏰ [RecordingSession] Scheduled stop reached at \(schedule.endDate)")
+        let title = currentRecordingNote?.title ?? "Recording"
+        finalizeRecording()
+        stopNotifier.announceScheduledStop(endDate: schedule.endDate, noteTitle: title)
+    }
+
+    private func applyStopSchedule(_ schedule: RecordingStopSchedule) {
+        stopSchedule = schedule
+        stopNotifier.setActionHandler { [weak self] action in
+            self?.handleStopReminderAction(action)
+        }
+        stopNotifier.cancelWarning()
+        if let warningDate = schedule.warningDate(at: now()) {
+            stopNotifier.scheduleWarning(
+                at: warningDate,
+                endDate: schedule.endDate,
+                noteTitle: currentRecordingNote?.title ?? "Your recording"
+            )
+        }
+        updateLiveActivitySchedule()
+        startStopScheduleTicker()
+    }
+
+    private func handleStopReminderAction(_ action: RecordingStopReminderAction) {
+        guard audioService.isRecording, stopSchedule != nil else { return }
+        switch action {
+        case .extend(let seconds):
+            extendScheduledStop(by: seconds)
+        case .stopNow:
+            finalizeRecording()
+        }
+    }
+
+    private func startStopScheduleTicker() {
+        guard stopScheduleTask == nil else { return }
+        stopScheduleTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.evaluateStopSchedule()
+            }
+        }
+    }
+
+    private func clearStopSchedule() {
+        stopScheduleTask?.cancel()
+        stopScheduleTask = nil
+        stopNotifier.cancelWarning()
+        stopSchedule = nil
+    }
+
+    private func updateLiveActivitySchedule() {
+        RecordingLiveActivityController.shared.updateScheduledEnd(
+            stopSchedule?.endDate,
+            isPaused: audioService.isPaused,
+            elapsedDuration: audioService.recordingDuration
+        )
     }
 
     // MARK: Pause / Resume
@@ -389,6 +503,7 @@ final class RecordingSession: ObservableObject {
         let capturedCoordinator = coordinator
         let recordingNote = currentRecordingNote
         coordinator = nil
+        clearStopSchedule()
         registerLiveActivityControls()
         currentRecordingNote = nil
         isStartingRecording = false

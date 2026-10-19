@@ -581,7 +581,8 @@ struct ContentView: View {
     }
 
     private var sidebarRecordingOverlayInset: CGFloat {
-        112
+        // The scheduled-stop row adds a line above the recording buttons.
+        recordingSession.stopSchedule == nil ? 112 : 150
     }
 
     private func syncInitialSelection() {
@@ -1107,6 +1108,8 @@ struct RecordingControls: View {
     let recordingInterruptionID: UUID
     let onManageModels: () -> Void
 
+    @State private var timerSheetRequest: RecordingTimerSheetRequest?
+
     private var controlPhase: RecordingControlPhase {
         session.controlPhase
     }
@@ -1180,6 +1183,9 @@ struct RecordingControls: View {
         }
         .onChange(of: audioService.hasPermission) { _, _ in
             audioService.prewarmRecordingSessionIfPossible()
+        }
+        .sheet(item: $timerSheetRequest) { request in
+            RecordingTimerSheet(session: session, request: request)
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingControls)
     }
@@ -1265,7 +1271,14 @@ struct RecordingControls: View {
                                 ?? "Speech Model \(selectedModelDisplayName)")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
 
+            timerMenu(isRecording: false)
             recordButton
+        }
+    }
+
+    private func timerMenu(isRecording: Bool) -> some View {
+        RecordingTimerMenu(session: session, isRecording: isRecording) { request in
+            timerSheetRequest = request
         }
     }
 
@@ -1305,6 +1318,15 @@ struct RecordingControls: View {
     }
 
     private var recordingLayout: some View {
+        VStack(spacing: 8) {
+            if let schedule = session.stopSchedule {
+                RecordingStopStatusRow(session: session, schedule: schedule)
+            }
+            recordingButtonsRow
+        }
+    }
+
+    private var recordingButtonsRow: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
                 Circle()
@@ -1347,6 +1369,7 @@ struct RecordingControls: View {
             .accessibilityLabel(audioService.isPaused ? "Resume" : "Pause")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.pauseRecordingButton)
 
+            timerMenu(isRecording: true)
             stopButton
         }
     }

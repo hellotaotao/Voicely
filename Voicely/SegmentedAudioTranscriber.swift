@@ -185,6 +185,7 @@ final class SegmentedAudioTranscriber {
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
+            persistTelemetry(on: note)
             note.completeTranscription()
             note.transcriptionOutcome = .transcribed
             note.clearTransientTranscriptionFlags()
@@ -344,6 +345,11 @@ final class SegmentedAudioTranscriber {
         note.transcription = accumulatedText
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
+        if producedAnyText {
+            persistTelemetry(on: note)
+        } else {
+            note.clearTranscriptionTelemetrySummary()
+        }
         note.completeTranscription()
         if !failedRanges.isEmpty {
             note.transcriptionOutcome = .failed
@@ -376,6 +382,13 @@ final class SegmentedAudioTranscriber {
               !transcriptionService.isUserPaused(note) else { return }
         note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
         try? note.modelContext?.save()
+    }
+
+    /// The note's speed and compute badges describe this run, replacing any
+    /// earlier run's (a re-transcription may run on another device or backend).
+    private func persistTelemetry(on note: VoiceNote) {
+        guard let snapshot = transcriptionService.telemetryState.snapshot(for: note.id) else { return }
+        note.replaceCumulativeTranscriptionTelemetry(snapshot)
     }
 
     // MARK: - Audio info & formatting

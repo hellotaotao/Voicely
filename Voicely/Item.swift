@@ -237,7 +237,8 @@ extension VoiceNote {
         pendingTranscription = false
     }
 
-    /// Live snapshots describe the entire run, not independent samples to average.
+    /// A snapshot describes its entire run, and the note shows the latest run:
+    /// runs on different devices or backends are not samples to average.
     func replaceCumulativeTranscriptionTelemetry(_ snapshot: TranscriptionTelemetrySnapshot) {
         guard snapshot.metrics.speedMultiplier != nil else { return }
         clearTranscriptionTelemetrySummary()

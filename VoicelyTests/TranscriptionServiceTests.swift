@@ -491,6 +491,32 @@ struct TranscriptionServiceTests {
         #expect(note.transcriptionComputeBadgeLabel == "NPU")
     }
 
+    @Test @MainActor func retranscriptionReplacesEarlierRunsTelemetrySummary() async {
+        var now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "phone", now: now)
+        service.nowProvider = { now }
+        service.audioDurationProvider = { _ in 10 }
+        service.transcribeImpl = { _, _ in
+            now = now.addingTimeInterval(5)
+            return "Fresh result"
+        }
+
+        let note = VoiceNote(title: "Telemetry", audioFilePath: "file.m4a", transcription: "Old result")
+        note.recordTranscriptionTelemetry(TranscriptionTelemetrySnapshot(
+            isActive: false, modelName: "m", computeRoute: TranscriptionComputeRoute(backend: .mlx),
+            metrics: TranscriptionTelemetryMetrics(elapsedSeconds: 100, audioDurationSeconds: 10),
+            thermalState: .nominal))
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: now)
+
+        _ = await service.requestTranscription(for: note)
+
+        #expect(note.transcription == "Fresh result")
+        #expect(note.transcriptionTelemetrySampleCount == 1)
+        #expect(note.averageTranscriptionSpeedLabel == "2.0× avg")
+        #expect(note.transcriptionComputeBadgeLabel == "NPU")
+    }
+
     @Test @MainActor func blankEngineOutputMarksFailedWithoutRetryAndClearsMetadata() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "phone", now: now)

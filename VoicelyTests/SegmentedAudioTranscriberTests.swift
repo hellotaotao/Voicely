@@ -73,6 +73,36 @@ struct SegmentedAudioTranscriberTests {
         #expect(note.transcriptionTelemetrySampleCount == 0)
     }
 
+    /// A re-transcription on this Mac must replace badges left by an earlier
+    /// run elsewhere (e.g. an iPhone's slow CoreML pass synced over iCloud).
+    @Test(arguments: [(10.0, "2.0× avg"), (40.0, "2.7× avg")])
+    @MainActor func retranscriptionReplacesEarlierRunsTelemetry(seconds: Double, expectedSpeed: String) async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: seconds)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let service = TranscriptionService()
+        service.setModelManager(ModelManager(backend: .mlx))
+        var now = Date(timeIntervalSince1970: 10_000)
+        service.nowProvider = { now }
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(
+            store: SegmentedAudioTestSupport.makeStore(), service: service)
+        transcriber.transcribeSegmentOutcome = { _ in
+            now = now.addingTimeInterval(5)
+            return .transcribed(.init(text: "new", duration: 5, modelIdentifier: "m"))
+        }
+        let note = VoiceNote(title: "Synced", audioFilePath: "", transcription: "old text")
+        note.recordTranscriptionTelemetry(TranscriptionTelemetrySnapshot(
+            isActive: false, modelName: "m", computeRoute: TranscriptionComputeRoute(backend: .coreML),
+            metrics: TranscriptionTelemetryMetrics(elapsedSeconds: 10, audioDurationSeconds: 7),
+            thermalState: .nominal))
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(note.transcriptionOutcome == .transcribed)
+        #expect(note.transcriptionTelemetrySampleCount == 1)
+        #expect(note.averageTranscriptionSpeedLabel == expectedSpeed)
+        #expect(note.transcriptionComputeBadgeLabel == "GPU")
+    }
+
     // MARK: Task 3 — short single pass
 
     @Test @MainActor func shortFileSinglePassWritesTextAndNoSidecar() async throws {

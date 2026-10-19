@@ -1086,7 +1086,7 @@ private extension TranscriptionService {
             note.transcription = result.text
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
-            if let snapshot = telemetryState.snapshot(for: note.id) { note.recordTranscriptionTelemetry(snapshot) }
+            if let snapshot = telemetryState.snapshot(for: note.id) { note.replaceCumulativeTranscriptionTelemetry(snapshot) }
             note.completeTranscription()
             note.transcriptionOutcome = .transcribed
             note.clearTransientTranscriptionFlags()

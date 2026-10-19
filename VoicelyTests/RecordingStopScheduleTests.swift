@@ -257,6 +257,64 @@ struct RecordingSessionStopScheduleTests {
         #expect(fixture.audio.stopCount == 1)
     }
 
+    @Test func pendingStopTimeIsFixedWhenPickedNotWhenRecordingStarts() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.pcmURL) }
+        let picked = fixture.clock.now
+        fixture.session.setPendingStopPlan(.endTime(hour: 23, minute: 59))
+        guard case .endDate(let end) = fixture.session.pendingStopPlan else {
+            Issue.record("Expected the picked time to be stored as a date")
+            return
+        }
+        #expect(end == RecordingStopPlan.nextOccurrence(hour: 23, minute: 59, after: picked))
+
+        fixture.clock.now = end.addingTimeInterval(-10 * 60)
+        try await start(fixture)
+        #expect(fixture.session.stopSchedule?.endDate == end)
+    }
+
+    @Test func pendingStopTimeThatPassedBeforeStartingIsDropped() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.pcmURL) }
+        let end = fixture.clock.now.addingTimeInterval(30 * 60)
+        fixture.session.setPendingStopPlan(.endDate(end))
+        #expect(fixture.session.pendingStopPlan(at: fixture.clock.now) != nil)
+
+        // Starting half an hour late must not roll the stop over to tomorrow.
+        fixture.clock.now = end.addingTimeInterval(30 * 60)
+        #expect(fixture.session.pendingStopPlan(at: fixture.clock.now) == nil)
+        try await start(fixture)
+        #expect(fixture.session.stopSchedule == nil)
+        #expect(fixture.session.pendingStopPlan == nil)
+        #expect(fixture.notifier.warnings.isEmpty)
+    }
+
+    @Test func pendingStopTimeClearsItselfOnceItCanNoLongerBeUsed() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.pcmURL) }
+        // Usable for about one more real second.
+        fixture.session.setPendingStopPlan(.endDate(fixture.clock.now.addingTimeInterval(61)))
+        #expect(fixture.session.pendingStopPlan != nil)
+
+        let deadline = ContinuousClock().now.advanced(by: .seconds(5))
+        while fixture.session.pendingStopPlan != nil, ContinuousClock().now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(fixture.session.pendingStopPlan == nil)
+    }
+
+    @Test func quickExtendAddsUpAcrossTaps() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.pcmURL) }
+        try await start(fixture)
+        fixture.session.scheduleStop(.duration(10 * 60))
+        let originalEnd = try #require(fixture.session.stopSchedule?.endDate)
+
+        fixture.clock.now = originalEnd.addingTimeInterval(-2 * 60)
+        for _ in 0..<3 { fixture.session.extendScheduledStop(by: RecordingStopSchedule.quickExtension) }
+        #expect(fixture.session.stopSchedule?.endDate == originalEnd.addingTimeInterval(15 * 60))
+    }
+
     @Test func schedulingNeedsAnActiveRecording() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.pcmURL) }

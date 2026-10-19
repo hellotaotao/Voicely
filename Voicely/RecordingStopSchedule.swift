@@ -9,8 +9,11 @@ import Foundation
 /// time, or at a wall-clock time.
 enum RecordingStopPlan: Equatable {
     case duration(TimeInterval)
-    /// Only the hour and minute are used; the next occurrence after the start wins.
+    /// A clock time as picked; resolves to its next occurrence.
     case endTime(hour: Int, minute: Int)
+    /// A clock time already resolved to a date, so a recording that starts
+    /// after it has passed does not roll it over to tomorrow.
+    case endDate(Date)
 
     static let presetDurations: [TimeInterval] = [15, 30, 45, 60, 90, 120].map { $0 * 60 }
 
@@ -21,7 +24,21 @@ enum RecordingStopPlan: Equatable {
             return start.addingTimeInterval(max(seconds, RecordingStopSchedule.minimumLength))
         case .endTime(let hour, let minute):
             return Self.nextOccurrence(hour: hour, minute: minute, after: start, calendar: calendar)
+        case .endDate(let date):
+            return date
         }
+    }
+
+    /// Fixes a clock time to a date at the moment it is picked.
+    func resolved(at now: Date, calendar: Calendar = .current) -> RecordingStopPlan {
+        guard case .endTime = self else { return self }
+        return .endDate(endDate(startingAt: now, calendar: calendar))
+    }
+
+    /// False for an end date that has passed, or is too close to record toward.
+    func isUsable(at now: Date) -> Bool {
+        guard case .endDate(let date) = self else { return true }
+        return date >= now.addingTimeInterval(RecordingStopSchedule.minimumLength)
     }
 
     /// The first moment at `hour:minute` that lies at least a minute after `date`,
@@ -44,6 +61,8 @@ struct RecordingStopSchedule: Equatable {
     static let minimumLength: TimeInterval = 60
     static let warningLeadTime: TimeInterval = 3 * 60
     static let extensionChoices: [TimeInterval] = [5, 10, 15, 30].map { $0 * 60 }
+    /// The one-tap extend in the status row; taps add up, so it stays small.
+    static let quickExtension: TimeInterval = 5 * 60
 
     private(set) var endDate: Date
 

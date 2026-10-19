@@ -33,13 +33,13 @@ struct RecordingTimerMenu: View {
                 idleItems
             }
         } label: {
-            label
+            label(at: Date())
+                .accessibilityLabel(accessibilityLabel(at: Date()))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingTimerButton)
     }
 
@@ -64,7 +64,7 @@ struct RecordingTimerMenu: View {
         Button("Stop at a Time…") {
             onCustom(RecordingTimerSheetRequest(mode: .endTime, isActiveRecording: false, initialEndDate: nil))
         }
-        if session.pendingStopPlan != nil {
+        if session.pendingStopPlan(at: Date()) != nil {
             Button("No Timer", role: .destructive) {
                 session.setPendingStopPlan(nil)
             }
@@ -105,25 +105,27 @@ struct RecordingTimerMenu: View {
         }
     }
 
-    private var hasTimer: Bool {
-        isRecording ? session.stopSchedule != nil : session.pendingStopPlan != nil
+    private func hasTimer(at date: Date) -> Bool {
+        isRecording ? session.stopSchedule != nil : session.pendingStopPlan(at: date) != nil
     }
 
-    private var pendingPlanText: String? {
-        switch session.pendingStopPlan {
+    private func pendingPlanText(at date: Date) -> String? {
+        switch session.pendingStopPlan(at: date) {
         case .duration(let seconds):
             return RecordingStopFormatting.length(seconds)
         case .endTime(let hour, let minute):
-            let date = RecordingStopPlan.nextOccurrence(hour: hour, minute: minute, after: Date())
-            return RecordingStopFormatting.clockTime(date)
+            let end = RecordingStopPlan.nextOccurrence(hour: hour, minute: minute, after: date)
+            return RecordingStopFormatting.clockTime(end)
+        case .endDate(let end):
+            return RecordingStopFormatting.clockTime(end)
         case nil:
             return nil
         }
     }
 
     @ViewBuilder
-    private var label: some View {
-        if !isRecording, let text = pendingPlanText {
+    private func label(at date: Date) -> some View {
+        if !isRecording, let text = pendingPlanText(at: date) {
             HStack(spacing: 4) {
                 Image(systemName: "timer")
                 Text(text)
@@ -137,66 +139,74 @@ struct RecordingTimerMenu: View {
         } else {
             Image(systemName: "timer")
                 .font(.body.weight(.semibold))
-                .foregroundStyle(hasTimer ? VoicelyTheme.accent : Color.primary)
+                .foregroundStyle(hasTimer(at: date) ? VoicelyTheme.accent : Color.primary)
                 .frame(width: 40, height: 40)
                 .background(Color.primary.opacity(0.06), in: Circle())
         }
     }
 
-    private var accessibilityLabel: String {
+    private func accessibilityLabel(at date: Date) -> String {
         if isRecording, let schedule = session.stopSchedule {
             return "Timer, stops at \(RecordingStopFormatting.clockTime(schedule.endDate))"
         }
-        if let text = pendingPlanText {
+        if !isRecording, let text = pendingPlanText(at: date) {
             return "Timer, \(text)"
         }
         return "Timer"
     }
 }
 
-/// Shows when the active recording will stop, with a quick extend near the end.
+/// Shows when the active recording will stop, with a +5 min button that can be
+/// tapped repeatedly; the row turns orange for the final minutes.
 struct RecordingStopStatusRow: View {
     @ObservedObject var session: RecordingSession
     let schedule: RecordingStopSchedule
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let isWarning = schedule.isInWarningWindow(at: context.date)
-            let tint: Color = isWarning ? .orange : .secondary
-            HStack(spacing: 8) {
-                Image(systemName: "timer")
-                    .foregroundStyle(tint)
-                Text(isWarning ? "Stopping soon" : "Stops at \(RecordingStopFormatting.clockTime(schedule.endDate))")
-                    .foregroundStyle(isWarning ? Color.orange : Color.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text(RecordingStopFormatting.countdown(schedule.remaining(at: context.date)))
-                    .monospacedDigit()
-                    .foregroundStyle(tint)
-                if isWarning {
-                    Button {
-                        session.extendScheduledStop(by: 10 * 60)
-                    } label: {
-                        Text("+10 min")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Capsule().fill(Color.orange.opacity(0.18)))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.orange)
-                    .accessibilityIdentifier(AccessibilityIdentifiers.Library.extendRecordingButton)
+        HStack(spacing: 8) {
+            // Only the text and tint follow the clock; the button stays outside the
+            // timeline so a tap is never lost to a per-second rebuild.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let isWarning = schedule.isInWarningWindow(at: context.date)
+                let tint: Color = isWarning ? .orange : .secondary
+                HStack(spacing: 8) {
+                    Image(systemName: "timer")
+                        .foregroundStyle(tint)
+                    Text(isWarning ? "Stopping soon" : "Stops at \(RecordingStopFormatting.clockTime(schedule.endDate))")
+                        .foregroundStyle(isWarning ? Color.orange : Color.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(RecordingStopFormatting.countdown(schedule.remaining(at: context.date)))
+                        .monospacedDigit()
+                        .foregroundStyle(tint)
                 }
+                .accessibilityElement(children: .combine)
             }
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 12)
-            .frame(height: 30)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isWarning ? Color.orange.opacity(0.12) : Color.primary.opacity(0.04))
-            )
+
+            Button {
+                session.extendScheduledStop(by: RecordingStopSchedule.quickExtension)
+            } label: {
+                Text("+\(RecordingStopFormatting.length(RecordingStopSchedule.quickExtension))")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Extend \(RecordingStopFormatting.length(RecordingStopSchedule.quickExtension))")
+            .accessibilityIdentifier(AccessibilityIdentifiers.Library.extendRecordingButton)
         }
-        .accessibilityElement(children: .combine)
+        .font(.caption.weight(.medium))
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(schedule.isInWarningWindow(at: context.date)
+                          ? Color.orange.opacity(0.12) : Color.primary.opacity(0.04))
+            }
+        )
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingStopStatus)
     }
 }
@@ -222,16 +232,22 @@ struct RecordingTimerSheet: View {
             initialMinutes = 60
         }
         _minutes = State(initialValue: initialMinutes)
-        _endTime = State(initialValue: request.initialEndDate ?? Self.defaultEndTime())
+        var pendingEnd: Date?
+        if case .endDate(let date) = session.pendingStopPlan(at: Date()), !request.isActiveRecording {
+            pendingEnd = date
+        }
+        _endTime = State(initialValue: request.initialEndDate ?? pendingEnd ?? Self.defaultEndTime())
     }
 
     /// The next quarter hour at least 30 minutes away: a typical meeting end.
     private static func defaultEndTime(now: Date = Date()) -> Date {
         let target = now.addingTimeInterval(30 * 60)
         let calendar = Calendar.current
-        let minute = calendar.component(.minute, from: target)
-        let rounded = calendar.date(byAdding: .minute, value: (15 - minute % 15) % 15, to: target) ?? target
-        return calendar.date(bySetting: .second, value: 0, of: rounded) ?? rounded
+        // Truncate to the minute first; date(bySetting:) would jump to the next minute instead.
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: target)
+        let wholeMinute = calendar.date(from: parts) ?? target
+        let minute = parts.minute ?? 0
+        return calendar.date(byAdding: .minute, value: (15 - minute % 15) % 15, to: wholeMinute) ?? wholeMinute
     }
 
     var body: some View {

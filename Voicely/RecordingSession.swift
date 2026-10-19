@@ -173,6 +173,7 @@ final class RecordingSession: ObservableObject {
 
     private var coordinator: IncrementalTranscriptionCoordinator?
     private var stopScheduleTask: Task<Void, Never>?
+    private var pendingStopExpiryTask: Task<Void, Never>?
     private let stopNotifier: RecordingStopNotifying
     /// Injectable so tests can move time without waiting.
     var now: () -> Date = Date.init
@@ -328,8 +329,12 @@ final class RecordingSession: ObservableObject {
         coord.start(intervalSeconds: incrementalIntervalSeconds)
 
         if let plan = pendingStopPlan {
-            pendingStopPlan = nil
-            applyStopSchedule(RecordingStopSchedule(endDate: plan.endDate(startingAt: now())))
+            clearPendingStopPlan()
+            // A stop time that passed before the recording began is dropped,
+            // never rolled over to the same time tomorrow.
+            if plan.isUsable(at: now()) {
+                applyStopSchedule(RecordingStopSchedule(endDate: plan.endDate(startingAt: now())))
+            }
         }
     }
 
@@ -337,8 +342,33 @@ final class RecordingSession: ObservableObject {
 
     /// Chooses the stop for the next recording; nil clears it.
     func setPendingStopPlan(_ plan: RecordingStopPlan?) {
-        pendingStopPlan = plan
-        if plan != nil { stopNotifier.requestAuthorizationIfNeeded() }
+        clearPendingStopPlan()
+        guard let resolved = plan?.resolved(at: now()) else { return }
+        pendingStopPlan = resolved
+        stopNotifier.requestAuthorizationIfNeeded()
+
+        // Drop a stop time once it can no longer be used, so the idle controls
+        // never keep offering a time that has already passed.
+        if case .endDate(let date) = resolved {
+            let delay = date.addingTimeInterval(-RecordingStopSchedule.minimumLength).timeIntervalSince(now())
+            pendingStopExpiryTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(max(0, delay)))
+                guard !Task.isCancelled, let self, self.pendingStopPlan == resolved else { return }
+                self.pendingStopPlan = nil
+            }
+        }
+    }
+
+    private func clearPendingStopPlan() {
+        pendingStopExpiryTask?.cancel()
+        pendingStopExpiryTask = nil
+        pendingStopPlan = nil
+    }
+
+    /// The pending plan as the idle controls should show it: nil once its end time has passed.
+    func pendingStopPlan(at date: Date) -> RecordingStopPlan? {
+        guard let pendingStopPlan, pendingStopPlan.isUsable(at: date) else { return nil }
+        return pendingStopPlan
     }
 
     /// Adds or replaces the stop of the active recording.

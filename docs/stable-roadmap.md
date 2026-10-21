@@ -40,7 +40,12 @@
 5. **vendor 裁剪**：`Vendor/speech-swift` 整包先保留，等说话人分离实验结束再定。可删的候选：`StreamingASR`、TTS 目录、音频播放器、WAV 写入等；`Qwen3ASR+Memory.swift`、`ModuleMemory.swift` 必须保留，`CoreMLASRModel.swift` 是 `docs/qwen-replay` 的 CoreML 工具要用的。`StreamingASR` 的对比实验优先级最低。
 
 **发布前专项（iPhone）**
-5a. **模型改由苹果托管下发（Background Assets）**，要排在第 6 项之前：真机验收应该在新的下发方式上做。现在模型在首次启动时从 Hugging Face 下载，**中国大陆连不上**，而 Voicely 从未正式上架，首次公开发布前必须解决。方案：模型做成 essential 资源包，随 app 安装一起下载，版本独立于 app，app 升级不重下；iOS 包放 CoreML 模型（约 0.95 GB），Mac 包放 MLX 8-bit（约 1.0 GB）；托管容量 200 GB，TestFlight 内部测试可用。代价：最低版本升到 iOS 26 / macOS 26（2026-10-15 用户同意，老设备不再支持）。原型要先验证：`.mlmodelc` 文件夹能否直接拿到路径；Mac Catalyst 拿到哪个平台的资源包；开发期本地测试方式（`ba-serve` 需要自签 CA，或 Debug 版直接读本地目录）；下载扩展与 App Group 配置。完成后，现有的 Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮一并删除。
+5a. **模型改由苹果托管下发（Background Assets）**，要排在第 6 项之前：真机验收应该在新的下发方式上做。现在模型在首次启动时从 Hugging Face 下载，**中国大陆连不上**，而 Voicely 从未正式上架，首次公开发布前必须解决。方案：模型做成 essential 资源包，随 app 安装一起下载，版本独立于 app，app 升级不重下；iOS 包放 CoreML 模型（约 0.95 GB），Mac 包放 MLX 8-bit（约 1.0 GB）；托管容量 200 GB，TestFlight 内部测试可用。代价：最低版本升到 iOS 26 / macOS 26（2026-10-15 用户同意，老设备不再支持）。原型验证进展（2026-10-22，查 Xcode 27 SDK 与工具）：
+  - ✅ **文件夹路径**：`AssetPackManager.url(for:)` 明确支持返回目录和包（含 `.mlmodelc`），多个资源包里同一路径的内容会合并成一个视图；返回的 URL 不能跨进程保存，每次启动重新取。MLX 的权重目录同理。
+  - ✅ **清单写法**：`xcrun ba-package template` 生成清单；`essential` 配 `firstInstallation` + `subsequentUpdate`，平台字段可选 iOS / macOS / tvOS / visionOS，没有单独的 Mac Catalyst。
+  - ✅ **扩展与配置**：需要一个实现 `ManagedDownloaderExtension` 的下载扩展（默认实现即可），app 与扩展同属一个 App Group，主 app 的 Info.plist 加 `BAAppGroupID`、`BAHasManagedAssetPacks`、`BAUsesAppleHosting`。头文件对 Mac Catalyst 没有标不可用。
+  - ⬜ **Mac Catalyst 拿到哪个平台的包**：SDK 和文档都没写，只能实测：上传两个只含标记文件的小资源包（一个 iOS、一个 macOS），用 TestFlight 版看 Mac 上收到哪个。上传要用 Transporter 登录用户的账号，需要用户操作。
+  - ⬜ **本地测试**：`xcrun ba-serve` 需要一个设备信任的 HTTPS 证书，也就是先建自签根证书并在系统钥匙串里设为信任，这一步要用户操作；macOS 上再用 `xcrun ba-serve url-override` 指向它。日常开发不依赖它：Debug 版直接读本地模型目录即可。完成后，现有的 Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮一并删除。
 6. 千问 CoreML 路径的真机验收：前台、锁屏、内存、后台进度上报。同一轮验 ③ 定时停止：锁屏时一秒一次的计时检查是否照常运行、到点能否停止并保存；锁屏通知上的"延长 10/30 分钟""立即停止"按钮；Live Activity 副标题显示"Stops at"。
 7. CoreML 在白噪声上会编出整句话，确认真实环境噪声都落在门控"确定静音"那一档（P-0o）。
 8. 上架文档按千问重写（P-0n）。

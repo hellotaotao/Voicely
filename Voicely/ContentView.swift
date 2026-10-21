@@ -368,17 +368,28 @@ struct ContentView: View {
         showsRecordingControls: Bool = true
     ) -> some View {
         ZStack(alignment: .bottom) {
-            noteList(
-                usesSplitNavigationSelection: usesSplitNavigationSelection,
-                opensDetailInCompactStack: opensDetailInCompactStack
-            )
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(VoicelyTheme.groupedBackground)
-                .contentMargins(.bottom, showsRecordingControls ? sidebarRecordingOverlayInset : 16, for: .scrollContent)
-                .refreshable {
-                    await cloudManager.refreshSync()
-                }
+            ScrollViewReader { proxy in
+                noteList(
+                    usesSplitNavigationSelection: usesSplitNavigationSelection,
+                    opensDetailInCompactStack: opensDetailInCompactStack
+                )
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(VoicelyTheme.groupedBackground)
+                    .contentMargins(.bottom, showsRecordingControls ? sidebarRecordingOverlayInset : 16, for: .scrollContent)
+                    .refreshable {
+                        await cloudManager.refreshSync()
+                    }
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        transcriptionQueueBar { noteID in
+                            selectedNoteID = noteID
+                            if opensDetailInCompactStack {
+                                compactNavigationPath = [noteID]
+                            }
+                            withAnimation { proxy.scrollTo(noteID, anchor: .center) }
+                        }
+                    }
+            }
 
             if showsRecordingControls {
                 recordingControlsBar()
@@ -389,6 +400,49 @@ struct ContentView: View {
         }
         .background(VoicelyTheme.groupedBackground)
         // Preserve the identifiers on the recording controls and note rows.
+    }
+
+    /// The note this device is transcribing outside a live recording.
+    private var activeTranscriptionNote: VoiceNote? {
+        guard let activeID = transcriptionService.activeNoteID,
+              !transcriptionService.isLocalRecording(noteID: activeID) else { return nil }
+        return voiceNotes.first { $0.id == activeID }
+    }
+
+    @ViewBuilder
+    private func transcriptionQueueBar(onSelect: @escaping (UUID) -> Void) -> some View {
+        let active = activeTranscriptionNote
+        let waiting = voiceNotes
+            .compactMap { note in
+                transcriptionService.waitReason(for: note).map {
+                    TranscriptionQueueBar.WaitingNote(id: note.id, title: note.title, reason: $0)
+                }
+            }
+            .enumerated()
+            .sorted { lhs, rhs in
+                // Queue order first; everything else keeps the list's order.
+                switch (lhs.element.reason, rhs.element.reason) {
+                case let (.inLine(a), .inLine(b)): return a < b
+                case (.inLine, _): return true
+                case (_, .inLine): return false
+                default: return lhs.offset < rhs.offset
+                }
+            }
+            .map(\.element)
+
+        if active != nil || !waiting.isEmpty {
+            TranscriptionQueueBar(
+                activeNoteID: active?.id,
+                activeTitle: active?.title,
+                activeProgress: active.map { transcriptionService.localProgress(for: $0) } ?? 0,
+                waiting: waiting,
+                onSelect: onSelect
+            )
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
+            .padding(.bottom, 4)
+            .background(VoicelyTheme.groupedBackground)
+        }
     }
 
     private func recordingControlsBar() -> some View {
@@ -472,6 +526,7 @@ struct ContentView: View {
                         .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
+                        .id(note.id)
                         .contextMenu {
                             if transcriptionService.isLocallyTranscribing(note)
                                 || transcriptionService.isQueuedForLocalTranscription(note) {
@@ -532,6 +587,7 @@ struct ContentView: View {
             isLocallyTranscribing: transcriptionService.isLocallyTranscribing(note),
             isRemoteTranscribing: transcriptionService.isTranscribingOnAnotherDevice(note),
             isPending: transcriptionService.shouldShowPendingState(note) || transcriptionService.isQueuedForLocalTranscription(note),
+            waitReason: transcriptionService.waitReason(for: note),
             localProgress: transcriptionService.localProgress(for: note),
             isRecordingPaused: isRecordingPaused(note),
             isSelected: selectedNoteID == note.id
@@ -575,7 +631,8 @@ struct ContentView: View {
             note: note,
             audioService: audioService,
             showingSettings: $showingSettings,
-            isPreparingAudio: recordingSession.isPreparingAudio(note)
+            isPreparingAudio: recordingSession.isPreparingAudio(note),
+            activeTranscriptionTitle: activeTranscriptionNote?.title
         )
             .environmentObject(transcriptionService)
     }
@@ -925,6 +982,7 @@ struct VoiceNoteRow: View {
     let isLocallyTranscribing: Bool
     let isRemoteTranscribing: Bool
     let isPending: Bool
+    let waitReason: TranscriptionWaitReason?
     let localProgress: Float
     let isRecordingPaused: Bool
     var isSelected = false
@@ -959,7 +1017,7 @@ struct VoiceNoteRow: View {
         if isRecordingPaused { return "Recording paused. Resume when you are ready." }
         if isRecordingInProgress { return "Recording… waiting for the first live transcript." }
         if isFinalizingTranscription { return "Finalizing transcription…" }
-        if isAwaitingTranscription { return "Queued for transcription." }
+        if isAwaitingTranscription { return waitReason?.summary ?? "Queued for transcription." }
         if isRemoteTranscribing { return "Transcribing on another device." }
         if note.transcriptionOutcome == .noSpeech { return "No speech detected." }
         if note.transcriptionOutcome == .failed { return "Couldn't transcribe. Open to try again." }
@@ -980,17 +1038,25 @@ struct VoiceNoteRow: View {
         } else if isFinalizingTranscription {
             return PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
         } else if isAwaitingTranscription {
-            return PillBadge(text: "Queued", systemImage: "clock.arrow.circlepath", variant: .warning)
+            return waitBadge(fallback: "Queued")
         } else if isRemoteTranscribing {
             return PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
         } else if isPending {
-            return PillBadge(text: "Transcription pending", systemImage: "clock.arrow.circlepath", variant: .warning)
+            return waitBadge(fallback: "Transcription pending")
         } else if note.transcriptionOutcome == .noSpeech {
             return PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
         } else if note.transcriptionOutcome == .failed {
             return PillBadge(text: "Tap to retry", systemImage: "arrow.clockwise", variant: .warning)
         }
         return nil
+    }
+
+    private func waitBadge(fallback: String) -> PillBadge {
+        PillBadge(
+            text: waitReason?.badgeText ?? fallback,
+            systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath",
+            variant: .warning
+        )
     }
 
     private var durationText: String {
@@ -1435,6 +1501,8 @@ struct VoiceNoteDetailView: View {
     @ObservedObject var audioService: AudioRecordingService
     @Binding var showingSettings: Bool
     var isPreparingAudio = false
+    /// Title of the note this device is transcribing, to explain a queue position.
+    var activeTranscriptionTitle: String?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
@@ -1474,6 +1542,10 @@ struct VoiceNoteDetailView: View {
 
     private var isRemoteTranscribing: Bool {
         transcriptionService.isTranscribingOnAnotherDevice(note)
+    }
+
+    private var waitReason: TranscriptionWaitReason? {
+        transcriptionService.waitReason(for: note)
     }
 
     private var hasVisibleTranscript: Bool {
@@ -1786,11 +1858,11 @@ struct VoiceNoteDetailView: View {
             } else if isFinalizingTranscription {
                 PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
             } else if isAwaitingTranscription {
-                PillBadge(text: "Queued", systemImage: "clock.arrow.circlepath", variant: .warning)
+                PillBadge(text: waitReason?.badgeText ?? "Queued", systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath", variant: .warning)
             } else if isRemoteTranscribing {
                 PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
             } else if shouldShowPendingState {
-                PillBadge(text: "Pending", systemImage: "clock.arrow.circlepath", variant: .warning)
+                PillBadge(text: waitReason?.badgeText ?? "Pending", systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath", variant: .warning)
             } else if !note.transcription.isEmpty {
                 PillBadge(text: "Transcript", systemImage: "checkmark", variant: .success)
                 PillBadge(
@@ -2246,24 +2318,7 @@ struct VoiceNoteDetailView: View {
                     .foregroundStyle(.secondary)
             }
         } else if isAwaitingTranscription {
-            VStack(alignment: .leading, spacing: 10) {
-                PillBadge(text: "Queued for transcription", systemImage: "clock.arrow.circlepath", variant: .warning)
-                Text("This note is waiting in the transcription queue and will switch to live progress once the local task starts.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button(role: .cancel, action: cancelCurrentTranscription) {
-                    Label("Cancel Transcription", systemImage: "xmark.circle")
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
-                Button(action: { requestTranscription() }) {
-                    Label("Transcribe Now", systemImage: "wand.and.stars")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(VoicelyTheme.accent)
-                .foregroundStyle(Color.black)
-                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
-            }
+            queuedTranscriptionSection(fallback: Text("This note is waiting in the transcription queue and will switch to live progress once the local task starts."))
         } else if isRemoteTranscribing {
             VStack(alignment: .leading, spacing: 10) {
                 PillBadge(text: "Transcribing on another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
@@ -2272,24 +2327,7 @@ struct VoiceNoteDetailView: View {
                     .foregroundStyle(.secondary)
             }
         } else if shouldShowPendingState {
-            VStack(alignment: .leading, spacing: 10) {
-                PillBadge(text: "Queued for transcription", systemImage: "clock.arrow.circlepath", variant: .warning)
-                Text("This recording is waiting for transcription to start.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button(role: .cancel, action: cancelCurrentTranscription) {
-                    Label("Cancel Transcription", systemImage: "xmark.circle")
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
-                Button(action: { requestTranscription() }) {
-                    Label("Transcribe Now", systemImage: "wand.and.stars")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(VoicelyTheme.accent)
-                .foregroundStyle(Color.black)
-                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
-            }
+            queuedTranscriptionSection(fallback: Text("This recording is waiting for transcription to start."))
         } else if !hasVisibleTranscript, note.transcriptionOutcome == .noSpeech {
             VStack(alignment: .leading, spacing: 10) {
                 PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
@@ -2478,6 +2516,34 @@ struct VoiceNoteDetailView: View {
             text: note.transcription,
             duration: note.lastTranscriptionDuration
         )
+    }
+
+    private func queuedTranscriptionSection(fallback: Text) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PillBadge(
+                text: waitReason?.badgeText ?? "Queued for transcription",
+                systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath",
+                variant: .warning
+            )
+            (waitReason?.explanation(activeTitle: activeTranscriptionTitle) ?? fallback)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Button(role: .cancel, action: cancelCurrentTranscription) {
+                Label("Cancel Transcription", systemImage: "xmark.circle")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
+            // Without the audio on this device a manual start can only fail.
+            if waitReason != .waitingForAudio {
+                Button(action: { requestTranscription() }) {
+                    Label("Transcribe Now", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(VoicelyTheme.accent)
+                .foregroundStyle(Color.black)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcribeNowButton)
+            }
+        }
     }
 
     private func cancelCurrentTranscription() {

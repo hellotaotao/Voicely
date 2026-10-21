@@ -51,6 +51,20 @@ enum TranscriptionOutcome {
     case cancelled
 }
 
+/// Why a note waiting for transcription has not started, so the UI can name
+/// the actual blocker instead of a generic "Queued".
+enum TranscriptionWaitReason: Equatable {
+    /// In this device's queue; 1 is the next note to run.
+    case inLine(position: Int)
+    case waitingForModel
+    /// The audio has not reached this device yet.
+    case waitingForAudio
+    /// Recorded elsewhere: the recording device gets the first chance until this time.
+    case waitingForOriginDevice(takeOverAt: Date)
+    case pausedInBackground
+    case startingSoon
+}
+
 @MainActor
 class TranscriptionService: ObservableObject {
     typealias TranscribeImpl = (String, @escaping (Float) -> Void) async -> RawTranscription
@@ -65,6 +79,10 @@ class TranscriptionService: ObservableObject {
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var previewByNoteID: [UUID: String] = [:]
     @Published private(set) var progressByNoteID: [UUID: Float] = [:]
+    /// Notes in the order this device will transcribe them; the first one is next.
+    @Published private(set) var localQueueOrder: [UUID] = []
+    /// Waiting notes whose audio is not on this device yet.
+    @Published private(set) var audioWaitNoteIDs: Set<UUID> = []
     // Frequent clock updates belong to the telemetry card, not every service subscriber.
     let telemetryState = TranscriptionTelemetryState()
     private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot {
@@ -106,6 +124,14 @@ class TranscriptionService: ObservableObject {
     var isAudioPermanentlyMissing: (String) -> Bool = { path in
         CloudStorageManager.shared.isAudioPermanentlyMissing(at: path)
     }
+    /// True when neither the audio nor its iCloud placeholder is on this device.
+    var isAudioAbsentLocally: (String) -> Bool = { path in
+        let cloud = CloudStorageManager.shared
+        guard let url = cloud.getFileURL(for: path) else { return true }
+        return cloud.isAudioFileMissing(at: url)
+    }
+    /// How often notes blocked outside the queue (audio, grace period) are checked again.
+    var waitingRecheckInterval: TimeInterval = 30
     var audioAvailabilityRetryWindow: TimeInterval = 5 * 60
     var leaseDuration: TimeInterval = 5 * 60
     var heartbeatInterval: TimeInterval = 60
@@ -131,6 +157,11 @@ class TranscriptionService: ObservableObject {
     private var pendingTranscriptionOrder: [UUID] = []
     private var pendingTranscriptionOrderSet: Set<UUID> = []
     private var pendingTranscriptionOrderCursor = 0
+    /// Dequeued and waiting for the decoder to free up.
+    private var nextUpNoteID: UUID?
+    /// Pending notes outside the queue; nothing else re-triggers them once they become runnable.
+    private var waitingNotes: [UUID: VoiceNote] = [:]
+    private var waitingRecheckTask: Task<Void, Never>?
     private var currentDecodeTelemetrySession: TranscriptionTelemetrySession?
     private var telemetrySessions: [UUID: TranscriptionTelemetrySession] = [:]
     private var noteTelemetrySessions: [UUID: UUID] = [:]
@@ -242,10 +273,18 @@ class TranscriptionService: ObservableObject {
             needsReprocessing = false
 
             while let note = dequeueNextPendingTranscription() {
+                nextUpNoteID = note.id
+                publishQueueOrder()
                 while isTranscribing || activeNoteID != nil {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        nextUpNoteID = nil
+                        publishQueueOrder()
+                        return
+                    }
                     try? await Task.sleep(nanoseconds: 300_000_000)
                 }
+                nextUpNoteID = nil
+                publishQueueOrder()
 
                 guard let action = processingAction(for: note, now: nowProvider()) else {
                     continue
@@ -456,6 +495,9 @@ class TranscriptionService: ObservableObject {
         finishSavedContinuation(for: note, remove: true)
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         pendingTranscriptionQueue.removeValue(forKey: note.id)
+        waitingNotes.removeValue(forKey: note.id)
+        audioWaitNoteIDs.remove(note.id)
+        publishQueueOrder()
         previewByNoteID.removeValue(forKey: note.id)
         note.cancelTranscription()
         do {
@@ -482,6 +524,9 @@ class TranscriptionService: ObservableObject {
         finishSavedContinuation(for: note, remove: true)
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         pendingTranscriptionQueue.removeValue(forKey: note.id)
+        waitingNotes.removeValue(forKey: note.id)
+        audioWaitNoteIDs.remove(note.id)
+        publishQueueOrder()
         previewByNoteID.removeValue(forKey: note.id)
     }
     func isRunCancelled(noteID: UUID) -> Bool { cancelledRunNoteIDs.contains(noteID) }
@@ -806,6 +851,23 @@ extension TranscriptionService {
             telemetryTimerTask = nil
         }
     }
+
+    func waitReason(for note: VoiceNote, now: Date? = nil) -> TranscriptionWaitReason? {
+        guard activeNoteID != note.id, !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id),
+              isQueuedForLocalTranscription(note) || shouldShowPendingState(note, now: now) else {
+            return nil
+        }
+        if isPausedForBackground(noteID: note.id) { return .pausedInBackground }
+        if !isEngineLoaded { return .waitingForModel }
+        if let index = localQueueOrder.firstIndex(of: note.id) { return .inLine(position: index + 1) }
+        if audioWaitNoteIDs.contains(note.id) { return .waitingForAudio }
+        let now = now ?? nowProvider()
+        if note.transcriptionState == .queued, !canCurrentDeviceClaimQueuedNote(note, now: now),
+           let queuedAt = note.transcriptionQueuedAt {
+            return .waitingForOriginDevice(takeOverAt: queuedAt.addingTimeInterval(nonOriginQueueGracePeriod))
+        }
+        return .startingSoon
+    }
 }
 
 private extension TranscriptionService {
@@ -870,7 +932,7 @@ private extension TranscriptionService {
                 return .resumeOwned(attemptID: attemptID)
             }
 
-            guard leaseHasExpired(note, now: now) else {
+            guard leaseHasExpired(note, now: now), !awaitsAudioFromAnotherDevice(note) else {
                 return nil
             }
 
@@ -879,7 +941,7 @@ private extension TranscriptionService {
                 queuedAt: note.transcriptionQueuedAt ?? now
             )
         case .queued:
-            guard canCurrentDeviceClaimQueuedNote(note, now: now) else {
+            guard canCurrentDeviceClaimQueuedNote(note, now: now), !awaitsAudioFromAnotherDevice(note) else {
                 return nil
             }
 
@@ -908,6 +970,14 @@ private extension TranscriptionService {
         }
 
         return now.timeIntervalSince(queuedAt) >= nonOriginQueueGracePeriod
+    }
+
+    /// A note recorded elsewhere stays with its origin device until its audio reaches
+    /// this one: claiming it earlier can only fail and mark it failed on every device.
+    func awaitsAudioFromAnotherDevice(_ note: VoiceNote) -> Bool {
+        note.transcriptionOriginDeviceID != currentDeviceID
+            && savedTranscriptionNotes[note.id] == nil
+            && isAudioAbsentLocally(note.audioFilePath)
     }
 
     func leaseHasExpired(_ note: VoiceNote, now: Date? = nil) -> Bool {
@@ -951,13 +1021,70 @@ private extension TranscriptionService {
 
         for note in notes {
             guard processingAction(for: note, now: now) != nil else {
+                if shouldShowPendingState(note, now: now), !note.audioFilePath.isEmpty,
+                   !discardedNoteIDs.contains(note.id), pendingTranscriptionQueue[note.id] == nil {
+                    waitingNotes[note.id] = note
+                    if awaitsAudioFromAnotherDevice(note), !audioWaitNoteIDs.contains(note.id) {
+                        audioWaitNoteIDs.insert(note.id)
+                    }
+                } else {
+                    waitingNotes.removeValue(forKey: note.id)
+                }
                 continue
             }
 
+            waitingNotes.removeValue(forKey: note.id)
             pendingTranscriptionQueue[note.id] = note
             if pendingTranscriptionOrderSet.insert(note.id).inserted {
                 pendingTranscriptionOrder.append(note.id)
             }
+        }
+        publishQueueOrder()
+        scheduleWaitingRecheck()
+    }
+
+    private func publishQueueOrder() {
+        var order: [UUID] = nextUpNoteID.map { [$0] } ?? []
+        if pendingTranscriptionOrderCursor < pendingTranscriptionOrder.count {
+            order += pendingTranscriptionOrder[pendingTranscriptionOrderCursor...].filter {
+                pendingTranscriptionQueue[$0] != nil && $0 != nextUpNoteID
+            }
+        }
+        if order != localQueueOrder { localQueueOrder = order }
+    }
+
+    /// Notes blocked outside the queue become runnable without any event the UI
+    /// would notice (a grace period ends, audio finishes syncing), so poll them.
+    private func scheduleWaitingRecheck() {
+        let now = nowProvider()
+        waitingNotes = waitingNotes.filter { id, note in
+            !discardedNoteIDs.contains(id) && pendingTranscriptionQueue[id] == nil
+                && shouldShowPendingState(note, now: now)
+        }
+        let audioWaits = audioWaitNoteIDs.filter { waitingNotes[$0] != nil || pendingTranscriptionQueue[$0] != nil }
+        if audioWaits != audioWaitNoteIDs { audioWaitNoteIDs = audioWaits }
+
+        guard !waitingNotes.isEmpty else {
+            waitingRecheckTask?.cancel()
+            waitingRecheckTask = nil
+            return
+        }
+        guard waitingRecheckTask == nil else { return }
+
+        var delay = waitingRecheckInterval
+        for note in waitingNotes.values where note.transcriptionState == .queued
+            && !canCurrentDeviceClaimQueuedNote(note, now: now) {
+            if let queuedAt = note.transcriptionQueuedAt {
+                delay = min(delay, max(1, queuedAt.addingTimeInterval(nonOriginQueueGracePeriod).timeIntervalSince(now)))
+            }
+        }
+        waitingRecheckTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.waitingRecheckTask = nil
+            await self.processPendingTranscriptions(notes: Array(self.waitingNotes.values))
+            // processPendingTranscriptions returns before enqueueing while the model is unloaded.
+            self.scheduleWaitingRecheck()
         }
     }
 
@@ -1027,6 +1154,7 @@ private extension TranscriptionService {
             if stillOwnsAttempt() { handleUnavailableAudio(for: note) }
             return
         }
+        if audioWaitNoteIDs.contains(note.id) { audioWaitNoteIDs.remove(note.id) }
         guard stillOwnsAttempt() else { return }
         let resolvedDuration = await audioDurationProvider(url.path)
         Self.transcriptionLog.notice("attempt=\(attemptID, privacy: .public) stage=filePreparationFinished seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
@@ -1167,9 +1295,11 @@ private extension TranscriptionService {
            nowProvider().timeIntervalSince(queuedAt) < audioAvailabilityRetryWindow {
             // Keep the persisted first queue time so repeated cloud failures cannot
             // restart the retry window indefinitely, including after app relaunch.
+            audioWaitNoteIDs.insert(note.id)
             requeueNote(note, queuedAt: queuedAt)
             return
         }
+        audioWaitNoteIDs.remove(note.id)
         // Timeout means unavailable, not proven missing. Both outcomes preserve
         // prior text and recovery checkpoints and allow an explicit later retry.
         note.completeTranscription()
@@ -1182,6 +1312,9 @@ private extension TranscriptionService {
 
     func requeueNote(_ note: VoiceNote, queuedAt: Date) {
         note.queueTranscription(at: queuedAt)
+        // A dequeued note is not re-added by the running loop; the recheck picks it up.
+        waitingNotes[note.id] = note
+        scheduleWaitingRecheck()
     }
 
     func startLeaseHeartbeat(for note: VoiceNote, attemptID: String) {

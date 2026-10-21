@@ -17,6 +17,8 @@ enum AccessibilityIdentifiers {
         static let noteRow = "VoiceNoteRow"
         static let emptyState = "EmptyLibraryCard"
         static let syncStatusBanner = "SyncStatusBanner"
+        static let transcriptionQueueActive = "TranscriptionQueueActive"
+        static let transcriptionQueueWaiting = "TranscriptionQueueWaiting"
         static let recordingControls = "RecordingControls"
         static let recordingModelPickerButton = "RecordingModelPickerButton"
         static let recordButton = "RecordButton"

@@ -188,6 +188,9 @@ final class RecordingSession: ObservableObject {
 
     var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
 
+    /// Where launch recovery looks for, and saves, audio of recordings that never stopped.
+    var orphanedRecordingStorage: OrphanedRecordingStorage = .live
+
     /// Keeps post-recording finalization running after the user leaves the app.
     var continuedProcessingDriver: (any ContinuedProcessingDriver)? = SystemContinuedProcessingDriver.shared
 
@@ -509,6 +512,108 @@ final class RecordingSession: ObservableObject {
             )
             note.clearTransientTranscriptionFlags()
             try? note.modelContext?.save()
+        }
+
+        recoverInterruptedRecordings(in: notes)
+    }
+
+    /// Recovers notes whose app died while still recording (crash, app update,
+    /// jetsam). Stop never ran, so the note has no duration and its `.m4a` was
+    /// never exported, yet it stays queued on every device for audio that will
+    /// never arrive. The live PCM file may still be in tmp: export it the way
+    /// stop does and transcribe it. Without it the audio is lost, so the note
+    /// stops waiting and says so. Only the recording device can do either.
+    /// Returns the export tasks so callers can await them.
+    @discardableResult
+    func recoverInterruptedRecordings(in notes: [VoiceNote]) -> [Task<Void, Never>] {
+        let storage = orphanedRecordingStorage
+        let deviceID = transcriptionService.deviceIDProvider()
+        let interrupted = notes.filter { note in
+            note.duration <= 0
+                && Self.isWaitingForTranscription(note)
+                && note.transcriptionOriginDeviceID == deviceID
+                && !note.audioFilePath.isEmpty
+                && currentRecordingNote?.id != note.id
+                && !finalizingNoteIDs.contains(note.id)
+                && !transcriptionService.isLocalRecording(noteID: note.id)
+                && transcriptionService.activeNoteID != note.id
+                && storage.isAudioAbsent(note.audioFilePath)
+        }
+        guard !interrupted.isEmpty else { return [] }
+
+        let livePCMURL = audioService.currentPCMFileURL?.standardizedFileURL
+        let pcmFiles = ((try? FileManager.default.contentsOfDirectory(
+            at: storage.temporaryDirectory(), includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.standardizedFileURL != livePCMURL }
+        let matches = OrphanedRecordingMatcher.match(interrupted, to: pcmFiles)
+
+        var tasks: [Task<Void, Never>] = []
+        for note in interrupted {
+            if let pcmURL = matches[note.id],
+               let duration = storage.duration(pcmURL), duration > 0 {
+                debugLog("🔍 [RecordingSession] Recovering interrupted recording \(note.audioFilePath) from \(pcmURL.lastPathComponent)")
+                tasks.append(reattachOrphanedRecording(pcmURL, duration: duration, to: note, storage: storage))
+            } else {
+                debugLog("⚠️ [RecordingSession] No audio left for interrupted recording \(note.audioFilePath)")
+                let liveText = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "" : " The text below is what was transcribed live."
+                note.completeTranscription()
+                note.transcriptionOutcome = .failed
+                note.markTranscriptionFailure("Recording was interrupted before it was saved.\(liveText)")
+                note.clearTransientTranscriptionFlags()
+                try? note.modelContext?.save()
+            }
+        }
+        return tasks
+    }
+
+    private static func isWaitingForTranscription(_ note: VoiceNote) -> Bool {
+        switch note.transcriptionState {
+        case .queued, .claimed: return true
+        case .completed, .cancelled: return false
+        case .none: return note.isTranscribing || note.isAwaitingTranscription
+        }
+    }
+
+    private func reattachOrphanedRecording(
+        _ pcmURL: URL,
+        duration: TimeInterval,
+        to note: VoiceNote,
+        storage: OrphanedRecordingStorage
+    ) -> Task<Void, Never> {
+        let name = URL(fileURLWithPath: note.audioFilePath).lastPathComponent
+        let export = RecordingStopResult.converting(
+            sourceURL: pcmURL,
+            destinationURL: storage.destinationURL(name),
+            duration: duration,
+            convert: storage.convert
+        )
+        // Keep the queue off the note until its audio exists.
+        transcriptionService.beginLocalRecording(noteID: note.id)
+        preparingAudioNoteIDs.insert(note.id)
+
+        return Task { @MainActor in
+            defer {
+                preparingAudioNoteIDs.remove(note.id)
+                transcriptionService.endLocalRecording(noteID: note.id)
+            }
+            guard let path = await export.resolvedFilePath() else { return }
+            note.audioFilePath = path
+            note.duration = duration
+            note.transcriptionLastErrorMessage = nil
+            note.queueTranscription(at: Date())
+            do {
+                try note.modelContext?.save()
+            } catch {
+                // Keep the PCM source until the note durably points at the export.
+                return
+            }
+            await export.cleanupTemporaryAudio()
+
+            transcriptionService.endLocalRecording(noteID: note.id)
+            if isModelLoaded {
+                await transcriptionService.processPendingTranscriptions(notes: [note])
+            }
         }
     }
 

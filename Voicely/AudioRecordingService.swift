@@ -660,13 +660,17 @@ class AudioRecordingService: ObservableObject {
         recordingDuration = Double(framePosition) / 16000.0
     }
 
+    /// Live PCM files are named `<prefix><unixSeconds>_<uuid>.caf`; launch recovery
+    /// parses the start time back out of the name.
+    nonisolated static let pcmTemporaryFilePrefix = "voicely_rec_"
+
     nonisolated static func makePCMTemporaryURL(now: Date = Date()) -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("voicely_rec_\(Int(now.timeIntervalSince1970))_\(UUID().uuidString).caf")
+        FileManager.default.temporaryDirectory.appendingPathComponent("\(pcmTemporaryFilePrefix)\(Int(now.timeIntervalSince1970))_\(UUID().uuidString).caf")
     }
 
     // MARK: PCM (CAF) → M4A conversion
 
-    private nonisolated static func convertCAFToM4A(from cafURL: URL, to m4aURL: URL) async throws {
+    nonisolated static func convertCAFToM4A(from cafURL: URL, to m4aURL: URL) async throws {
         let asset = AVURLAsset(url: cafURL)
         guard let exportSession = AVAssetExportSession(
             asset: asset,

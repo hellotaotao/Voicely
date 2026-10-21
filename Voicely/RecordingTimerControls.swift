@@ -20,10 +20,18 @@ struct RecordingTimerSheetRequest: Identifiable {
 }
 
 /// The timer button beside the record / stop buttons.
-struct RecordingTimerMenu: View {
+///
+/// Equatable so the parent's 10 Hz recording-duration updates skip this view: rebuilding
+/// an open menu swallows a tap that lands mid-rebuild. Changes to `session` still
+/// refresh it through its own observation.
+struct RecordingTimerMenu: View, Equatable {
     @ObservedObject var session: RecordingSession
     let isRecording: Bool
     let onCustom: (RecordingTimerSheetRequest) -> Void
+
+    static func == (lhs: RecordingTimerMenu, rhs: RecordingTimerMenu) -> Bool {
+        lhs.session === rhs.session && lhs.isRecording == rhs.isRecording
+    }
 
     var body: some View {
         Menu {

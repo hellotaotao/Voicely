@@ -1346,6 +1346,7 @@ struct RecordingControls: View {
         RecordingTimerMenu(session: session, isRecording: isRecording) { request in
             timerSheetRequest = request
         }
+        .equatable()
     }
 
     private var startingLayout: some View {

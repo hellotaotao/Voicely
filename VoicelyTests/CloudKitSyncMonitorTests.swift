@@ -47,7 +47,6 @@ struct ModelStateTests {
     @Test func modelStateDescriptionMatchesExpectedText() {
         #expect(ModelState.unloaded.description == "Not Loaded")
         #expect(ModelState.loading.description == "Loading...")
-        #expect(ModelState.downloading.description == "Downloading...")
         #expect(ModelState.prewarming.description == "Optimizing...")
         #expect(ModelState.loaded.description == "Ready")
     }

@@ -68,13 +68,6 @@ enum Qwen3Backend: String, Sendable {
         case .coreML: "qwen3-asr-0.6b-coreml"
         }
     }
-
-    nonisolated var approximateDownloadSizeText: String {
-        switch self {
-        case .mlx: "about 1.0 GB"
-        case .coreML: "about 0.95 GB"
-        }
-    }
 }
 
 // MARK: - Slice limits
@@ -110,11 +103,10 @@ struct Qwen3SliceLimits: Equatable, Sendable {
 
 enum Qwen3ASRDefaults {
     /// 0.6B 8-bit MLX weights. The 4-bit conversion ends long slices early,
-    /// dropping most of their text (P-0j). The CoreML backend takes its
-    /// tokenizer files from this repository too.
+    /// dropping most of their text (P-0j). The loader reads the bit width from
+    /// this name, and the CoreML build takes its tokenizer files from the same
+    /// repository. scripts/fetch-speech-models.sh pins both repositories.
     nonisolated static let mlxModelId = "mlx-community/Qwen3-ASR-0.6B-8bit"
-    /// Weights earlier builds downloaded and nothing reads any more.
-    nonisolated static let retiredModelIds = ["mlx-community/Qwen3-ASR-0.6B-4bit"]
     nonisolated static let coreMLModelId = "aufklarer/Qwen3-ASR-CoreML"
     nonisolated static let tokenizerFiles = ["vocab.json", "merges.txt", "tokenizer_config.json"]
     nonisolated static let coreMLBundles = [
@@ -184,97 +176,57 @@ actor Qwen3ASRModelStore {
     typealias ProgressHandler = @Sendable (Double, String) -> Void
 
     private let backend: Qwen3Backend
-    /// Where the weights live; nil means Application Support. Tests point it
-    /// at a directory that already holds them.
-    private let baseOverride: URL?
+    /// Where the weights are read from; nil only if the app has no resources.
+    private let modelDirectory: URL?
     private var mlxModel: Qwen3ASRModel?
     private var coreMLModel: Qwen3CoreMLModel?
     private var loadTask: Task<Void, Error>?
 
-    init(backend: Qwen3Backend = .current, baseDirectory: URL? = nil) {
+    init(backend: Qwen3Backend = .current, modelDirectory: URL? = nil) {
         self.backend = backend
-        baseOverride = baseDirectory
+        self.modelDirectory = modelDirectory ?? Self.defaultModelDirectory()
     }
 
     enum StoreError: LocalizedError {
-        case modelNotDownloaded
+        case modelMissing(URL?)
 
         var errorDescription: String? {
             switch self {
-            case .modelNotDownloaded:
-                return "The speech model isn't downloaded yet. Open Settings and tap Download to enable transcription."
+            case .modelMissing(let directory):
+                return "The speech model is missing from this build"
+                    + (directory.map { " (looked in \($0.path))" } ?? "") + "."
             }
         }
     }
 
     // MARK: Files
 
-    nonisolated static func baseDirectory(fileManager: FileManager = .default) throws -> URL {
-        try fileManager.url(
-            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
-        ).appendingPathComponent("Qwen3ASR", isDirectory: true)
-    }
+    /// Name of the model folder in the app's resources, filled at build time by
+    /// scripts/embed-speech-model.sh: the MLX weights in the Mac app, the CoreML
+    /// models in the iPhone and iPad app, with the tokenizer files in both.
+    nonisolated static let bundledDirectoryName = "SpeechModel"
 
-    /// Hub-layout repository directory (…/models/<org>/<name>). The layout is
-    /// load-bearing: the package's downloader derives its download base by
-    /// stripping the models/<org>/<name> suffix. With a flat directory it
-    /// silently falls back to Caches/ and the weights land where the loader
-    /// never looks.
-    nonisolated static func repositoryDirectory(
-        for modelId: String, base: URL, fileManager: FileManager = .default
-    ) throws -> URL {
-        var directory = base.appendingPathComponent("models", isDirectory: true)
-        for component in modelId.split(separator: "/") {
-            directory.appendPathComponent(String(component), isDirectory: true)
+    /// Where the model is read from. `VOICELY_MODEL_DIRECTORY` replaces the
+    /// bundled folder, for tests and for replaying the other backend on a Mac.
+    nonisolated static func defaultModelDirectory(bundle: Bundle = .main) -> URL? {
+        if let override = ProcessInfo.processInfo.environment["VOICELY_MODEL_DIRECTORY"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
         }
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
+        return bundle.resourceURL?.appendingPathComponent(bundledDirectoryName, isDirectory: true)
     }
 
-    /// Written once a download has loaded and warmed up. A snapshot that was
-    /// interrupted leaves real-looking model folders behind, so file presence
-    /// alone cannot tell a finished download from half of one.
-    /// The marker names the weights, so a marker left by an earlier model
-    /// cannot vouch for a later one's half-finished download.
-    nonisolated static func readyMarkerURL(for backend: Qwen3Backend, base: URL) -> URL {
-        let modelId = backend == .mlx ? Qwen3ASRDefaults.mlxModelId : Qwen3ASRDefaults.coreMLModelId
-        let name = modelId.split(separator: "/").last.map(String.init) ?? modelId
-        return base.appendingPathComponent(".ready-\(backend.rawValue)-\(name)")
-    }
-
-    /// Files from earlier builds: retired weights and unversioned markers.
-    nonisolated static func removeRetiredFiles(base: URL, fileManager: FileManager = .default) {
-        for modelId in Qwen3ASRDefaults.retiredModelIds {
-            var directory = base.appendingPathComponent("models", isDirectory: true)
-            for component in modelId.split(separator: "/") {
-                directory.appendPathComponent(String(component), isDirectory: true)
-            }
-            try? fileManager.removeItem(at: directory)
-        }
-        for backend in [Qwen3Backend.mlx, .coreML] {
-            try? fileManager.removeItem(at: base.appendingPathComponent(".ready-\(backend.rawValue)"))
-        }
-    }
-
-    nonisolated static func isModelDownloaded(
-        backend: Qwen3Backend = .current, base: URL? = nil, fileManager: FileManager = .default
+    /// Whether `directory` holds everything the backend loads.
+    nonisolated static func isComplete(
+        _ directory: URL, backend: Qwen3Backend, fileManager: FileManager = .default
     ) -> Bool {
-        guard let base = base ?? (try? baseDirectory(fileManager: fileManager)),
-              fileManager.fileExists(atPath: readyMarkerURL(for: backend, base: base).path),
-              let tokenizerDirectory = try? repositoryDirectory(
-                for: Qwen3ASRDefaults.mlxModelId, base: base, fileManager: fileManager),
-              fileManager.fileExists(atPath: tokenizerDirectory.appendingPathComponent("vocab.json").path)
-        else { return false }
+        let exists = { (name: String) in fileManager.fileExists(atPath: directory.appendingPathComponent(name).path) }
+        guard exists("vocab.json") else { return false }
         switch backend {
         case .mlx:
-            let names = (try? fileManager.contentsOfDirectory(atPath: tokenizerDirectory.path)) ?? []
-            return names.contains { $0.hasSuffix(".safetensors") }
+            let names = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+            return names.contains { $0.hasSuffix(".safetensors") } && exists("config.json")
         case .coreML:
-            guard let directory = try? repositoryDirectory(
-                for: Qwen3ASRDefaults.coreMLModelId, base: base, fileManager: fileManager) else { return false }
-            return Qwen3ASRDefaults.coreMLBundles.allSatisfy {
-                fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
-            }
+            return Qwen3ASRDefaults.coreMLBundles.allSatisfy(exists) && exists("config.json")
         }
     }
 
@@ -282,26 +234,21 @@ actor Qwen3ASRModelStore {
 
     var isModelLoaded: Bool { mlxModel != nil || coreMLModel != nil }
 
-    /// Loads the already-downloaded model into memory (no network). Throws
-    /// `StoreError.modelNotDownloaded` when the weights are missing.
-    func prepareDownloadedModel(progressHandler: ProgressHandler? = nil) async throws {
-        try await load(allowDownload: false, progressHandler: progressHandler)
-    }
-
-    /// Downloads the weights if needed, then loads and warms up.
-    func downloadAndLoadModel(progressHandler: ProgressHandler? = nil) async throws {
-        try await load(allowDownload: true, progressHandler: progressHandler)
+    /// Loads and warms up the model. Nothing is downloaded: the weights ship
+    /// with the app.
+    func prepareModel(progressHandler: ProgressHandler? = nil) async throws {
+        try await load(progressHandler: progressHandler)
     }
 
     /// Runs one inference on a slice of 16 kHz mono audio no longer than
     /// `Qwen3SliceLimits`. The model never leaves this actor.
     func transcribe(samples: [Float], languageHint: String?) async throws -> String {
-        try await load(allowDownload: false, progressHandler: nil)
+        try await load(progressHandler: nil)
         if let mlxModel {
             return mlxModel.transcribe(audio: samples, sampleRate: 16_000,
                                        options: Self.mlxOptions(languageHint: languageHint))
         }
-        guard let coreMLModel else { throw StoreError.modelNotDownloaded }
+        guard let coreMLModel else { throw StoreError.modelMissing(modelDirectory) }
         // Each slice creates an MLState and several IOSurface-backed arrays;
         // without a pool they pile up until CoreML cannot allocate another one,
         // about 200 slices into a recording.
@@ -330,16 +277,7 @@ actor Qwen3ASRModelStore {
         coreMLModel = nil
     }
 
-    /// Deletes downloaded weights from disk (Settings action). Unloads first
-    /// so a loaded model doesn't keep serving from removed files.
-    func deleteDownloadedModel() throws {
-        unloadModel()
-        let base = try baseOverride ?? Self.baseDirectory()
-        guard FileManager.default.fileExists(atPath: base.path) else { return }
-        try FileManager.default.removeItem(at: base)
-    }
-
-    private func load(allowDownload: Bool, progressHandler: ProgressHandler?) async throws {
+    private func load(progressHandler: ProgressHandler?) async throws {
         if isModelLoaded { return }
         if let loadTask {
             try await loadTask.value
@@ -347,24 +285,17 @@ actor Qwen3ASRModelStore {
         }
 
         let backend = self.backend
-        let base = try baseOverride ?? Self.baseDirectory()
-        if !allowDownload, !Self.isModelDownloaded(backend: backend, base: base) {
-            throw StoreError.modelNotDownloaded
+        guard let directory = modelDirectory, Self.isComplete(directory, backend: backend) else {
+            throw StoreError.modelMissing(modelDirectory)
         }
 
         let task = Task {
             switch backend {
             case .mlx:
-                self.mlxModel = try await Self.loadMLX(
-                    base: base, allowDownload: allowDownload, progressHandler: progressHandler)
+                self.mlxModel = try await Self.loadMLX(directory: directory, progressHandler: progressHandler)
             case .coreML:
-                self.coreMLModel = try await Self.loadCoreML(
-                    base: base, allowDownload: allowDownload, progressHandler: progressHandler)
+                self.coreMLModel = try Self.loadCoreML(directory: directory, progressHandler: progressHandler)
             }
-            Self.excludeFromBackup(base)
-            Self.removeRetiredFiles(base: base)
-            FileManager.default.createFile(
-                atPath: Self.readyMarkerURL(for: backend, base: base).path, contents: nil)
             progressHandler?(1.0, "Ready")
         }
         loadTask = task
@@ -373,14 +304,16 @@ actor Qwen3ASRModelStore {
     }
 
     private static func loadMLX(
-        base: URL, allowDownload: Bool, progressHandler: ProgressHandler?
+        directory: URL, progressHandler: ProgressHandler?
     ) async throws -> Qwen3ASRModel {
-        let directory = try repositoryDirectory(for: Qwen3ASRDefaults.mlxModelId, base: base)
+        // Offline with the weights present, the package reads the folder and
+        // never touches the network or writes into it, so a read-only app
+        // bundle works.
         let model = try await Qwen3ASRModel.fromPretrained(
             modelId: Qwen3ASRDefaults.mlxModelId,
             cacheDir: directory,
-            offlineMode: !allowDownload,
-            progressHandler: { progress, status in progressHandler?(progress * 0.97, status) }
+            offlineMode: true,
+            progressHandler: { progress, _ in progressHandler?(progress * 0.97, "Loading") }
         )
         limitMLXMemory()
         // One tiny decode compiles the Metal pipelines so the first real
@@ -405,10 +338,8 @@ actor Qwen3ASRModelStore {
     }
 
     private static func loadCoreML(
-        base: URL, allowDownload: Bool, progressHandler: ProgressHandler?
-    ) async throws -> Qwen3CoreMLModel {
-        let directory = try repositoryDirectory(for: Qwen3ASRDefaults.coreMLModelId, base: base)
-        let tokenizerDirectory = try repositoryDirectory(for: Qwen3ASRDefaults.mlxModelId, base: base)
+        directory: URL, progressHandler: ProgressHandler?
+    ) throws -> Qwen3CoreMLModel {
         // No GPU anywhere: the only configuration a locked iPhone may use. The
         // simulator has no Neural Engine to offer.
         #if targetEnvironment(simulator)
@@ -417,38 +348,17 @@ actor Qwen3ASRModelStore {
         let units = MLComputeUnits.cpuAndNeuralEngine
         #endif
 
-        let encoder = try await CoreMLASREncoder.fromPretrained(
-            modelId: Qwen3ASRDefaults.coreMLModelId, computeUnits: units,
-            cacheDir: directory, offlineMode: !allowDownload,
-            progressHandler: { progress, status in progressHandler?(progress * 0.3, status) })
-        let decoder = try await CoreMLTextDecoder.fromPretrained(
-            modelId: Qwen3ASRDefaults.coreMLModelId, computeUnits: units,
-            cacheDir: directory, offlineMode: !allowDownload,
-            progressHandler: { progress, status in progressHandler?(0.3 + progress * 0.6, status) })
-
-        let vocabularyURL = tokenizerDirectory.appendingPathComponent("vocab.json")
-        if !FileManager.default.fileExists(atPath: vocabularyURL.path) {
-            guard allowDownload else { throw StoreError.modelNotDownloaded }
-            progressHandler?(0.9, "Downloading tokenizer…")
-            try await HuggingFaceDownloader.downloadFiles(
-                modelId: Qwen3ASRDefaults.mlxModelId, to: tokenizerDirectory,
-                files: Qwen3ASRDefaults.tokenizerFiles)
-        }
+        progressHandler?(0.1, "Loading")
+        let encoder = try CoreMLASREncoder.load(from: directory, computeUnits: units)
+        progressHandler?(0.4, "Loading")
+        let decoder = try CoreMLTextDecoder.load(from: directory, computeUnits: units)
         let tokenizer = Qwen3Tokenizer()
-        try tokenizer.load(from: vocabularyURL)
+        try tokenizer.load(from: directory.appendingPathComponent("vocab.json"))
 
         progressHandler?(0.95, "Warming up…")
         try encoder.warmUp()
         try decoder.warmUp()
         return Qwen3CoreMLModel(encoder: encoder, decoder: decoder, tokenizer: tokenizer)
-    }
-
-    /// The weights are re-downloadable, so they must not land in iCloud/device backups.
-    nonisolated private static func excludeFromBackup(_ directory: URL) {
-        var url = directory
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try? url.setResourceValues(values)
     }
 }
 

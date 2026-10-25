@@ -120,26 +120,6 @@ struct ContentView: View {
             syncInitialSelection()
         }
         .alert(
-            "Download Over Cellular?",
-            isPresented: Binding(
-                get: { modelManager.awaitingCellularApproval && !showingSettings },
-                set: { isPresented in
-                    if !isPresented, modelManager.awaitingCellularApproval {
-                        modelManager.waitForInexpensiveNetwork()
-                    }
-                }
-            )
-        ) {
-            Button("Download Now") {
-                Task { await modelManager.approveCellularDownload() }
-            }
-            Button("Wait for Wi-Fi", role: .cancel) {
-                modelManager.waitForInexpensiveNetwork()
-            }
-        } message: {
-            Text("The speech model is \(modelManager.backend.approximateDownloadSizeText). Download it now, or wait for Wi-Fi and Voicely will start the download by itself.")
-        }
-        .alert(
             "Import Failed",
             isPresented: Binding(
                 get: { inboundAudioImportError != nil },
@@ -712,7 +692,7 @@ struct ContentView: View {
         }
 
         transcriptionService.setModelManager(modelManager)
-        Task.detached(priority: .utility) { RetiredWhisperModels.removeDownloadedFiles() }
+        Task.detached(priority: .utility) { RetiredModelFiles.remove() }
         Qwen3ASRDefaults.migrateSelectedLanguage()
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
         recordingSession.recoverInterruptedFinalizations(in: voiceNotes)
@@ -1186,7 +1166,7 @@ struct RecordingControls: View {
 
     private var isModelLoading: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.modelState == .loading || modelManager.modelState == .downloading
+        return modelManager.modelState == .loading
             || modelManager.modelState == .prewarming
     }
 
@@ -1208,8 +1188,8 @@ struct RecordingControls: View {
         guard let modelManager else { return .secondary }
         switch modelManager.modelState {
         case .loaded: return .green
-        case .loading, .downloading, .prewarming: return .orange
-        case .unloaded: return modelManager.isModelDownloaded ? .secondary : .accentColor
+        case .loading, .prewarming: return .orange
+        case .unloaded: return .secondary
         }
     }
 

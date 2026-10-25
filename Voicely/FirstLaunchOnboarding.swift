@@ -137,13 +137,6 @@ enum FirstLaunchOnboarding {
                 detail: "The speech model is being loaded into memory.",
                 progress: clampedProgress(progress)
             )
-        case .downloading:
-            return FirstLaunchModelSetupStatus(
-                visualState: .active,
-                title: "Downloading offline model",
-                detail: "Voicely is fetching the speech model for local transcription.",
-                progress: clampedProgress(progress)
-            )
         case .prewarming:
             return FirstLaunchModelSetupStatus(
                 visualState: .active,

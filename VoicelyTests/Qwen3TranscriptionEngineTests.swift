@@ -154,61 +154,57 @@ struct Qwen3ASRDefaultsTests {
     }
 }
 
-struct Qwen3ASRModelStoreTests {
-    private func makeBase() throws -> URL {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Qwen3StoreTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
+struct Qwen3ModelFilesTests {
+    private func makeDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Qwen3ModelFiles-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     private func touch(_ url: URL) {
         FileManager.default.createFile(atPath: url.path, contents: Data())
     }
 
-    /// The hub layout (…/models/<org>/<name>) is load-bearing: the package's
-    /// downloader derives its download base by stripping that suffix.
-    @Test func repositoryDirectoryUsesHubLayout() throws {
-        let base = try makeBase()
-        defer { try? FileManager.default.removeItem(at: base) }
-        let directory = try Qwen3ASRModelStore.repositoryDirectory(for: Qwen3ASRDefaults.coreMLModelId, base: base)
-        let expectedSuffix = ["models"] + Qwen3ASRDefaults.coreMLModelId.split(separator: "/").map(String.init)
-        #expect(Array(directory.pathComponents.suffix(expectedSuffix.count)) == expectedSuffix)
-    }
-
-    @Test func mlxDownloadNeedsWeightsVocabularyAndAFinishedLoad() throws {
-        let base = try makeBase()
-        defer { try? FileManager.default.removeItem(at: base) }
-        let directory = try Qwen3ASRModelStore.repositoryDirectory(for: Qwen3ASRDefaults.mlxModelId, base: base)
-
+    @Test func mlxNeedsWeightsConfigAndVocabulary() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
         touch(directory.appendingPathComponent("model.safetensors"))
+        touch(directory.appendingPathComponent("config.json"))
+        #expect(!Qwen3ASRModelStore.isComplete(directory, backend: .mlx))
         touch(directory.appendingPathComponent("vocab.json"))
-        // An interrupted download leaves the same files behind.
-        #expect(Qwen3ASRModelStore.isModelDownloaded(backend: .mlx, base: base) == false)
-
-        touch(Qwen3ASRModelStore.readyMarkerURL(for: .mlx, base: base))
-        #expect(Qwen3ASRModelStore.isModelDownloaded(backend: .mlx, base: base) == true)
-        // One backend's download says nothing about the other's.
-        #expect(Qwen3ASRModelStore.isModelDownloaded(backend: .coreML, base: base) == false)
+        #expect(Qwen3ASRModelStore.isComplete(directory, backend: .mlx))
+        // The MLX weights say nothing about the CoreML models.
+        #expect(!Qwen3ASRModelStore.isComplete(directory, backend: .coreML))
     }
 
-    @Test func coreMLDownloadNeedsEveryModelBundleAndTheTokenizer() throws {
-        let base = try makeBase()
-        defer { try? FileManager.default.removeItem(at: base) }
-        let directory = try Qwen3ASRModelStore.repositoryDirectory(for: Qwen3ASRDefaults.coreMLModelId, base: base)
-        let tokenizer = try Qwen3ASRModelStore.repositoryDirectory(for: Qwen3ASRDefaults.mlxModelId, base: base)
-        touch(Qwen3ASRModelStore.readyMarkerURL(for: .coreML, base: base))
-        touch(tokenizer.appendingPathComponent("vocab.json"))
-
+    @Test func coreMLNeedsEveryModelBundle() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        touch(directory.appendingPathComponent("config.json"))
+        touch(directory.appendingPathComponent("vocab.json"))
         for bundle in Qwen3ASRDefaults.coreMLBundles.dropLast() {
             try FileManager.default.createDirectory(
                 at: directory.appendingPathComponent(bundle), withIntermediateDirectories: true)
         }
-        #expect(Qwen3ASRModelStore.isModelDownloaded(backend: .coreML, base: base) == false)
-
+        #expect(!Qwen3ASRModelStore.isComplete(directory, backend: .coreML))
         try FileManager.default.createDirectory(
             at: directory.appendingPathComponent(Qwen3ASRDefaults.coreMLBundles.last!), withIntermediateDirectories: true)
-        #expect(Qwen3ASRModelStore.isModelDownloaded(backend: .coreML, base: base) == true)
+        #expect(Qwen3ASRModelStore.isComplete(directory, backend: .coreML))
+    }
+
+    /// The model ships in the app's resources, filled by a build phase.
+    @Test func theAppBundlesTheModelForThisPlatform() throws {
+        let directory = try #require(Qwen3ASRModelStore.defaultModelDirectory())
+        #expect(directory.lastPathComponent == Qwen3ASRModelStore.bundledDirectoryName)
+        #expect(Qwen3ASRModelStore.isComplete(directory, backend: .current))
+    }
+
+    @Test func aMissingModelFailsToLoadWithoutNetwork() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = Qwen3ASRModelStore(backend: .mlx, modelDirectory: directory)
+        await #expect(throws: Qwen3ASRModelStore.StoreError.self) { try await store.prepareModel() }
     }
 }
 
@@ -248,8 +244,8 @@ struct Qwen3CoreMLTokenPickTests {
 struct ModelManagerLoadingTests {
     @Test func loadingReportsProgressAndEndsLoaded() async {
         var states: [ModelState] = []
-        let manager = ModelManager(loader: { _, progress in
-            progress(.downloading, 0.4)
+        let manager = ModelManager(loader: { progress in
+            progress(.loading, 0.4)
             progress(.prewarming, 0.98)
         })
         let observation = manager.$modelState.sink { states.append($0) }
@@ -258,27 +254,26 @@ struct ModelManagerLoadingTests {
         await manager.loadModel()
 
         #expect(manager.isModelLoaded())
-        #expect(manager.isModelDownloaded)
         #expect(manager.loadingProgressValue == 1)
         #expect(manager.currentModelIdentifier() == manager.selectedModel)
-        #expect(states.contains(.downloading) && states.contains(.prewarming))
+        #expect(states.contains(.loading) && states.contains(.prewarming))
     }
 
     @Test func aFailedLoadLeavesTheModelUnloadedWithAMessage() async {
-        struct Offline: LocalizedError { var errorDescription: String? { "offline" } }
-        let manager = ModelManager(loader: { _, _ in throw Offline() })
+        struct Broken: LocalizedError { var errorDescription: String? { "broken" } }
+        let manager = ModelManager(loader: { _ in throw Broken() })
 
         await manager.loadModel()
 
         #expect(!manager.isModelLoaded())
         #expect(manager.modelState == .unloaded)
-        #expect(manager.errorMessage?.contains("offline") == true)
+        #expect(manager.errorMessage?.contains("broken") == true)
         #expect(manager.currentModelIdentifier() == nil)
     }
 
     @Test func concurrentCallersShareOneLoad() async {
         var loads = 0
-        let manager = ModelManager(loader: { _, _ in
+        let manager = ModelManager(loader: { _ in
             loads += 1
             try await Task.sleep(nanoseconds: 50_000_000)
         })
@@ -290,103 +285,30 @@ struct ModelManagerLoadingTests {
         #expect(loads == 1)
         #expect(manager.isModelLoaded())
     }
-
-    @Test func loadStatusTextMapsToAState() {
-        #expect(ModelManager.modelState(forLoadStatus: "Warming up…", wasDownloaded: true) == .prewarming)
-        #expect(ModelManager.modelState(forLoadStatus: "Downloading CoreML encoder...", wasDownloaded: false) == .downloading)
-        // The package says "Downloading" even when it only verifies local files.
-        #expect(ModelManager.modelState(forLoadStatus: "Downloading CoreML encoder...", wasDownloaded: true) == .loading)
-    }
 }
 
-struct RetiredQwenFilesTests {
-    @Test func earlierWeightsAndUnversionedMarkersAreRemoved() throws {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RetiredQwen-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: base) }
-        let old = try Qwen3ASRModelStore.repositoryDirectory(for: "mlx-community/Qwen3-ASR-0.6B-4bit", base: base)
-        let current = try Qwen3ASRModelStore.repositoryDirectory(for: Qwen3ASRDefaults.mlxModelId, base: base)
-        FileManager.default.createFile(atPath: base.appendingPathComponent(".ready-mlx").path, contents: nil)
-        let marker = Qwen3ASRModelStore.readyMarkerURL(for: .mlx, base: base)
-        FileManager.default.createFile(atPath: marker.path, contents: nil)
-
-        Qwen3ASRModelStore.removeRetiredFiles(base: base)
-
-        #expect(!FileManager.default.fileExists(atPath: old.path))
-        #expect(!FileManager.default.fileExists(atPath: base.appendingPathComponent(".ready-mlx").path))
-        #expect(FileManager.default.fileExists(atPath: current.path))
-        #expect(FileManager.default.fileExists(atPath: marker.path))
-    }
-}
-
-struct RetiredWhisperModelsTests {
-    @Test func downloadedWhisperFilesAreRemoved() throws {
-        let documents = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RetiredWhisper-\(UUID().uuidString)", isDirectory: true)
-        let model = documents.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/openai_whisper-small")
-        try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
+struct RetiredModelFilesTests {
+    @Test func downloadedModelsAreRemovedAndRecordingsKept() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RetiredModels-\(UUID().uuidString)", isDirectory: true)
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        let support = root.appendingPathComponent("Application Support", isDirectory: true)
+        let whisper = documents.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/openai_whisper-small")
+        let qwen = support.appendingPathComponent("Qwen3ASR/models/mlx-community/Qwen3-ASR-0.6B-8bit")
+        try FileManager.default.createDirectory(at: whisper, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: qwen, withIntermediateDirectories: true)
         let recording = documents.appendingPathComponent("recording.m4a")
         FileManager.default.createFile(atPath: recording.path, contents: Data())
-        defer { try? FileManager.default.removeItem(at: documents) }
+        let store = support.appendingPathComponent("default.store")
+        FileManager.default.createFile(atPath: store.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: root) }
 
-        RetiredWhisperModels.removeDownloadedFiles(documentsDirectory: documents)
+        RetiredModelFiles.remove(documentsDirectory: documents, applicationSupportDirectory: support)
 
         #expect(!FileManager.default.fileExists(atPath: documents.appendingPathComponent("huggingface").path))
+        #expect(!FileManager.default.fileExists(atPath: support.appendingPathComponent("Qwen3ASR").path))
         #expect(FileManager.default.fileExists(atPath: recording.path))
-    }
-}
-
-@MainActor
-struct CellularDownloadTests {
-    private final class Counter { var loads = 0 }
-
-    private func makeManager(expensive: Bool, counter: Counter) -> ModelManager {
-        ModelManager(loader: { _, _ in counter.loads += 1 }, isExpensiveNetwork: { expensive })
-    }
-
-    @Test func aDownloadOnCellularWaitsForApproval() async {
-        let counter = Counter()
-        let manager = makeManager(expensive: true, counter: counter)
-        await manager.loadModel()
-        #expect(counter.loads == 0)
-        #expect(manager.awaitingCellularApproval)
-        #expect(!manager.isModelLoaded())
-
-        await manager.approveCellularDownload()
-        #expect(counter.loads == 1)
-        #expect(!manager.awaitingCellularApproval)
-        #expect(manager.isModelLoaded())
-    }
-
-    @Test func choosingToWaitStopsFurtherPrompts() async {
-        let counter = Counter()
-        let manager = makeManager(expensive: true, counter: counter)
-        await manager.loadModel()
-        manager.waitForInexpensiveNetwork()
-        // Later automatic attempts stay quiet instead of asking again.
-        await manager.loadModel()
-        #expect(!manager.awaitingCellularApproval)
-        #expect(counter.loads == 0)
-    }
-
-    @Test func leavingCellularResumesAWaitingDownload() async {
-        var expensive = true
-        let counter = Counter()
-        let manager = ModelManager(loader: { _, _ in counter.loads += 1 }, isExpensiveNetwork: { expensive })
-        await manager.loadModel()
-        manager.waitForInexpensiveNetwork()
-        expensive = false
-        await manager.networkBecameInexpensive()
-        #expect(counter.loads == 1)
-        #expect(manager.isModelLoaded())
-    }
-
-    @Test func nothingIsAskedOnWiFi() async {
-        let counter = Counter()
-        let manager = makeManager(expensive: false, counter: counter)
-        await manager.loadModel()
-        #expect(counter.loads == 1)
-        #expect(!manager.awaitingCellularApproval)
+        #expect(FileManager.default.fileExists(atPath: store.path))
     }
 }
 

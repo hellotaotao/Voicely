@@ -6,13 +6,11 @@
 //
 
 import Foundation
-import Network
 import SwiftUI
 
 enum ModelState: CustomStringConvertible {
     case unloaded
     case loading
-    case downloading
     case prewarming
     case loaded
 
@@ -22,8 +20,6 @@ enum ModelState: CustomStringConvertible {
             return "Not Loaded"
         case .loading:
             return "Loading..."
-        case .downloading:
-            return "Downloading..."
         case .prewarming:
             return "Optimizing..."
         case .loaded:
@@ -32,13 +28,13 @@ enum ModelState: CustomStringConvertible {
     }
 }
 
-/// Downloads, loads and deletes the Qwen3-ASR model and publishes its state to
-/// the UI. There is one model per device, picked by `Qwen3Backend`.
+/// Loads the Qwen3-ASR model that ships inside the app and publishes its
+/// state to the UI. There is one model per device, picked by `Qwen3Backend`.
 @MainActor
 class ModelManager: ObservableObject {
     typealias LoadProgress = @MainActor @Sendable (ModelState, Float) -> Void
-    /// Loads the model, downloading it first when `allowDownload` is set.
-    typealias Loader = @MainActor (_ allowDownload: Bool, _ progress: @escaping LoadProgress) async throws -> Void
+    /// Loads the model, reporting progress as it goes.
+    typealias Loader = @MainActor (_ progress: @escaping LoadProgress) async throws -> Void
 
     @Published var modelState: ModelState = .unloaded {
         didSet {
@@ -49,13 +45,6 @@ class ModelManager: ObservableObject {
     }
     @Published var loadingProgressValue: Float = 0.0
     @Published var errorMessage: String?
-    @Published private(set) var isModelDownloaded: Bool
-    @Published private(set) var isDeletingModel = false
-    /// An automatic download was held back because the connection is
-    /// cellular (or a personal hotspot); the UI asks before spending ~1 GB.
-    @Published private(set) var awaitingCellularApproval = false
-    /// The user chose to wait; the download starts once off cellular.
-    private(set) var isWaitingForInexpensiveNetwork = false
 
     let backend: Qwen3Backend
     /// The model this device runs. Kept as a property because notes record it.
@@ -66,56 +55,28 @@ class ModelManager: ObservableObject {
 
     private let store: Qwen3ASRModelStore
     private let injectedLoader: Loader?
-    private let isExpensiveNetwork: () async -> Bool
     private var activeLoad: Task<Void, Never>?
 
     init(
         backend: Qwen3Backend = .current,
         store: Qwen3ASRModelStore = .shared,
-        loader: Loader? = nil,
-        isExpensiveNetwork: (() async -> Bool)? = nil
+        loader: Loader? = nil
     ) {
         self.backend = backend
         self.store = store
         injectedLoader = loader
-        self.isExpensiveNetwork = isExpensiveNetwork ?? { await NetworkCostMonitor.shared.isExpensive() }
-        isModelDownloaded = loader == nil && Qwen3ASRModelStore.isModelDownloaded(backend: backend)
-        if isExpensiveNetwork == nil {
-            NetworkCostMonitor.shared.onBecameInexpensive = { [weak self] in
-                Task { @MainActor in await self?.networkBecameInexpensive() }
-            }
-        }
     }
 
-    /// Loads the model into memory, downloading it first if it isn't on disk.
-    /// Concurrent callers share one load. A download on a cellular connection
-    /// waits for `approveCellularDownload()` unless the user already asked for
-    /// it (`userConfirmedCellular`).
-    func loadModel(userConfirmedCellular: Bool = false) async {
+    /// Loads the model into memory. Concurrent callers share one load.
+    func loadModel() async {
         if let activeLoad {
             await activeLoad.value
-            return
-        }
-        if !isModelDownloaded, !userConfirmedCellular, await isExpensiveNetwork() {
-            if !isWaitingForInexpensiveNetwork { awaitingCellularApproval = true }
-            return
-        }
-        // Another caller may have started the load while this one checked
-        // the network.
-        if let activeLoad {
-            await activeLoad.value
-            return
-        }
-        awaitingCellularApproval = false
-        isWaitingForInexpensiveNetwork = false
-        guard !isDeletingModel else {
-            errorMessage = "Cannot load the model while its files are being deleted. Please try again when deletion finishes."
             return
         }
         guard modelState != .loaded else { return }
 
         errorMessage = nil
-        modelState = isModelDownloaded ? .loading : .downloading
+        modelState = .loading
         loadingProgressValue = 0
         let task = Task { [weak self] in
             guard let self else { return }
@@ -126,11 +87,13 @@ class ModelManager: ObservableObject {
             }
             do {
                 if let injectedLoader = self.injectedLoader {
-                    try await injectedLoader(true, progress)
+                    try await injectedLoader(progress)
                 } else {
-                    try await self.performLoad(progress: progress)
+                    try await self.store.prepareModel { fraction, status in
+                        let state: ModelState = status.localizedCaseInsensitiveContains("warming") ? .prewarming : .loading
+                        Task { @MainActor in progress(state, Float(fraction)) }
+                    }
                 }
-                self.isModelDownloaded = true
                 self.loadingProgressValue = 1
                 self.modelState = .loaded
             } catch {
@@ -145,76 +108,12 @@ class ModelManager: ObservableObject {
         await task.value
     }
 
-    /// The user agreed to download over cellular.
-    func approveCellularDownload() async {
-        awaitingCellularApproval = false
-        await loadModel(userConfirmedCellular: true)
-    }
-
-    /// The user would rather wait for Wi-Fi; the download starts by itself then.
-    func waitForInexpensiveNetwork() {
-        awaitingCellularApproval = false
-        isWaitingForInexpensiveNetwork = true
-    }
-
-    /// Called when the connection stops being cellular.
-    func networkBecameInexpensive() async {
-        guard isWaitingForInexpensiveNetwork || awaitingCellularApproval else { return }
-        await loadModel()
-    }
-
-    private func performLoad(progress: @escaping LoadProgress) async throws {
-        let wasDownloaded = isModelDownloaded
-        let report: Qwen3ASRModelStore.ProgressHandler = { fraction, status in
-            let state = Self.modelState(forLoadStatus: status, wasDownloaded: wasDownloaded)
-            Task { @MainActor in progress(state, Float(fraction)) }
-        }
-        if wasDownloaded {
-            // A model already on disk must load without the network, or the
-            // app could not transcribe offline.
-            do {
-                try await store.prepareDownloadedModel(progressHandler: report)
-                return
-            } catch {
-                print("⚠️ Downloaded model failed to load, fetching it again: \(error)")
-            }
-        }
-        try await store.downloadAndLoadModel(progressHandler: report)
-    }
-
-    /// The package reports progress as a fraction plus a free-form status line.
-    nonisolated static func modelState(forLoadStatus status: String, wasDownloaded: Bool) -> ModelState {
-        if status.localizedCaseInsensitiveContains("warming") { return .prewarming }
-        if !wasDownloaded, status.localizedCaseInsensitiveContains("download") { return .downloading }
-        return wasDownloaded ? .loading : .downloading
-    }
-
-    func deleteModel() async {
-        guard activeLoad == nil else {
-            errorMessage = "The model is still loading. Please try deleting it again when loading finishes."
-            return
-        }
-        guard !isDeletingModel, isModelDownloaded else { return }
-
-        errorMessage = nil
-        isDeletingModel = true
-        defer { isDeletingModel = false }
-        do {
-            try await store.deleteDownloadedModel()
-            isModelDownloaded = false
-            modelState = .unloaded
-            loadingProgressValue = 0
-        } catch {
-            errorMessage = "Failed to delete model: \(error.localizedDescription)"
-        }
-    }
-
     func currentModelIdentifier() -> String? {
         isModelLoaded() ? selectedModel : nil
     }
 
     func isModelLoaded() -> Bool {
-        !isDeletingModel && modelState == .loaded
+        modelState == .loaded
     }
 
     /// Display name for a model identifier stored on a note. Notes transcribed
@@ -246,64 +145,25 @@ class ModelManager: ObservableObject {
     }
 }
 
-// MARK: - Network cost
+// MARK: - Retired model files
 
-/// Whether the current connection is metered: cellular, or a Mac or iPad on
-/// a phone's personal hotspot.
-final class NetworkCostMonitor: @unchecked Sendable {
-    static let shared = NetworkCostMonitor()
-
-    private let monitor = NWPathMonitor()
-    private let lock = NSLock()
-    private var expensive = false
-    private var hasPath = false
-    private var onInexpensive: (@Sendable () -> Void)?
-
-    /// Waits briefly for the first path report, which arrives asynchronously
-    /// after launch; before it the answer would always be "not expensive".
-    func isExpensive() async -> Bool {
-        for _ in 0..<20 where !lock.withLock({ hasPath }) {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        return lock.withLock { expensive }
-    }
-
-    /// Runs when the connection goes from metered to unmetered.
-    var onBecameInexpensive: (@Sendable () -> Void)? {
-        get { lock.withLock { onInexpensive } }
-        set { lock.withLock { onInexpensive = newValue } }
-    }
-
-    private init() {
-        monitor.pathUpdateHandler = { [weak self] path in
-            guard let self else { return }
-            let nowExpensive = path.status == .satisfied && path.isExpensive
-            let (wasExpensive, callback) = self.lock.withLock { () -> (Bool, (@Sendable () -> Void)?) in
-                let previous = self.expensive
-                self.expensive = nowExpensive
-                self.hasPath = true
-                return (previous, self.onInexpensive)
-            }
-            if wasExpensive, !nowExpensive, path.status == .satisfied { callback?() }
-        }
-        monitor.start(queue: DispatchQueue(label: "com.hellotaotao.Voicely.network-cost"))
-    }
-}
-
-// MARK: - Retired Whisper models
-
-enum RetiredWhisperModels {
-    /// Whisper models downloaded by earlier versions, roughly 0.2–1.6 GB each.
-    /// Nothing reads them any more.
-    nonisolated static func removeDownloadedFiles(
+enum RetiredModelFiles {
+    /// Models earlier versions downloaded and nothing reads any more: Whisper's
+    /// under Documents/huggingface (0.2–1.6 GB each) and Qwen3's under
+    /// Application Support/Qwen3ASR (about 1 GB), now that the model ships in
+    /// the app.
+    nonisolated static func remove(
         documentsDirectory: URL? = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+        applicationSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
         fileManager: FileManager = .default
     ) {
-        // WhisperKit kept its models and tokenizers under Documents/huggingface;
-        // Qwen3 lives in Application Support.
-        guard let root = documentsDirectory?.appendingPathComponent("huggingface", isDirectory: true),
-              fileManager.fileExists(atPath: root.path) else { return }
-        try? fileManager.removeItem(at: root)
+        let retired = [
+            documentsDirectory?.appendingPathComponent("huggingface", isDirectory: true),
+            applicationSupportDirectory?.appendingPathComponent("Qwen3ASR", isDirectory: true),
+        ]
+        for directory in retired.compactMap({ $0 }) where fileManager.fileExists(atPath: directory.path) {
+            try? fileManager.removeItem(at: directory)
+        }
     }
 }
 

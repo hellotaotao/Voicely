@@ -249,7 +249,7 @@ final class RecordingSession: ObservableObject {
 
     private var isModelLoading: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.modelState == .loading || modelManager.modelState == .downloading
+        return modelManager.modelState == .loading
             || modelManager.modelState == .prewarming
     }
 

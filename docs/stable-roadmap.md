@@ -40,12 +40,8 @@
 5. **vendor 裁剪**：`Vendor/speech-swift` 整包先保留，等说话人分离实验结束再定。可删的候选：`StreamingASR`、TTS 目录、音频播放器、WAV 写入等；`Qwen3ASR+Memory.swift`、`ModuleMemory.swift` 必须保留，`CoreMLASRModel.swift` 是 `docs/qwen-replay` 的 CoreML 工具要用的。`StreamingASR` 的对比实验优先级最低。
 
 **发布前专项（iPhone）**
-5a. **模型改由苹果托管下发（Background Assets）**，要排在第 6 项之前：真机验收应该在新的下发方式上做。现在模型在首次启动时从 Hugging Face 下载，**中国大陆连不上**，而 Voicely 从未正式上架，首次公开发布前必须解决。方案：模型做成 essential 资源包，随 app 安装一起下载，版本独立于 app，app 升级不重下；iOS 包放 CoreML 模型（约 0.95 GB），Mac 包放 MLX 8-bit（约 1.0 GB）；托管容量 200 GB，TestFlight 内部测试可用。代价：最低版本升到 iOS 26 / macOS 26（2026-10-15 用户同意，老设备不再支持）。原型验证进展（2026-10-22，查 Xcode 27 SDK 与工具）：
-  - ✅ **文件夹路径**：`AssetPackManager.url(for:)` 明确支持返回目录和包（含 `.mlmodelc`），多个资源包里同一路径的内容会合并成一个视图；返回的 URL 不能跨进程保存，每次启动重新取。MLX 的权重目录同理。
-  - ✅ **清单写法**：`xcrun ba-package template` 生成清单；`essential` 配 `firstInstallation` + `subsequentUpdate`，平台字段可选 iOS / macOS / tvOS / visionOS，没有单独的 Mac Catalyst。
-  - ✅ **扩展与配置**：需要一个实现 `ManagedDownloaderExtension` 的下载扩展（默认实现即可），app 与扩展同属一个 App Group，主 app 的 Info.plist 加 `BAAppGroupID`、`BAHasManagedAssetPacks`、`BAUsesAppleHosting`。头文件对 Mac Catalyst 没有标不可用。
-  - ⬜ **Mac Catalyst 拿到哪个平台的包**：SDK 和文档都没写，只能实测：上传两个只含标记文件的小资源包（一个 iOS、一个 macOS），用 TestFlight 版看 Mac 上收到哪个。上传要用 Transporter 登录用户的账号，需要用户操作。
-  - ⬜ **本地测试**：`xcrun ba-serve` 需要一个设备信任的 HTTPS 证书，也就是先建自签根证书并在系统钥匙串里设为信任，这一步要用户操作；macOS 上再用 `xcrun ba-serve url-override` 指向它。日常开发不依赖它：Debug 版直接读本地模型目录即可。完成后，现有的 Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮一并删除。
+5a. ✅ **模型随 app 安装**（2026-10-25）：不再从 Hugging Face 下载（中国大陆连不上）。`scripts/fetch-speech-models.sh` 按固定版本把模型放到不进 git 的 `Models/`，构建阶段"Embed Speech Model"把它拷进 app 的 `SpeechModel/`：Mac 包带 MLX 8-bit（约 1.0 GB），iPhone/iPad 包带 CoreML（902 MB，Release 包共 961 MB）。启动直接从安装包离线加载；Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮已删除；以前下载到 Application Support/Qwen3ASR 的模型在启动时清掉。`VOICELY_MODEL_DIRECTORY` 可让测试或回放改读别的目录（如在 Mac 上跑 CoreML 后端）。
+   - **苹果托管（Background Assets）暂缓**：对用户没有区别（essential 资源包同样在安装时下完），好处主要是上传 TestFlight 不必每次带模型。等要加第二个模型（如 Parakeet）、需要按需或预取下载时再评估。2026-10-22 已查明：`AssetPackManager.url(for:)` 支持返回目录（含 `.mlmodelc`）；要加 `ManagedDownloaderExtension` 下载扩展、App Group 和三个 Info.plist 键；Mac Catalyst 收哪个平台的包未知，需上传标记资源包实测；最低版本要升到 iOS 26 / macOS 26，只会失去 iPhone XS/XS Max/XR，它们按算力推算本来也跑不动。
 6. 千问 CoreML 路径的真机验收：前台、锁屏、内存、后台进度上报。同一轮验 ③ 定时停止：锁屏时一秒一次的计时检查是否照常运行、到点能否停止并保存；锁屏通知上的"延长 10/30 分钟""立即停止"按钮；Live Activity 副标题显示"Stops at"。
 7. CoreML 在白噪声上会编出整句话，确认真实环境噪声都落在门控"确定静音"那一档（P-0o）。
 8. 上架文档按千问重写（P-0n）。
@@ -136,9 +132,9 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 2026-10-17 已合入 `dev`，之后在 `dev` 上开发。按 Mac 优先的开发规则，下面的 iPhone 项不再阻塞合并，改为发布前专项验收：
 
 - **iPhone 真机**：前台和锁屏各录一条并转完。CoreML 路径从未在真机上跑过。
-- **模型下载路径**没有实跑（测试用的是本机已有的权重）。计划改为苹果托管下发（见"发布前专项"5a），届时这条和下面的蜂窝网络确认一起作废。
+- ~~**模型下载路径**没有实跑~~ 已作废：2026-10-25 起模型随 app 安装，不再下载（见"发布前专项"5a）。
 - ~~完整流程的 29 s 实跑~~ 2026-10-15 已在 Mac 上完成（Debug，两个后端）：`VOICELY_SLICE_LIMITS=production`（加 `VOICELY_BACKEND=coreML` 可强制 iPhone 的后端）下跑 `RealRecordingReplayTests`（15 分钟中文辩论赛，边录边转加停止收尾）和 `SavedAudioReplayTests`（10 分钟英文会议，重新转录）。MLX 与 CoreML 都全部转出：40 / 41 片、无占位符，注入的 3 处和全部 40 处录音中失败都在收尾时原位补齐；重转 27 片、1 片静音。CoreML 重转时进度上报最长间隔 12.8 s（Debug），iPhone 上会更长，需真机确认不超过系统约 30 s 的容忍度。
-- **蜂窝网络下载确认**（2026-10-15 已实现）：模型未下载且连接是蜂窝或个人热点时，自动下载改为弹窗询问；选"等 Wi-Fi"后不再追问，离开蜂窝网络时自动开始。
+- ~~**蜂窝网络下载确认**~~（2026-10-15 实现，2026-10-25 随下载一起删除）：模型未下载且连接是蜂窝或个人热点时，自动下载改为弹窗询问；选"等 Wi-Fi"后不再追问，离开蜂窝网络时自动开始。
 - **语言旧值迁移**（2026-10-15 已实现）：启动时把千问不支持的旧语言设置改回自动识别。
 - **语言设置**（2026-10-15）：默认自动识别。实测中文夹英文的录音，自动与指定中文结果几乎相同、英文都保留；指定英文会让中文大段丢失或被译成英文。指定语言的选项移到设置页"Advanced"区；一旦指定，主界面录音按钮旁改为橙色显示"Language set to 某语言"，避免忘记。
 - **重转显示与失败尝试**（2026-10-15）：重转中默认显示新转出的文字，可切回当前正文；正文只在成功后替换。失败尝试每条笔记只保留最近一次，入口放在"重新转录未完成"的提示下。

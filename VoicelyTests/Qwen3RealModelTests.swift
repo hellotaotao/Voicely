@@ -9,15 +9,16 @@ import MLX
 import Testing
 @testable import Voicely
 
-/// Input for the real-model check: place the weights and a recording at
-/// `directory` (inside the test host's container) to enable it.
-///   base/models/<org>/<name>/…   both repositories, Hub layout
-///   audio.caf                    any recording AVAudioFile can read
-///   expected.txt                 optional phrase the transcript must contain
+/// Input for the real-model check: place a recording at `directory` (inside
+/// the test host's container) to enable it. The backend the app bundles is
+/// read from the app; the other one needs its folder here.
+///   audio.caf      any recording AVAudioFile can read
+///   expected.txt   optional phrase the transcript must contain
+///   mlx/, coreML/  the other backend's model folder, as in Models/ from
+///                  scripts/fetch-speech-models.sh
 enum Qwen3RealModelInput {
     static let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("voicely-qwen-real", isDirectory: true)
-    static let base = directory.appendingPathComponent("base", isDirectory: true)
     static let audioURL = directory.appendingPathComponent("audio.caf")
     static var isConfigured: Bool { FileManager.default.fileExists(atPath: audioURL.path) }
 }
@@ -29,15 +30,15 @@ enum Qwen3RealModelInput {
 struct Qwen3RealModelTests {
     @Test(arguments: [Qwen3Backend.mlx, .coreML])
     func transcribesARealRecording(backend: Qwen3Backend) async throws {
-        let base = Qwen3RealModelInput.base
-        FileManager.default.createFile(
-            atPath: Qwen3ASRModelStore.readyMarkerURL(for: backend, base: base).path, contents: nil)
-        try #require(Qwen3ASRModelStore.isModelDownloaded(backend: backend, base: base),
-                     "Weights for \(backend.rawValue) are missing under \(base.path)")
+        let bundled = Qwen3ASRModelStore.defaultModelDirectory()
+        let directory = bundled.flatMap { Qwen3ASRModelStore.isComplete($0, backend: backend) ? $0 : nil }
+            ?? Qwen3RealModelInput.directory.appendingPathComponent(backend.rawValue, isDirectory: true)
+        try #require(Qwen3ASRModelStore.isComplete(directory, backend: backend),
+                     "The \(backend.rawValue) model is missing from \(directory.path)")
 
-        let store = Qwen3ASRModelStore(backend: backend, baseDirectory: base)
+        let store = Qwen3ASRModelStore(backend: backend, modelDirectory: directory)
         let loadStart = ProcessInfo.processInfo.systemUptime
-        try await store.prepareDownloadedModel()
+        try await store.prepareModel()
         let loadSeconds = ProcessInfo.processInfo.systemUptime - loadStart
 
         let samples = try Qwen3AudioPCM.loadPCM16kMono(url: Qwen3RealModelInput.audioURL)

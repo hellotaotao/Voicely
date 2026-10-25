@@ -1423,7 +1423,7 @@ private extension TranscriptionService {
                 offset = end
                 updateProgressOnMain(0.1 + 0.9 * Float(offset) / Float(samples.count))
             }
-        } catch Qwen3ASRModelStore.StoreError.modelNotDownloaded {
+        } catch is Qwen3ASRModelStore.StoreError {
             currentEngine = .notAvailable
             return .modelUnavailable
         } catch {

@@ -19,7 +19,6 @@ struct LanguageConstants {
 
 struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
-    @State private var showingModelDeletion = false
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @Environment(\.dismiss) private var dismiss
 
@@ -70,26 +69,6 @@ struct SettingsView: View {
             }
         }
         .tint(VoicelyTheme.accent)
-        .alert(
-            "Download Over Cellular?",
-            isPresented: Binding(
-                get: { modelManager.awaitingCellularApproval },
-                set: { isPresented in
-                    if !isPresented, modelManager.awaitingCellularApproval {
-                        modelManager.waitForInexpensiveNetwork()
-                    }
-                }
-            )
-        ) {
-            Button("Download Now") {
-                Task { await modelManager.approveCellularDownload() }
-            }
-            Button("Wait for Wi-Fi", role: .cancel) {
-                modelManager.waitForInexpensiveNetwork()
-            }
-        } message: {
-            Text("The speech model is \(modelManager.backend.approximateDownloadSizeText). Download it now, or wait for Wi-Fi and Voicely will start the download by itself.")
-        }
     }
 
     // MARK: - Section shell
@@ -185,12 +164,7 @@ struct SettingsView: View {
         case .loaded:
             return PillBadge(text: "Loaded", systemImage: "checkmark.circle.fill", variant: .success)
         case .unloaded:
-            if modelManager.isModelDownloaded {
-                return PillBadge(text: "Unloaded", systemImage: "circle", variant: .neutral)
-            }
-            return PillBadge(text: "Not downloaded", systemImage: "arrow.down.circle", variant: .info)
-        case .downloading:
-            return PillBadge(text: "Downloading", systemImage: "arrow.down.circle", variant: .info)
+            return PillBadge(text: "Unloaded", systemImage: "circle", variant: .neutral)
         case .prewarming:
             return PillBadge(text: "Warming up", systemImage: "flame", variant: .warning)
         default:
@@ -200,58 +174,30 @@ struct SettingsView: View {
 
     private var progressStatusText: String {
         switch modelManager.modelState {
-        case .downloading: return "Downloading"
         case .prewarming:  return "Optimizing for device"
         default:           return "Loading"
         }
     }
 
+    /// The model ships with the app, so the only action left is loading it
+    /// again after a failure.
+    @ViewBuilder
     private var modelActionButtons: some View {
-        VStack(spacing: 10) {
-            if modelManager.modelState == .unloaded {
-                Button {
-                    Task { await modelManager.loadModel() }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: modelManager.isModelDownloaded ? "bolt.fill" : "arrow.down.circle.fill")
-                        Text(modelManager.isModelDownloaded
-                             ? "Load Model"
-                             : "Download Model (\(modelManager.backend.approximateDownloadSizeText))")
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 42)
-                    .background(VoicelyTheme.accent, in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
-                    .foregroundStyle(.white)
+        if modelManager.modelState == .unloaded {
+            Button {
+                Task { await modelManager.loadModel() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "bolt.fill")
+                    Text("Load Model")
                 }
-                .buttonStyle(.plain)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 42)
+                .background(VoicelyTheme.accent, in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
+                .foregroundStyle(.white)
             }
-
-            if modelManager.isModelDownloaded {
-                Button(role: .destructive) {
-                    showingModelDeletion = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "trash")
-                        Text(modelManager.isDeletingModel ? "Deleting..." : "Delete Downloaded Model")
-                    }
-                    .font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 40)
-                    .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
-                    .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .disabled(modelManager.isDeletingModel)
-        .alert("Delete Model", isPresented: $showingModelDeletion) {
-            Button("Delete", role: .destructive) {
-                Task { await modelManager.deleteModel() }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Are you sure you want to delete the model '\(ModelManager.displayName(for: modelManager.selectedModel))'?")
+            .buttonStyle(.plain)
         }
     }
 

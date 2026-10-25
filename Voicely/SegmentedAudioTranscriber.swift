@@ -30,6 +30,12 @@ final class SegmentedAudioTranscriber {
         }.value
     }
 
+    /// Keeps a listening copy of an imported file and returns its path. Runs once
+    /// the transcript is in; tests replace it.
+    var storeImportedAudio: (URL) async throws -> String = { source in
+        try await ImportedAudioListeningCopy.store(from: source)
+    }
+
     /// When true, the segment loop stops at the next boundary, leaving the
     /// sidecar intact for later resume. Wired to background-time expiration.
     var shouldStopForBackground: () -> Bool = { false }
@@ -148,8 +154,30 @@ final class SegmentedAudioTranscriber {
             }
             return
         }
+        // An import has no audio of its own until now. A copy that fails to
+        // write leaves the note as before: transcript only.
+        if note.audioFilePath.isEmpty {
+            await keepImportedAudio(for: note, from: sourceURL)
+        }
         progressStore.removeWorkingCopy(for: note.id)
         progressStore.delete(for: note.id)
+    }
+
+    private func keepImportedAudio(for note: VoiceNote, from sourceURL: URL) async {
+        let path: String
+        do {
+            path = try await storeImportedAudio(sourceURL)
+        } catch {
+            debugLog("⚠️ [SegmentedAudioTranscriber] Could not keep imported audio: \(error)")
+            return
+        }
+        // The note may have been deleted while the copy was written.
+        guard !transcriptionService.isDiscarded(noteID: note.id) else {
+            _ = CloudStorageManager.shared.deleteFile(at: path)
+            return
+        }
+        note.audioFilePath = path
+        try? note.modelContext?.save()
     }
 
     /// Re-drive imports that have a sidecar and a surviving working copy

@@ -27,6 +27,7 @@ struct SegmentedAudioTranscriberTests {
         var now = Date(timeIntervalSince1970: 10_000)
         service.nowProvider = { now }
         let transcriber = SegmentedAudioTranscriber(transcriptionService: service, progressStore: store)
+        transcriber.storeImportedAudio = SegmentedAudioTestSupport.noListeningCopy
         transcriber.nextCutFrame = { _, _, target in
             now = now.addingTimeInterval(2)
             return target
@@ -60,6 +61,7 @@ struct SegmentedAudioTranscriberTests {
         let service = TranscriptionService()
         let transcriber = SegmentedAudioTranscriber(
             transcriptionService: service, progressStore: SegmentedAudioTestSupport.makeStore())
+        transcriber.storeImportedAudio = SegmentedAudioTestSupport.noListeningCopy
         transcriber.nextCutFrame = { _, _, target in target }
         var calls = 0
         transcriber.transcribeSegmentOutcome = { _ in

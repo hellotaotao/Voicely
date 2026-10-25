@@ -766,12 +766,12 @@ struct ContentView: View {
         var unpublishedWorkingCopy: URL?
         do {
             let title = url.deletingPathExtension().lastPathComponent
-            // Imported audio is transcribed to text only: keep the file name as
-            // the title, leave audioFilePath empty (no player, no iCloud copy).
+            // Keep the file name as the title. audioFilePath stays empty until
+            // the transcript is in; a listening copy is stored then.
             let note = VoiceNote(title: title.isEmpty ? "Imported Audio" : title, audioFilePath: "")
             note.titleWasManuallyEdited = true
 
-            // Copy only to the non-synced working copy — never into the iCloud store.
+            // Transcribe from a non-synced working copy of the original.
             let workingCopy = try await transcriptionService.segmentProgressStore.importWorkingCopyAsync(from: url, for: note.id)
             unpublishedWorkingCopy = workingCopy
             try Task.checkCancellation()

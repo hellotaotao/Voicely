@@ -31,6 +31,12 @@ enum SegmentedAudioTestSupport {
         let transcriber = SegmentedAudioTranscriber(transcriptionService: service ?? TranscriptionService(),
                                                     progressStore: store)
         transcriber.nextCutFrame = { _, _, target in target }   // deterministic 29 s cuts in tests
+        transcriber.storeImportedAudio = noListeningCopy
         return transcriber
     }
+
+    struct ListeningCopySkipped: Error {}
+
+    /// Keeps tests from writing listening copies into the app's audio storage.
+    static let noListeningCopy: (URL) async throws -> String = { _ in throw ListeningCopySkipped() }
 }

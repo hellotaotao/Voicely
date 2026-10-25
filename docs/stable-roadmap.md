@@ -31,10 +31,10 @@
 ### 下一阶段清单（0.26.0 之后，新对话从这里开始）
 
 **新功能**
-1. **说话人分离**：标注材料在本地 `build/speaker-labels/`（6 段、约 16 分钟，按 README 填说话人，目前 0/164 行）。标完后对比 Sortformer（包内自带，最多 4 人，CoreML）、Pyannote + WeSpeaker（包内自带，人数靠聚类，分段只能用 GPU）、Nemotron 3 Diarization（NVIDIA 2026-09，最多 8 人，有约 108 MB 的 CoreML INT8 转换，包内没有运行代码）。评分用标准 DER 工具，不用 vendor 自带的 `computeDERWithOptimalMapping`。
-2. **结构化文字稿**：说话人分离的前置条件。现在 `VoiceNote` 只存纯文本，没有"文字 ↔ 时间"的映射。要设计"时间段 + 文字 + 说话人"的存储、iCloud 同步，以及旧笔记的兼容。词级时间戳可以靠强制对齐模型拿到（约束见记忆与 P-0n：中文 29 s 片约 1/5 超出 768 token，词的结束时间不可靠）。
+1. **结构化文字稿**：说话人分离的前置条件，所以排在前面。起步时保存现有切片的时间范围即可，不必先做词级对齐。现在 `VoiceNote` 只存纯文本，没有"文字 ↔ 时间"的映射。要设计"时间段 + 文字 + 说话人"的存储、iCloud 同步，以及旧笔记的兼容。词级时间戳可以靠强制对齐模型拿到（约束见记忆与 P-0n：中文 29 s 片约 1/5 超出 768 token，词的结束时间不可靠）。
+2. **说话人分离**（在第 1 项之后做产品实现，标注和模型对比可以先做）：标注材料在本地 `build/speaker-labels/`（6 段、约 16 分钟，按 README 填说话人，目前 0/164 行）。标完后对比 Sortformer（包内自带，最多 4 人，CoreML）、Pyannote + WeSpeaker（包内自带，人数靠聚类，分段只能用 GPU）、Nemotron 3 Diarization（NVIDIA 2026-09，最多 8 人，有约 108 MB 的 CoreML INT8 转换，包内没有运行代码）。评分用标准 DER 工具，不用 vendor 自带的 `computeDERWithOptimalMapping`。
 3. ~~**③ 定时停止与延长**~~：✅ 2026-10-20 实现，Mac 实测通过（见 ③ 详情）；iPhone 部分并入下面第 6 项。
-3a. **英文录音改用 Parakeet 整条重转**（候选，未决定上线）：2026-10-19 在 Mac M4 上用 6 条真实英文录音（共 72 分钟，会议和讲座）对比，Release 构建。速度：Parakeet TDT v2（FluidAudio，神经引擎）约 177× 实时，千问 MLX 约 25×，千问 CoreML 约 7.8×。两个千问后端之间文字差 2.5%，千问与 Parakeet 差 15%（691 处分歧）。抽 40 处判定：Parakeet 对 21、千问对 7、两者等价 9、都错 2、未定 1。千问 MLX 还在一场讲座里凭空插入整句 "Human Rights Watch is an independent human rights organization…"，也丢过一个 "don't" 导致意思反转。方案：不按片段分工（接缝处文风混杂，录音时两个模型要同时驻留内存），按整条录音二选一。录音时照常用千问实时转，停止后**正面确认**整条是英文（千问每片的语言标签都是 English，再加文本兜底），才用 Parakeet 整条重转。上线前必须先测判定的可靠性：在纯英文录音里插入已知长度的中文、德文、西班牙文、日文片段，确认不会误判成纯英文（Parakeet v2 只会英文，误判就会丢掉这些内容）。只看"没有汉字"不够。未测：iPhone 神经引擎上的速度、锁屏。模型约 0.44 GB，交付方式见 5a。工具和数据：`~/Library/Caches/voicely-qwen-bench/en/`。
+3a. **英文录音改用 Parakeet 整条重转**（候选，未决定上线）：2026-10-19 在 Mac M4 上用 6 条真实英文录音（共 72 分钟，会议和讲座）对比，Release 构建。速度：Parakeet TDT v2（FluidAudio，神经引擎）约 177× 实时，千问 MLX 约 25×，千问 CoreML 约 7.8×。两个千问后端之间文字差 2.5%，千问与 Parakeet 差 15%（691 处分歧）。抽 40 处判定：Parakeet 对 21、千问对 7、两者等价 9、都错 2、未定 1。千问 MLX 还在一场讲座里凭空插入整句 "Human Rights Watch is an independent human rights organization…"，也丢过一个 "don't" 导致意思反转。方案：不按片段分工（接缝处文风混杂，录音时两个模型要同时驻留内存），按整条录音二选一。录音时照常用千问实时转，停止后**正面确认**整条是英文（千问每片的语言标签都是 English，再加文本兜底），才用 Parakeet 整条重转。上线前必须先测判定的可靠性：在纯英文录音里插入已知长度的中文、德文、西班牙文、日文片段，确认不会误判成纯英文（Parakeet v2 只会英文，误判就会丢掉这些内容）。插入的位置要覆盖切片内部、切片接缝和很短的句子；统计口径是"含其他语言的录音被误替换了几条"。只看"没有汉字"不够；每片语言标签都是 English 也不能证明片内没有被千问漏掉的其他语言。21:7 只说明值得继续实验，不代表整体错误率。即使最终用 Parakeet，也保留千问那一版作为可恢复的备份。未测：iPhone 神经引擎上的速度、锁屏。模型约 0.44 GB，交付方式见 5a。工具和数据：`~/Library/Caches/voicely-qwen-bench/en/`。
 
 **转写质量**
 4. **接缝处多余的句号**（P-0l）：中文切片 94% 以句号结尾。根治需要知道句子在音频里的起点，暂无方案。
@@ -42,11 +42,16 @@
 
 **发布前专项（iPhone）**
 5a. ✅ **模型随 app 安装**（2026-10-25）：不再从 Hugging Face 下载（中国大陆连不上）。`scripts/fetch-speech-models.sh` 按固定版本把模型放到不进 git 的 `Models/`，构建阶段"Embed Speech Model"把它拷进 app 的 `SpeechModel/`：Mac 包带 MLX 8-bit（约 1.0 GB），iPhone/iPad 包带 CoreML（902 MB，Release 包共 961 MB）。启动直接从安装包离线加载；Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮已删除；以前下载到 Application Support/Qwen3ASR 的模型在启动时清掉。`VOICELY_MODEL_DIRECTORY` 可让测试或回放改读别的目录（如在 Mac 上跑 CoreML 后端）。
-   - **苹果托管（Background Assets）暂缓**：对用户没有区别（essential 资源包同样在安装时下完），好处主要是上传 TestFlight 不必每次带模型：带模型后每个包约 1.1 GB，0.28.0 实测每个平台上传约 15.5 分钟，两个平台合计半小时左右。等要加第二个模型（如 Parakeet）、需要按需或预取下载时再评估。2026-10-22 已查明：`AssetPackManager.url(for:)` 支持返回目录（含 `.mlmodelc`）；要加 `ManagedDownloaderExtension` 下载扩展、App Group 和三个 Info.plist 键；Mac Catalyst 收哪个平台的包未知，需上传标记资源包实测；最低版本要升到 iOS 26 / macOS 26，只会失去 iPhone XS/XS Max/XR，它们按算力推算本来也跑不动。
-6. 千问 CoreML 路径的真机验收：前台、锁屏、内存、后台进度上报。同一轮验 ③ 定时停止：锁屏时一秒一次的计时检查是否照常运行、到点能否停止并保存；锁屏通知上的"延长 10/30 分钟""立即停止"按钮；Live Activity 副标题显示"Stops at"。
-7. CoreML 在白噪声上会编出整句话，确认真实环境噪声都落在门控"确定静音"那一档（P-0o）。
+   - **苹果托管（Background Assets）暂缓**：对用户没有区别（essential 资源包同样在安装时下完），好处主要是上传 TestFlight 不必每次带模型：带模型后每个包约 1.1 GB，0.28.0 实测每个平台上传约 15.5 分钟，两个平台合计半小时左右。等要加第二个模型（如 Parakeet）、需要按需或预取下载时再评估。2026-10-22 已查明：`AssetPackManager.url(for:)` 支持返回目录（含 `.mlmodelc`）；要加 `ManagedDownloaderExtension` 下载扩展、App Group 和三个 Info.plist 键；Mac Catalyst 收哪个平台的包未知，需上传标记资源包实测；最低版本要升到 iOS 26 / macOS 26，会失去 iPhone XS/XS Max/XR 和 iPad 第 7 代，以及能升级但还没升级的设备；"这些老设备本来也跑不动"只是按算力推算，未实测。托管的另一个好处是模型能独立于 app 更新，但对现在只有一个模型的首发不构成迁移理由。
+5b. **录音中的原始音频改存持久目录**（数据丢失风险，最优先，全部能在 Mac 上完成）：录音时的 PCM 现在写在 `temporaryDirectory`（`AudioRecordingService.makePCMTemporaryURL`），苹果允许在 app 不运行时清理它，第 9 项的进程被杀恢复就靠读这里的文件。改存到不会被系统清理的本地目录，记录会话与文件的对应关系，确认导出成功、笔记已保存后再删除；验证导出失败时保留原文件、恢复可以重复执行、失败不会留下永远 Queued 的笔记。
+5c. **CoreML 可靠性**（逻辑与回放在 Mac 上做）：
+   - 解码进展只在整片解完后才加一（`TranscriptionService.transcribeWithQwen` 里的 `decodeWorkCounter`）。iOS 约 30 s 收不到进展就判后台任务停滞，手机上一片 29 s 音频若解码超过 30 s，P-0d 的问题会回来。改为在解码循环里按生成的 token 上报真实进展（不用计时器伪造），并覆盖取消和后台过期；用注入的慢片在 Mac 上验证。
+   - 每片记录结束原因（遇到结束符 / 撞到 448 token 上限）、输出 token 数和耗时。撞上限会静默截断（P-0n），目前没有任何记录，不知道真实录音有没有碰到过。
+   - 用正式的 29 s 切片回放长录音、环境噪声、小声短答、语速快的录音。
+6. 千问 CoreML 路径的真机验收：一台最低支持的设备加一台较新的设备；前台、锁屏、内存、后台进度上报；至少一条 60–90 分钟的完整流程，记录加载峰值、后半程速度、最长进度间隔、停止到落定的时间。最低支持 iOS 18，而后台续跑（continued processing）依赖 iOS 26，两条路径分别验。同一轮验 ③ 定时停止：锁屏时一秒一次的计时检查是否照常运行、到点能否停止并保存；锁屏通知上的"延长 10/30 分钟""立即停止"按钮；Live Activity 副标题显示"Stops at"。
+7. 语音门控两个方向都要验（P-0o）：CoreML 在白噪声上会编出整句话，确认真实环境噪声都落在"确定静音"那一档；反过来，小声的短回答（"不行""同意""No"这类决定会议结论的话）不能被当成噪声丢掉。
 8. 上架文档按千问重写（P-0n）。
-9. 录音中被杀进程的恢复（2026-10-21 实现，Mac 单元测试通过）：真机录音中途被杀（崩溃、TestFlight 自动更新、jetsam）时，停止流程没跑，笔记 duration 为 0、`.m4a` 从未导出，以前会在所有设备上永远显示 Queued（10-20 11:16 那条就是这样丢的）。现在启动时 `RecordingSession.recoverInterruptedRecordings` 在 tmp 里按文件名里的开始时间找遗留的 `voicely_rec_*.caf`，找到就按停止时的同一条导出路径转成 `.m4a` 并排队转写；找不到就标为失败，提示 "Recording was interrupted before it was saved."。Mac 上已确认 SIGKILL 后的 CAF 能读出完整时长并导出。真机验收：录音中途从 App 切换器划掉或让 Xcode 停止进程，重新打开后确认这条笔记有音频、时长正确并转写完成；另确认 iOS 在 App 更新或长时间不用后是否还保留 tmp 里的文件（不保留就只会走"标为失败"那条路）。
+9. 录音中被杀进程的恢复（2026-10-21 实现，Mac 单元测试通过）：真机录音中途被杀（崩溃、TestFlight 自动更新、jetsam）时，停止流程没跑，笔记 duration 为 0、`.m4a` 从未导出，以前会在所有设备上永远显示 Queued（10-20 11:16 那条就是这样丢的）。现在启动时 `RecordingSession.recoverInterruptedRecordings` 在 tmp 里按文件名里的开始时间找遗留的 `voicely_rec_*.caf`，找到就按停止时的同一条导出路径转成 `.m4a` 并排队转写；找不到就标为失败，提示 "Recording was interrupted before it was saved."。Mac 上已确认 SIGKILL 后的 CAF 能读出完整时长并导出。真机验收：录音中途从 App 切换器划掉或让 Xcode 停止进程，重新打开后确认这条笔记有音频、时长正确并转写完成；tmp 可能被系统清理的问题由 5b 根治。
 
 **等设备都升级过 0.26.0 后**
 10. 删除 `RetiredWhisperModels` 和千问不支持的旧语言设置迁移（P-0n）。
@@ -65,13 +70,13 @@
 1. 写清一个主要用户收益、范围、排除项、验收条件。
 2. 在 `dev` 上实现明确范围，保留 `old-dev` 作为参考。
 3. 实现与相关回归测试一起完成，不做纯功能半成品合并。
-4. 运行测试、真机验收、上传内部 TestFlight。
+4. 运行测试、Mac 实测、上传内部 TestFlight。iPhone 真机验收是**公开发布**的门槛，集中在"发布前专项"里做，不阻塞日常版本。
 5. 用户实际使用；出现问题优先修复，不夹带新功能。
 6. 当前版本验收通过后，再开始下一主要功能。
 
 ### 不单独扩大发布范围
 
-- Whisper 模型目录先保持基线；新档位单独验证再加入。
+- 引擎只有千问一个；加第二个模型（如 Parakeet）要单独验证，并单独决定交付方式（见"发布前专项"5a）。
 - Mac 麦克风修复按平台处理，不与 iPhone 功能绑定。
 - Live Activity/Shortcut 验收已有行为，不当成新功能重做。
 - 性能问题先测量；优化限定于本版受影响路径。
@@ -123,7 +128,7 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 
 - **后端**：Apple 芯片的 Mac 走 MLX（GPU），其余一律走 CoreML（CPU+神经引擎，锁屏可用）。选择逻辑在 `Qwen3Backend`，模型由 `Qwen3ASRModelStore` 独占。
 - **切片**：两个后端都是单趟 30 s、分段 29 s、VAD 最早切点 15 s（`Qwen3SliceLimits`，依据见 P-0i、P-0j）。单元测试固定按 15 / 14 / 7 s 这组夹具跑。
-- **模型**：MLX 约 1.0 GB（`mlx-community/Qwen3-ASR-0.6B-8bit`，P-0j；旧的 4-bit 在加载成功后自动删除），CoreML 约 0.95 GB（`aufklarer/Qwen3-ASR-CoreML` 的四个 mlmodelc + 分词器）。放在 Application Support/Qwen3ASR，不进备份。已下载的模型离线加载。
+- **模型**：随 app 安装（见"发布前专项"5a）。Mac 带 MLX 8-bit（`mlx-community/Qwen3-ASR-0.6B-8bit`，约 1.0 GB，P-0j），iPhone/iPad 带 CoreML（`aufklarer/Qwen3-ASR-CoreML` 的四个 mlmodelc 加分词器，902 MB）。
 - **CoreML 解码**用的是 P-0h 验证过的 MLX-free 路径（`Qwen3CoreMLModel`），已补重复惩罚 1.15 和每片 `autoreleasepool`。
 - **移除**：模型选择与模型列表页、自定义 prompt、计算单元选项、Benchmark 页、prompt 回声检测、温度重试相关逻辑。语言列表缩到千问支持的 30 种。旧 Whisper 模型文件在启动时清掉（`RetiredWhisperModels`）。
 - **部署目标**：iOS 18.0 / macOS 15.0（包的要求）。构建需要 Xcode 的 Metal Toolchain 组件。
@@ -206,7 +211,9 @@ GPU 配置没有后台 GPU entitlement，保持前台运行并明确提示；默
 
 验收：自动化验证和 archive 记录见 [roadmap-log.md](roadmap-log.md)。真实 iPhone 待验证新包：前台点 Re-transcribe 后锁屏，确认能否在锁屏期间完成；系统中断后解锁，确认从已保存分段继续，完整成功才替换旧稿。
 
-### P-0b 🧪 自定义 prompt 引发的分段失败与收尾卡死（0.23.11）
+### P-0b 自定义 prompt 引发的分段失败与收尾卡死（0.23.11）——已被④取代
+
+> 自定义 prompt 已随 Whisper 删除，下面的验收步骤不再适用，保留作历史记录。
 
 0.23.10 (3) 真机跑长录音暴露的三件事，根因不在收尾逻辑本身：
 
@@ -248,7 +255,9 @@ Suspending ... - required criterion is not satisfied.
 1. 锁屏重转一段 20 分钟以上的录音，看能撑多久。如果仍被收走，再导一次日志，看是不是换成了别的理由（例如热量、时长上限）。
 2. dasd 给这类任务标的是 `UserInitiated, 900s`，是否等于 15 分钟硬上限未确认。锁屏解码大约 0.7× 实时，20 分钟录音要约 28 分钟，可能仍需一次解锁续跑——checkpoint 在，不会从头来。
 
-### P-0d 🧪 同一窗口反复重解时进度停住，任务仍被收走（0.23.11 (2)）
+### P-0d 同一窗口反复重解时进度停住，任务仍被收走（0.23.11 (2)）——Whisper 部分已被④取代
+
+> 温度回退、同一窗口反复重解这些 Whisper 机制已经删除。"一片解码太久、期间没有进展上报，任务被判停滞"这个风险在千问上依然存在，接续到"发布前专项"5c。
 
 0.23.11 (1) 真机：同样锁屏后被收走。设备日志里 dasd 这次**收到过**进度更新（启动后约 17–21 秒），随后 57–86 秒没有下一次，判停滞。两次都发生在 app **仍在前台**时（runningboard 记录一直是 `running-active-Visible`），用户一锁屏（NotVisible）1 秒内即被收走——前台期间 dasd 只记停滞不处置，离开前台才执行。
 
@@ -342,7 +351,7 @@ Codex 审阅（gpt-6.1-sol，high，2026-10-13）另指出并已修：停止时�
 - Mac 上让 CoreML 用 GPU 并不更快（2026-10-14，会议 2 前 30 片，神经引擎基线 6.5×）：`.cpuAndGPU` 只有 2.5× 且 30 片里 10 片文字与神经引擎不同，`.all` 5.3× 且输出逐字相同（系统仍选了神经引擎）。同一块 GPU 上 MLX 是 29×，所以差距来自 CoreML 逐 token 调用的开销，不是硬件。开关是 `COMPUTE_UNITS=all|cpuAndGPU|cpuOnly`。
 - 未做：iPhone 真机（前台与锁屏）、词级时间戳、字错率。
 
-### P-0i 📊 千问切片上限 14 s 对 29 s（2026-10-14，Mac）
+### P-0i 📊 千问切片上限 14 s 对 29 s（2026-10-14，Mac；其中"MLX 保持 14 s"已被 P-0j 取代）
 
 同样三条录音。14 s 切点是把 app 的 29 s 切片按"7–14 s 内 VAD 概率最低处"再细分得到的，29 s 切点就是 app 原来的 Whisper 切片。CoreML 两组都带重复惩罚 1.15。
 
@@ -357,7 +366,7 @@ Codex 审阅（gpt-6.1-sol，high，2026-10-13）另指出并已修：停止时�
 | 切点落在 ≥0.7 s 停顿上：14 s → 29 s | 67% → 85% | 31% → 42% | 76% → 84% |
 
 - **CoreML 用 29 s 全面更好**：更快、没有空片、切点更常落在真停顿上，文字量与 14 s 持平，没有复读和 token 上限截断。与 14 s 的输出按 29 s 片比较，相似度 ≥0.8 的占 100/100、99/115、149/153。
-- **MLX 不能用 29 s**：超过 15 s 时包会自动加 no-repeat 3-gram，会出现单片解码几分钟、输出大小写错乱的乱文；关掉它之后仍有 3/368 片提前结束，只吐出一两句（同一片 CoreML 是完整的），还有一片 85 s。所以 MLX 保持 14 s。
+- **（已被 P-0j 取代：换 8-bit 并关掉长音频 n-gram 后，MLX 也用 29 s）** 当时的结论是 MLX 不能用 29 s：超过 15 s 时包会自动加 no-repeat 3-gram，会出现单片解码几分钟、输出大小写错乱的乱文；关掉它之后仍有 3/368 片提前结束，只吐出一两句（同一片 CoreML 是完整的），还有一片 85 s。所以 MLX 保持 14 s。
 - 重复惩罚在 CoreML 上生效：辩论赛原来的 2 个复读片（最慢 21 s）消失，速度基本不变。
 - 没有人工标准答案，以上都是指标和抽读，不是字错率。
 
@@ -465,7 +474,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 **已随 0.23.9 发出**（`aaf8002`）：`TranscriptionTelemetry` 增加 `processedAudioSeconds` 与区间合并，`SegmentedAudioTranscriber` 接入 `telemetrySession`，遥测快照按 `noteID` 隔离避免串台。
 
-遗留：分段路径（>30 秒，即几乎所有真实录音）转完后不把速度写回 note——`SegmentedAudioTranscriber` 里没有 `recordTranscriptionTelemetry` 调用，re-transcribe 也不清旧统计。结果是长录音重转完成后，速度徽章仍是上一次的数字，模型名却已是新的。
+**原来的遗留已修**（0.27.1，`474ea7d`）：分段转录结束时 `SegmentedAudioTranscriber.persistTelemetry` 把这次的速度和计算设备写回笔记，没转出文字时清掉旧统计。剩下的只是核对：长录音重转、断点续跑后，详情页显示的速度和模型名是否都是这一次的。
 
 ### P-2 ⬜ 转录完成后指标整块消失 → 改为可折叠
 
@@ -489,7 +498,9 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 `AudioRecordingService`、`AudioPlayerService` 已清理干净（0 处裸 `print`）。剩余：`CloudStorageManager` 20 处、`VoicelyApp` 13 处仍未用 `#if DEBUG` 包住。
 
-### P-5 ⬜ English-only 模型的老用户迁移（已知边界，影响面小）
+### P-5 English-only 模型的老用户迁移——已被④取代
+
+> 模型选择已随 Whisper 删除，不存在这个问题；千问不支持的旧语言设置由 `Qwen3ASRDefaults.migrateSelectedLanguage` 处理。
 
 若老用户此前手动选中过 distil 或 medium.en：过滤后 `availableModels` 不再含它，但持久化的 `selectedModel` 仍是该值。`deleteModel` 的自动切换只在用户主动删除模型时触发，不覆盖本场景。后果是当前模型标签仍显示该模型、菜单里选不回去，但**不崩溃**，已下载则仍可转录。
 修法：加载模型列表后检测 `isUnsupportedModel(selectedModel)` 并切回 `platformDefaultModel`。
@@ -526,7 +537,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 ## 六、基线与备份（历史参考）
 
 - 开发分支 `dev`，起点 `6f3681baa2658b1bc774677e421546dee2f10c63`，采用归档后整理的版本配置提交 `6f3681b`。
-- 版本源：`Config/Version.xcconfig`（当前 `0.23.10 (4)`）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
+- 版本源：`Config/Version.xcconfig`（当前版本以该文件为准，0.28.0 起模型随 app 打包）。**只在这里改版本号**，app 与 widget 共用，不要在 Xcode target 里改。
 - `old-dev` 保持在 `dea04f11eacb23e1a6a65e9a90f53ceba1a0afa8`，未重置。旧 dev 的未提交修复保存为 stash，由 `backup/pre-r0-20260907` tag 固定引用；本地备份目录 `build/backups/pre-r0-20260907/`（含 `working-tree.tar.gz`、`manifest.json`、`changes.patch`、`history.bundle`，均已校验）。
 
 恢复旧开发状态（工作区干净时）：

@@ -157,7 +157,7 @@ struct VoicelyApp: App {
             seededNote.duration = durationValue
         }
         if let transcription = environment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION"], !transcription.isEmpty {
-            seededNote.transcription = transcription
+            seededNote.setTranscript(transcription, spans: nil)
             if let modelIdentifier = environment["VOICELY_UI_TEST_NOTE_TRANSCRIPTION_MODEL_IDENTIFIER"], !modelIdentifier.isEmpty {
                 seededNote.transcriptionModelIdentifier = modelIdentifier
             }

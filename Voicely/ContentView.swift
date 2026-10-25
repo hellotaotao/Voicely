@@ -2405,6 +2405,20 @@ struct VoiceNoteDetailView: View {
                 .background(VoicelyTheme.surfaceRaised)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptEditor)
+        } else if shouldShowAudioPlayerCard, let spans = note.transcriptSpans {
+            TappableTranscriptView(
+                text: note.transcription,
+                spans: spans,
+                currentTime: audioPlayer.isPlaying || audioPlayer.currentTime > 0 ? audioPlayer.currentTime : nil,
+                onSeek: { time in
+                    audioPlayer.seek(to: time)
+                    audioPlayer.play()
+                }
+            )
+            // Fill most of the window rather than a fixed box. The text scrolls
+            // inside it, which keeps the playing sentence in view.
+            .containerRelativeFrame(.vertical) { height, _ in max(320, height - 420) }
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             SavedTranscriptText(text: note.transcription)
                 .equatable()
@@ -2436,7 +2450,7 @@ struct VoiceNoteDetailView: View {
             if titleChanged, !editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.titleWasManuallyEdited = true
             }
-            note.transcription = editedTranscription
+            note.applyEditedTranscript(editedTranscription)
             if editedTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.transcriptionModelIdentifier = nil
             }

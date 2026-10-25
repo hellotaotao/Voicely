@@ -130,7 +130,7 @@ final class SegmentedAudioTranscriber {
                 transcriptionService.recordProcessedAudio(start: 0, end: duration, session: session)
             default: break
             }
-            finalizeSinglePass(note: note, outcome: outcome, hadExistingTranscript: hadExistingTranscript)
+            finalizeSinglePass(note: note, outcome: outcome, duration: duration, hadExistingTranscript: hadExistingTranscript)
             if note.transcriptionState != .completed { return }
         } else {
             await transcribeSegmented(note: note, sourceURL: sourceURL, info: info,
@@ -174,7 +174,7 @@ final class SegmentedAudioTranscriber {
 
     // MARK: - Single pass
 
-    private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome, hadExistingTranscript: Bool) {
+    private func finalizeSinglePass(note: VoiceNote, outcome: TranscriptionOutcome, duration: TimeInterval, hadExistingTranscript: Bool) {
         switch outcome {
         case .modelUnavailable, .audioUnavailable, .cancelled:
             pause(note)
@@ -182,7 +182,7 @@ final class SegmentedAudioTranscriber {
         default: break
         }
         if case .transcribed(let result) = outcome {
-            note.transcription = result.text
+            note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(for: result.text, duration: duration))
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             persistTelemetry(on: note)
@@ -203,7 +203,7 @@ final class SegmentedAudioTranscriber {
 
         switch outcome {
         case .noSpeech:
-            note.transcription = ""
+            note.setTranscript("", spans: nil)
             note.completeTranscription()
             note.transcriptionOutcome = .noSpeech
         case .engineError(let diagnostic):
@@ -228,6 +228,8 @@ final class SegmentedAudioTranscriber {
         var start: Int64 = resumed?.lastFrame ?? 0
         var accumulatedText = resumed?.accumulatedText ?? ""
         var pieces: [String] = accumulatedText.isEmpty ? [] : [accumulatedText]
+        var spans = TranscriptSpanBuilder(resumedText: accumulatedText, resumedSpans: resumed?.spans)
+        func seconds(_ frame: Int64) -> TimeInterval { Double(frame) / info.sampleRate }
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         var producedAnyText = !pieces.isEmpty
         var segmentIndex = 0
@@ -271,12 +273,15 @@ final class SegmentedAudioTranscriber {
                 // it as failed instead of silently finishing as noSpeech.
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end,
                                                         reason: "could not read slice"))
-                pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
+                let placeholder = Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate)
+                pieces.append(placeholder)
+                spans.append(placeholder, start: seconds(start), end: seconds(end))
                 start = end
                 accumulatedText = joinTranscriptPieces(pieces)
                 progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                          accumulatedText: accumulatedText,
-                                         failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
+                                         failedRanges: failedRanges, updatedAt: nowProvider(),
+                                         spans: spans.spans), for: noteID)
                 transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
                 continue
             }
@@ -300,6 +305,7 @@ final class SegmentedAudioTranscriber {
             case .transcribed(let result):
                 if let text = IncrementalTranscriptionCoordinator.finalizedSegmentText(result.text) {
                     pieces.append(text)
+                    spans.append(text, start: seconds(start), end: seconds(end))
                 }
                 producedAnyText = true
                 lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
@@ -312,7 +318,9 @@ final class SegmentedAudioTranscriber {
             case .engineError(let diagnostic):
                 failedRanges.append(SegmentFailureRange(startFrame: start, endFrame: end,
                                                         reason: diagnostic))
-                pieces.append(Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate))
+                let placeholder = Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate)
+                pieces.append(placeholder)
+                spans.append(placeholder, start: seconds(start), end: seconds(end))
             }
 
             switch outcome {
@@ -325,7 +333,8 @@ final class SegmentedAudioTranscriber {
             accumulatedText = joinTranscriptPieces(pieces)
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                      accumulatedText: accumulatedText,
-                                     failedRanges: failedRanges, updatedAt: nowProvider()), for: noteID)
+                                     failedRanges: failedRanges, updatedAt: nowProvider(),
+                                     spans: spans.spans), for: noteID)
             transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             reportProgress(Float(start) / Float(info.totalFrames), for: noteID)
@@ -342,7 +351,7 @@ final class SegmentedAudioTranscriber {
             return
         }
 
-        note.transcription = accumulatedText
+        note.setTranscript(accumulatedText, spans: spans.spans)
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
         if producedAnyText {

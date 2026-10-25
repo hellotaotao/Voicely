@@ -39,6 +39,18 @@ final class IncrementalTranscriptionCoordinator {
         slices.compactMap(\.text).joined(separator: "\n")
     }
 
+    /// Where each slice of `accumulatedTranscript` sits in the recording.
+    var accumulatedSpans: [TranscriptSpan]? {
+        var builder = TranscriptSpanBuilder()
+        for slice in slices {
+            guard let text = slice.text else { continue }
+            builder.append(text,
+                           start: Double(slice.startFrame) / recordingSampleRate,
+                           end: Double(slice.endFrame) / recordingSampleRate)
+        }
+        return builder.spans
+    }
+
     /// True when a failed slice could not be decoded at all (no model, unreadable
     /// audio, cancelled), so only the regular queue can recover the recording.
     private(set) var requiresFullTranscription = false

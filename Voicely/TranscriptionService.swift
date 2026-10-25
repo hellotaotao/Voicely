@@ -207,7 +207,7 @@ class TranscriptionService: ObservableObject {
     func configureNewNote(_ note: VoiceNote, shouldStartImmediately: Bool) {
         let now = nowProvider()
         note.transcriptionOriginDeviceID = currentDeviceID
-        note.transcription = ""
+        note.setTranscript("", spans: nil)
         note.lastTranscriptionDuration = 0
         note.transcriptionModelIdentifier = nil
         note.clearTransientTranscriptionFlags()
@@ -1211,7 +1211,7 @@ private extension TranscriptionService {
         switch outcome {
         case .transcribed(let result):
             recordProcessedAudio(start: 0, end: resolvedDuration, session: session)
-            note.transcription = result.text
+            note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(for: result.text, duration: resolvedDuration))
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             if let snapshot = telemetryState.snapshot(for: note.id) { note.replaceCumulativeTranscriptionTelemetry(snapshot) }
@@ -1224,7 +1224,7 @@ private extension TranscriptionService {
             // Existing text may be an incomplete live preview, not a proven
             // complete transcript. A silent retry cannot establish completeness.
             if !hadExistingTranscript {
-                note.transcription = ""
+                note.setTranscript("", spans: nil)
                 note.lastTranscriptionDuration = 0
                 note.transcriptionModelIdentifier = nil
                 note.clearTranscriptionTelemetrySummary()
@@ -1252,7 +1252,7 @@ private extension TranscriptionService {
             print("❌ [TranscriptionService] note \(noteID) failed: \(diagnostic ?? "unknown error")")
             #endif
             if !hadExistingTranscript {
-                note.transcription = ""
+                note.setTranscript("", spans: nil)
                 note.lastTranscriptionDuration = 0
                 note.transcriptionModelIdentifier = nil
                 note.clearTranscriptionTelemetrySummary()

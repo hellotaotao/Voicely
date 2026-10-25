@@ -45,6 +45,9 @@ final class VoiceNote {
     var duration: TimeInterval = 0
     var audioFilePath: String = ""
     var transcription: String = ""
+    /// JSON `[TranscriptSpan]` tying the transcript to the audio. Written only
+    /// through `setTranscript(_:spans:)`; read through `transcriptSpans`.
+    var transcriptSpansData: Data?
     var transcriptionModelIdentifier: String?
     var transcriptionLastErrorMessage: String?
     var isTranscribing: Bool = false
@@ -94,6 +97,33 @@ enum AudioDurationMetadata {
 
 extension VoiceNote {
     var knownDuration: TimeInterval? { AudioDurationMetadata.known(duration) }
+
+    /// Where each part of the transcript sits in the audio, or nil when the
+    /// note has no timeline or its spans no longer fit the text.
+    var transcriptSpans: [TranscriptSpan]? {
+        guard let transcriptSpansData,
+              let spans = try? JSONDecoder().decode([TranscriptSpan].self, from: transcriptSpansData),
+              TranscriptTimeline.fits(spans, transcription) else { return nil }
+        return spans
+    }
+
+    /// The one way to change the transcript, so its spans never describe
+    /// other text.
+    func setTranscript(_ text: String, spans: [TranscriptSpan]?) {
+        transcription = text
+        if let spans, TranscriptTimeline.fits(spans, text) {
+            transcriptSpansData = try? JSONEncoder().encode(spans)
+        } else {
+            transcriptSpansData = nil
+        }
+    }
+
+    /// Saves text the user edited, carrying the timeline across the edit.
+    func applyEditedTranscript(_ text: String) {
+        guard text != transcription else { return }
+        let spans = transcriptSpans.flatMap { TranscriptTimeline.reanchored($0, from: transcription, to: text) }
+        setTranscript(text, spans: spans)
+    }
 
     func updateDuration(_ resolvedDuration: TimeInterval, forAudioPath path: String) {
         guard audioFilePath == path, let known = AudioDurationMetadata.known(resolvedDuration) else { return }

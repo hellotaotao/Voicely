@@ -16,6 +16,9 @@ struct SegmentedTranscriptionProgress: Codable, Equatable {
     var accumulatedText: String
     var failedRanges: [SegmentFailureRange]
     var updatedAt: Date
+    /// Where each slice of `accumulatedText` sits in the audio. Absent from
+    /// checkpoints written before spans were recorded.
+    var spans: [TranscriptSpan]? = nil
 }
 
 struct RetainedTranscriptionAttempt: Codable, Equatable, Identifiable {

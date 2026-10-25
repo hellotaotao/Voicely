@@ -321,7 +321,7 @@ final class RecordingSession: ObservableObject {
             guard let self else { return }
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
 
-            note.transcription = finalizedTranscript.text
+            note.setTranscript(finalizedTranscript.text, spans: nil)
             note.isTranscribing = true
             note.transcriptionModelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
                 ?? self.transcriptionService.modelManager?.selectedModel
@@ -730,7 +730,10 @@ final class RecordingSession: ObservableObject {
             let trimmedTranscript = finalizedTranscript?.text ?? ""
 
             if !trimmedTranscript.isEmpty, capturedCoordinator?.requiresFullTranscription == false {
-                note.transcription = trimmedTranscript
+                // Finalizing only trims whitespace the slices never carry, so the
+                // live spans fit unless it changed the text.
+                let spans = trimmedTranscript == accumulatedTranscript ? capturedCoordinator?.accumulatedSpans : nil
+                note.setTranscript(trimmedTranscript, spans: spans)
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
                 note.completeTranscription()

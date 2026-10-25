@@ -34,6 +34,7 @@
 1. **说话人分离**：标注材料在本地 `build/speaker-labels/`（6 段、约 16 分钟，按 README 填说话人，目前 0/164 行）。标完后对比 Sortformer（包内自带，最多 4 人，CoreML）、Pyannote + WeSpeaker（包内自带，人数靠聚类，分段只能用 GPU）、Nemotron 3 Diarization（NVIDIA 2026-09，最多 8 人，有约 108 MB 的 CoreML INT8 转换，包内没有运行代码）。评分用标准 DER 工具，不用 vendor 自带的 `computeDERWithOptimalMapping`。
 2. **结构化文字稿**：说话人分离的前置条件。现在 `VoiceNote` 只存纯文本，没有"文字 ↔ 时间"的映射。要设计"时间段 + 文字 + 说话人"的存储、iCloud 同步，以及旧笔记的兼容。词级时间戳可以靠强制对齐模型拿到（约束见记忆与 P-0n：中文 29 s 片约 1/5 超出 768 token，词的结束时间不可靠）。
 3. ~~**③ 定时停止与延长**~~：✅ 2026-10-20 实现，Mac 实测通过（见 ③ 详情）；iPhone 部分并入下面第 6 项。
+3a. **英文录音改用 Parakeet 整条重转**（候选，未决定上线）：2026-10-19 在 Mac M4 上用 6 条真实英文录音（共 72 分钟，会议和讲座）对比，Release 构建。速度：Parakeet TDT v2（FluidAudio，神经引擎）约 177× 实时，千问 MLX 约 25×，千问 CoreML 约 7.8×。两个千问后端之间文字差 2.5%，千问与 Parakeet 差 15%（691 处分歧）。抽 40 处判定：Parakeet 对 21、千问对 7、两者等价 9、都错 2、未定 1。千问 MLX 还在一场讲座里凭空插入整句 "Human Rights Watch is an independent human rights organization…"，也丢过一个 "don't" 导致意思反转。方案：不按片段分工（接缝处文风混杂，录音时两个模型要同时驻留内存），按整条录音二选一。录音时照常用千问实时转，停止后**正面确认**整条是英文（千问每片的语言标签都是 English，再加文本兜底），才用 Parakeet 整条重转。上线前必须先测判定的可靠性：在纯英文录音里插入已知长度的中文、德文、西班牙文、日文片段，确认不会误判成纯英文（Parakeet v2 只会英文，误判就会丢掉这些内容）。只看"没有汉字"不够。未测：iPhone 神经引擎上的速度、锁屏。模型约 0.44 GB，交付方式见 5a。工具和数据：`~/Library/Caches/voicely-qwen-bench/en/`。
 
 **转写质量**
 4. **接缝处多余的句号**（P-0l）：中文切片 94% 以句号结尾。根治需要知道句子在音频里的起点，暂无方案。
@@ -41,7 +42,7 @@
 
 **发布前专项（iPhone）**
 5a. ✅ **模型随 app 安装**（2026-10-25）：不再从 Hugging Face 下载（中国大陆连不上）。`scripts/fetch-speech-models.sh` 按固定版本把模型放到不进 git 的 `Models/`，构建阶段"Embed Speech Model"把它拷进 app 的 `SpeechModel/`：Mac 包带 MLX 8-bit（约 1.0 GB），iPhone/iPad 包带 CoreML（902 MB，Release 包共 961 MB）。启动直接从安装包离线加载；Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮已删除；以前下载到 Application Support/Qwen3ASR 的模型在启动时清掉。`VOICELY_MODEL_DIRECTORY` 可让测试或回放改读别的目录（如在 Mac 上跑 CoreML 后端）。
-   - **苹果托管（Background Assets）暂缓**：对用户没有区别（essential 资源包同样在安装时下完），好处主要是上传 TestFlight 不必每次带模型。等要加第二个模型（如 Parakeet）、需要按需或预取下载时再评估。2026-10-22 已查明：`AssetPackManager.url(for:)` 支持返回目录（含 `.mlmodelc`）；要加 `ManagedDownloaderExtension` 下载扩展、App Group 和三个 Info.plist 键；Mac Catalyst 收哪个平台的包未知，需上传标记资源包实测；最低版本要升到 iOS 26 / macOS 26，只会失去 iPhone XS/XS Max/XR，它们按算力推算本来也跑不动。
+   - **苹果托管（Background Assets）暂缓**：对用户没有区别（essential 资源包同样在安装时下完），好处主要是上传 TestFlight 不必每次带模型：带模型后每个包约 1.1 GB，0.28.0 实测每个平台上传约 15.5 分钟，两个平台合计半小时左右。等要加第二个模型（如 Parakeet）、需要按需或预取下载时再评估。2026-10-22 已查明：`AssetPackManager.url(for:)` 支持返回目录（含 `.mlmodelc`）；要加 `ManagedDownloaderExtension` 下载扩展、App Group 和三个 Info.plist 键；Mac Catalyst 收哪个平台的包未知，需上传标记资源包实测；最低版本要升到 iOS 26 / macOS 26，只会失去 iPhone XS/XS Max/XR，它们按算力推算本来也跑不动。
 6. 千问 CoreML 路径的真机验收：前台、锁屏、内存、后台进度上报。同一轮验 ③ 定时停止：锁屏时一秒一次的计时检查是否照常运行、到点能否停止并保存；锁屏通知上的"延长 10/30 分钟""立即停止"按钮；Live Activity 副标题显示"Stops at"。
 7. CoreML 在白噪声上会编出整句话，确认真实环境噪声都落在门控"确定静音"那一档（P-0o）。
 8. 上架文档按千问重写（P-0n）。

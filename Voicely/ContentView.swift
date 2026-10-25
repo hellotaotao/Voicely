@@ -866,8 +866,15 @@ struct ContentView: View {
     }
 
     /// On returning to the foreground, resume any imported transcription that
-    /// was interrupted while a sidecar + working copy still exist.
+    /// was interrupted while a sidecar + working copy still exist, and store
+    /// listening copies that finished imports still lack.
     private func resumePendingImports() {
+        Task { @MainActor in
+            await SegmentedAudioTranscriber(
+                transcriptionService: transcriptionService,
+                progressStore: transcriptionService.segmentProgressStore
+            ).storePendingImportedAudio(notes: voiceNotes)
+        }
         guard !transcriptionService.segmentProgressStore.listPendingNoteIDs().isEmpty else { return }
         Task { @MainActor in
             if !transcriptionService.isEngineAvailable() {

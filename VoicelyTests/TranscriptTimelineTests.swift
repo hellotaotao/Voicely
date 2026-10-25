@@ -126,6 +126,27 @@ struct TranscriptTimelineTests {
         note.setTranscript(text, spans: spans)
         note.transcription = text + "?"   // a write that skipped setTranscript
         #expect(note.transcriptSpans == nil)
+
+        // Same length, different text: what an iCloud merge of the two fields
+        // from different edits can produce.
+        note.setTranscript(text, spans: spans)
+        note.transcription = "a\nbbbbb\nccc"
+        #expect(note.transcriptSpans == nil)
+    }
+
+    @Test func aTappedSentenceStaysLitUntilPlaybackReachesIt() {
+        // Units start at 0, 10, 20 s; the tap on unit 1 seeks to 9 s.
+        let units = TranscriptTimeline.units(text: text, spans: spans)
+        let preroll = TranscriptTimeline.highlight(at: 9.5, holding: 1, from: 9, in: units)
+        #expect(preroll.index == 1 && preroll.hold == 1)
+        let reached = TranscriptTimeline.highlight(at: 10.2, holding: 1, from: 9, in: units)
+        #expect(reached.index == 1 && reached.hold == nil)
+    }
+
+    @Test func draggingBackBeforeTheSeekPointReleasesTheTappedSentence() {
+        let units = TranscriptTimeline.units(text: text, spans: spans)
+        let dragged = TranscriptTimeline.highlight(at: 3, holding: 1, from: 9, in: units)
+        #expect(dragged.index == 0 && dragged.hold == nil)
     }
 
     @Test @MainActor func editingANoteCarriesItsSpans() {

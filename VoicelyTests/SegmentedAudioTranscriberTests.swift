@@ -424,8 +424,10 @@ struct SegmentedAudioTranscriberTests {
         #expect(store.listPendingNoteIDs().contains(note.id))
         #expect(note.transcriptionState == .queued)
         transcriber.transcribeSegmentOutcome = { _ in .transcribed(.init(text: "recovered", duration: 1, modelIdentifier: "m")) }
+        transcriber.storeImportedAudio = { _ in "recording_kept.m4a" }
         await transcriber.resumePending(notes: [note])
         #expect(note.transcription == "recovered")
+        #expect(note.audioFilePath == "recording_kept.m4a")
         #expect(store.existingWorkingCopyURL(for: note.id) == nil)
     }
 

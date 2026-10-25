@@ -45,7 +45,7 @@ final class VoiceNote {
     var duration: TimeInterval = 0
     var audioFilePath: String = ""
     var transcription: String = ""
-    /// JSON `[TranscriptSpan]` tying the transcript to the audio. Written only
+    /// JSON `StoredTranscriptTimeline` tying the transcript to the audio. Written only
     /// through `setTranscript(_:spans:)`; read through `transcriptSpans`.
     var transcriptSpansData: Data?
     var transcriptionModelIdentifier: String?
@@ -102,9 +102,9 @@ extension VoiceNote {
     /// note has no timeline or its spans no longer fit the text.
     var transcriptSpans: [TranscriptSpan]? {
         guard let transcriptSpansData,
-              let spans = try? JSONDecoder().decode([TranscriptSpan].self, from: transcriptSpansData),
-              TranscriptTimeline.fits(spans, transcription) else { return nil }
-        return spans
+              let timeline = try? JSONDecoder().decode(StoredTranscriptTimeline.self, from: transcriptSpansData)
+        else { return nil }
+        return timeline.spans(for: transcription)
     }
 
     /// The one way to change the transcript, so its spans never describe
@@ -112,7 +112,7 @@ extension VoiceNote {
     func setTranscript(_ text: String, spans: [TranscriptSpan]?) {
         transcription = text
         if let spans, TranscriptTimeline.fits(spans, text) {
-            transcriptSpansData = try? JSONEncoder().encode(spans)
+            transcriptSpansData = try? JSONEncoder().encode(StoredTranscriptTimeline(spans: spans, text: text))
         } else {
             transcriptSpansData = nil
         }

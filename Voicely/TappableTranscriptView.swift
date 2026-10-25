@@ -51,9 +51,10 @@ struct TappableTranscriptView: UIViewRepresentable {
         private var builtSpans: [TranscriptSpan] = []
         private var units: [TranscriptUnit] = []
         private var highlightedIndex: Int?
-        /// The tapped sentence stays lit until playback reaches it; the seek
-        /// lands a little before it, inside the previous sentence.
+        /// The tapped sentence stays lit while playback runs up to it from the
+        /// seek point, which lands a little before it in the previous sentence.
         private var tappedIndex: Int?
+        private var tapSeekTime: TimeInterval = 0
         private var autoScrollPausedUntil: Date = .distantPast
 
         private let highlightColor = UIColor(VoicelyTheme.accent).withAlphaComponent(0.22)
@@ -86,11 +87,9 @@ struct TappableTranscriptView: UIViewRepresentable {
         }
 
         private func updateHighlight(for time: TimeInterval?) {
-            var index = time.flatMap { TranscriptTimeline.unitIndex(at: $0, in: units) }
-            if let tapped = tappedIndex {
-                if let index, index >= tapped { tappedIndex = nil } else { index = tapped }
-            }
-            setHighlight(index)
+            let highlight = TranscriptTimeline.highlight(at: time, holding: tappedIndex, from: tapSeekTime, in: units)
+            tappedIndex = highlight.hold
+            setHighlight(highlight.index)
         }
 
         private func setHighlight(_ index: Int?) {
@@ -135,9 +134,11 @@ struct TappableTranscriptView: UIViewRepresentable {
             guard point.y <= lineRect.maxY else { return }
             let location = layoutManager.characterIndexForGlyph(at: glyphIndex)
             guard let index = TranscriptTimeline.unitIndex(containing: location, in: units) else { return }
+            let seekTime = TranscriptTimeline.seekTime(for: units[index])
             tappedIndex = index
+            tapSeekTime = seekTime
             setHighlight(index)
-            onSeek(TranscriptTimeline.seekTime(for: units[index]))
+            onSeek(seekTime)
         }
 
         // MARK: Scrolling by hand pauses auto-scroll

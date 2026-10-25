@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A run of transcript text and the stretch of audio it was transcribed from.
@@ -11,6 +12,29 @@ struct TranscriptSpan: Codable, Equatable, Sendable {
     var length: Int
     var start: TimeInterval
     var end: TimeInterval
+}
+
+/// Spans as stored on a note, with a digest of the text they were built for.
+/// iCloud can merge the transcript and its spans from different edits; when
+/// the text no longer matches, even at the same length, the spans are ignored.
+struct StoredTranscriptTimeline: Codable, Equatable, Sendable {
+    var textDigest: String
+    var spans: [TranscriptSpan]
+
+    init(spans: [TranscriptSpan], text: String) {
+        self.spans = spans
+        textDigest = Self.digest(of: text)
+    }
+
+    /// The spans, if they were built for exactly this text.
+    func spans(for text: String) -> [TranscriptSpan]? {
+        guard textDigest == Self.digest(of: text), TranscriptTimeline.fits(spans, text) else { return nil }
+        return spans
+    }
+
+    static func digest(of text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 /// A sentence-sized piece of a timed transcript: what the detail view
@@ -253,6 +277,19 @@ enum TranscriptTimeline {
             if units[mid].start <= time { result = mid; low = mid + 1 } else { high = mid - 1 }
         }
         return result
+    }
+
+    /// The unit to light at `time` while a tapped unit may be held. Playback
+    /// starts a little before a tapped sentence, so it stays lit until playback
+    /// reaches it; moving back before the seek point, such as dragging the
+    /// waveform, ends the hold.
+    static func highlight(at time: TimeInterval?, holding tapped: Int?, from seekTime: TimeInterval,
+                          in units: [TranscriptUnit]) -> (index: Int?, hold: Int?) {
+        let index = time.flatMap { unitIndex(at: $0, in: units) }
+        guard let tapped else { return (index, nil) }
+        if let index, index >= tapped { return (index, nil) }
+        if let time, time < seekTime - 0.25 { return (index, nil) }
+        return (tapped, tapped)
     }
 
     /// The unit holding the character at `location`.

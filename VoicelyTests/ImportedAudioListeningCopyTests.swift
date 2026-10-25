@@ -108,6 +108,97 @@ struct ImportedAudioListeningCopyTests {
         #expect(note.audioFilePath.isEmpty)
     }
 
+    @Test @MainActor func aCopyThatFailsKeepsTheWorkingCopyUntilALaterAttempt() async throws {
+        let source = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
+        let store = SegmentedAudioTestSupport.makeStore()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        let workingCopy = try store.importWorkingCopy(from: source, for: note.id)
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        transcriber.transcribeSegmentOutcome = { _ in .transcribed(.init(text: "words", duration: 1, modelIdentifier: "m")) }
+        await transcriber.transcribe(note: note, sourceURL: workingCopy)
+        #expect(note.transcriptionOutcome == .transcribed)
+        #expect(note.audioFilePath.isEmpty)
+        #expect(store.existingWorkingCopyURL(for: note.id) != nil)
+        #expect(store.load(for: note.id) == nil)
+
+        var transcribed = false
+        transcriber.transcribeSegmentOutcome = { _ in
+            transcribed = true
+            return .noSpeech
+        }
+        transcriber.storeImportedAudio = { _ in "recording_later.m4a" }
+        await transcriber.storePendingImportedAudio(notes: [note])
+        #expect(note.audioFilePath == "recording_later.m4a")
+        #expect(store.existingWorkingCopyURL(for: note.id) == nil)
+        #expect(!transcribed)
+        #expect(note.transcription == "words\nwords\nwords")
+    }
+
+    @Test @MainActor func anImportInterruptedAfterItsTranscriptGetsItsCopyWithoutTranscribingAgain() async throws {
+        let source = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
+        let store = SegmentedAudioTestSupport.makeStore()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        // The app quit after the transcript completed but before the copy was
+        // stored: the note is completed and both the checkpoint and the working
+        // copy survived.
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        note.setTranscript("done", spans: nil)
+        note.completeTranscription()
+        note.transcriptionOutcome = .transcribed
+        _ = try store.importWorkingCopy(from: source, for: note.id)
+        store.save(.init(lastFrame: 40 * 16_000, totalFrames: 40 * 16_000, accumulatedText: "done",
+                         failedRanges: [], updatedAt: Date()), for: note.id)
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        var transcribed = false
+        transcriber.transcribeSegmentOutcome = { _ in
+            transcribed = true
+            return .noSpeech
+        }
+        transcriber.storeImportedAudio = { _ in "recording_after_restart.m4a" }
+
+        await transcriber.resumePending(notes: [note])
+        await transcriber.storePendingImportedAudio(notes: [note])
+
+        #expect(!transcribed)
+        #expect(note.transcription == "done")
+        #expect(note.audioFilePath == "recording_after_restart.m4a")
+        #expect(store.existingWorkingCopyURL(for: note.id) == nil)
+        #expect(store.load(for: note.id) == nil)
+    }
+
+    @Test @MainActor func pendingCopiesSkipImportsThatStillNeedTranscribing() async throws {
+        let source = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 5)
+        let store = SegmentedAudioTestSupport.makeStore()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: store.directory)
+        }
+        let failed = VoiceNote(title: "failed", audioFilePath: "")
+        failed.completeTranscription()
+        failed.transcriptionOutcome = .failed
+        _ = try store.importWorkingCopy(from: source, for: failed.id)
+        let queued = VoiceNote(title: "queued", audioFilePath: "")
+        queued.queueTranscription(at: Date())
+        _ = try store.importWorkingCopy(from: source, for: queued.id)
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store)
+        var storeCalls = 0
+        transcriber.storeImportedAudio = { _ in
+            storeCalls += 1
+            return "x.m4a"
+        }
+        await transcriber.storePendingImportedAudio(notes: [failed, queued])
+        #expect(storeCalls == 0)
+        #expect(store.existingWorkingCopyURL(for: failed.id) != nil)
+        #expect(store.existingWorkingCopyURL(for: queued.id) != nil)
+    }
+
     @Test @MainActor func reTranscribingARecordingLeavesItsAudioAlone() async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)
         let store = SegmentedAudioTestSupport.makeStore()

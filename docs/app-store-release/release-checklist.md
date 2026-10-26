@@ -5,7 +5,6 @@ For Voicely's first public release (iPhone, iPad, and Mac in one listing). This 
 ## Before Archiving
 
 - Pass the iPhone acceptance in `docs/stable-roadmap.md` (item 6): a minimum-supported and a recent device, foreground and locked, a 60–90 minute meeting end to end, iOS 18 and iOS 26 background paths, scheduled stop on the Lock Screen, recovery after the app is killed mid-recording. The listing's background claims depend on it.
-- Reword the in-app privacy card in Settings so it no longer says audio and text never leave the device (iCloud sync); see `privacy-and-review-notes.md`.
 - Decide the public version (`1.0` or `0.28.x`) and set it in `Config/Version.xcconfig`, the only place versions are set.
 - Deploy the CloudKit schema from development to production in CloudKit Console (container `iCloud.com.hellotaotao.Voicely`). Release and TestFlight builds use production; an outdated production schema makes sync fail.
 - Confirm `ITSAppUsesNonExemptEncryption = false` still holds.

@@ -19,7 +19,7 @@ Check App Store Connect's current requirements before capturing.
 | 3 | Lock Screen with the recording Live Activity | Keeps going when your iPhone is locked |
 | 4 | Mixed Chinese and English transcript | Handles meetings in two languages |
 | 5 | Stop timer: "Stops at 15:30" with the +10 min option | Stops on time, or keeps going |
-| 6 | Settings: the speech model card and "Fully on-device" (after its wording is fixed for iCloud) | Speech recognition stays on your device |
+| 6 | Settings: the speech model card and "Fully on-device" card | Speech recognition stays on your device |
 
 Alternative for 6: the transcript's Copy and Share actions, captioned "Copy it into your AI assistant".
 

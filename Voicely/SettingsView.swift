@@ -239,7 +239,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Fully on-device")
                     .font(.subheadline.weight(.semibold))
-                Text("All transcription happens on your device. Your audio and text never leave this device unless you export them.")
+                Text("All transcription happens on your device. Your audio and text stay on your devices and in your own iCloud account unless you share them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

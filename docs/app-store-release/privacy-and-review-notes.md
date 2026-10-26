@@ -82,7 +82,6 @@ Consider rewording the microphone string to name the feature reviewers look for,
 
 ## Review Risks To Check Before Submission
 
-- **In-app privacy wording.** Settings currently says "Your audio and text never leave this device unless you export them." That is not true once iCloud sync is on; reword it before submission (e.g. "…stay on your devices and your own iCloud account") so the app, the listing, and the privacy label agree.
 - **CloudKit production schema.** Deploy the development schema to production in CloudKit Console before the release build ships; the production schema has lagged behind before, which breaks sync for Release and TestFlight builds.
 - **Push environment.** The checked-in entitlements use the development APNs environment; confirm the archived build's entitlements show production in Organizer.
 - **Background claims.** The listing says transcription continues after locking the iPhone. Confirm it on a real iPhone (roadmap item 6) before submitting, on both iOS 18 and iOS 26, since finishing after stop uses continued processing only on iOS 26.

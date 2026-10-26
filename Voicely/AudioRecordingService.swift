@@ -150,6 +150,9 @@ class AudioRecordingService: ObservableObject {
     /// Set when a recording could not start because the user turned the
     /// microphone off; the controls explain how to turn it back on.
     @Published var isShowingMicrophoneDeniedNotice = false
+    /// True from the moment startRecording begins, including while the
+    /// microphone prompt is up, until it returns.
+    private var isStartingCapture = false
     @Published private(set) var isPreparingRecordingSession = false
 
     // MARK: New: exposes PCM file URL and live frame position
@@ -283,6 +286,9 @@ class AudioRecordingService: ObservableObject {
     func prewarmRecordingSessionIfPossible() {
         // UI/unit fixtures do not need a live input route. Simulator audio RPCs can stall launch.
         guard !AppRuntime.isRunningTests else { return }
+        // Granting the microphone from inside startRecording triggers a prewarm,
+        // whose session changes would land in the middle of the engine start.
+        guard !isStartingCapture else { return }
         guard RecordingSessionPrewarmState.shouldStartPrewarm(
             hasPermission: hasPermission,
             isRecording: isRecording,
@@ -299,7 +305,7 @@ class AudioRecordingService: ObservableObject {
         prewarmTask = Task { @MainActor [weak self] in
             await Task.yield()
             try? await Task.sleep(nanoseconds: 150_000_000)
-            guard let self, !Task.isCancelled, self.isPreparingRecordingSession else {
+            guard let self, !Task.isCancelled, self.isPreparingRecordingSession, !self.isStartingCapture else {
                 return
             }
 
@@ -331,6 +337,8 @@ class AudioRecordingService: ObservableObject {
 
     /// Starts recording. Returns the M4A filename (last path component) for cross-device compat.
     func startRecording() async -> String? {
+        isStartingCapture = true
+        defer { isStartingCapture = false }
         guard await requestPermission() else {
             isShowingMicrophoneDeniedNotice = true
             return nil

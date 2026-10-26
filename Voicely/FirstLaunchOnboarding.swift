@@ -8,12 +8,11 @@
 import Foundation
 import SwiftUI
 
-struct FirstLaunchOnboardingPage: Equatable, Identifiable {
+struct FirstLaunchOnboardingFeature: Equatable, Identifiable {
     let id: String
     let title: String
-    let subtitle: String
+    let detail: String
     let systemImage: String
-    let accentColor: Color
 }
 
 struct FirstLaunchModelSetupStatus: Equatable {
@@ -26,73 +25,38 @@ struct FirstLaunchModelSetupStatus: Equatable {
 
     let visualState: VisualState
     let title: String
-    let detail: String
+    /// The error behind a failed setup; nil otherwise.
+    let detail: String?
     let progress: Float?
-
-    var showsProgress: Bool {
-        visualState == .active
-    }
-
-    var systemImageName: String {
-        switch visualState {
-        case .idle:
-            return "clock"
-        case .active:
-            return "bolt.horizontal.circle.fill"
-        case .ready:
-            return "checkmark.circle.fill"
-        case .failed:
-            return "exclamationmark.triangle.fill"
-        }
-    }
-
-    var tint: Color {
-        switch visualState {
-        case .idle:
-            return .secondary
-        case .active:
-            return VoicelyTheme.accent
-        case .ready:
-            return .green
-        case .failed:
-            return .orange
-        }
-    }
 }
 
 enum FirstLaunchOnboarding {
     static let completionKey = "VoicelyDidCompleteFirstLaunchOnboardingV1"
 
-    static let pages: [FirstLaunchOnboardingPage] = [
-        FirstLaunchOnboardingPage(
-            id: "capture",
-            title: "Record the whole meeting",
-            subtitle: "Tap record and the transcript builds while people talk. It keeps going with the screen locked.",
-            systemImage: "waveform.circle.fill",
-            accentColor: .blue
-        ),
-        FirstLaunchOnboardingPage(
-            id: "private",
-            title: "Transcribed on this device",
-            subtitle: "Speech recognition runs on your device. Audio is never uploaded to be transcribed.",
-            systemImage: "lock.shield.fill",
-            accentColor: .green
-        ),
-        FirstLaunchOnboardingPage(
-            id: "use",
-            title: "Ready when the meeting ends",
-            subtitle: "Read, copy, or share the transcript, or tap a sentence to hear it again.",
-            systemImage: "doc.on.doc.fill",
-            accentColor: .purple
-        ),
-        FirstLaunchOnboardingPage(
-            id: "microphone",
-            title: "Allow the microphone",
-            subtitle: "Voicely needs the microphone to record. Allow it now, so nothing is in your way when a meeting starts.",
-            systemImage: "mic.circle.fill",
-            accentColor: .orange
-        )
-    ]
+    /// What the welcome step promises, in a few words each so it can be read
+    /// at a glance. `deviceName` is "Mac", "iPhone" or "iPad".
+    static func features(deviceName: String) -> [FirstLaunchOnboardingFeature] {
+        [
+            FirstLaunchOnboardingFeature(
+                id: "capture",
+                title: "Records the whole meeting",
+                detail: "Even with the screen locked",
+                systemImage: "waveform"
+            ),
+            FirstLaunchOnboardingFeature(
+                id: "private",
+                title: "Stays on this \(deviceName)",
+                detail: "Transcribed offline, never uploaded",
+                systemImage: "lock.fill"
+            ),
+            FirstLaunchOnboardingFeature(
+                id: "use",
+                title: "Ready when it ends",
+                detail: "Copy, share, or replay any sentence",
+                systemImage: "doc.text"
+            )
+        ]
+    }
 
     static func shouldPresent(
         defaults: UserDefaults = .standard,
@@ -116,7 +80,7 @@ enum FirstLaunchOnboarding {
         if let errorMessage, !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return FirstLaunchModelSetupStatus(
                 visualState: .failed,
-                title: "Model setup needs attention",
+                title: "Speech model didn’t load",
                 detail: errorMessage,
                 progress: nil
             )
@@ -126,29 +90,22 @@ enum FirstLaunchOnboarding {
         case .unloaded:
             return FirstLaunchModelSetupStatus(
                 visualState: .idle,
-                title: "Checking offline transcription",
-                detail: "Voicely will prepare the speech model when setup starts.",
+                title: "Checking speech model",
+                detail: nil,
                 progress: nil
             )
-        case .loading:
+        case .loading, .prewarming:
             return FirstLaunchModelSetupStatus(
                 visualState: .active,
-                title: "Loading offline transcription",
-                detail: "The speech model is being loaded into memory.",
-                progress: clampedProgress(progress)
-            )
-        case .prewarming:
-            return FirstLaunchModelSetupStatus(
-                visualState: .active,
-                title: "Optimizing offline transcription",
-                detail: "Voicely is preparing the speech model for this device.",
+                title: "Preparing speech model",
+                detail: nil,
                 progress: clampedProgress(progress)
             )
         case .loaded:
             return FirstLaunchModelSetupStatus(
                 visualState: .ready,
-                title: "Offline transcription ready",
-                detail: "The speech model is loaded and ready to use.",
+                title: "Ready · works offline",
+                detail: nil,
                 progress: nil
             )
         }
@@ -172,238 +129,490 @@ struct FirstLaunchOnboardingView: View {
     /// Shows the system microphone prompt.
     var requestMicrophone: () async -> Void = {}
     var onComplete: () -> Void
-    @State private var selectedPage = 0
+    @State private var step: Step = .welcome
     @State private var isRequestingMicrophone = false
 
-    private var isLastPage: Bool {
-        selectedPage >= FirstLaunchOnboarding.pages.count - 1
+    private enum Step {
+        case welcome
+        case microphone
     }
 
-    /// The last page asks for the microphone before finishing, unless the
-    /// user has already decided.
-    private var asksForMicrophone: Bool {
-        isLastPage && microphonePermission == .undetermined
+    /// Dark text on the accent fill; white on the light purple fails contrast.
+    private static let accentInk = Color(red: 0.10, green: 0.08, blue: 0.14)
+
+    private static let previewLevels: [CGFloat] = [
+        0.3, 0.5, 0.4, 0.7, 0.9, 0.6, 0.4, 0.8, 1, 0.7,
+        0.5, 0.3, 0.45, 0.6, 0.85, 0.95, 0.7, 0.5, 0.35, 0.55,
+        0.75, 0.6, 0.4, 0.3, 0.5, 0.8, 0.65, 0.45, 0.7, 0.9,
+        0.75, 0.5, 0.35, 0.6, 0.4, 0.3, 0.25, 0.2, 0.15, 0.12
+    ]
+
+    /// Mac Catalyst in the iPad idiom draws the whole window at 77 %, so the
+    /// design's sizes are scaled back up there to read at their intended size.
+    private var scale: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        UIDevice.current.userInterfaceIdiom == .pad ? 1 / 0.77 : 1
+        #else
+        1
+        #endif
     }
 
-    private var primaryTitle: String {
-        if asksForMicrophone { return "Allow Microphone" }
-        return isLastPage ? "Start using Voicely" : "Next"
+    private var deviceName: String {
+        #if targetEnvironment(macCatalyst)
+        "Mac"
+        #else
+        UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        #endif
     }
 
-    private var primaryImage: String {
-        if asksForMicrophone { return "mic.fill" }
-        return isLastPage ? "checkmark" : "arrow.right"
+    private var settingsName: String {
+        #if targetEnvironment(macCatalyst)
+        "System Settings"
+        #else
+        "Settings"
+        #endif
+    }
+
+    private func m(_ value: CGFloat) -> CGFloat {
+        value * scale
+    }
+
+    /// Fixed design sizes that still follow Dynamic Type on iPhone and iPad.
+    private func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: UIFontMetrics.default.scaledValue(for: m(size)), weight: weight)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 22)
-
-            VStack(spacing: 10) {
-                Text("Voicely")
-                    .font(.largeTitle.weight(.bold))
-                Text("Private meeting transcripts")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(.horizontal, 28)
-
-            TabView(selection: $selectedPage) {
-                ForEach(Array(FirstLaunchOnboarding.pages.enumerated()), id: \.element.id) { index, page in
-                    onboardingPage(page)
-                        .tag(index)
-                        .padding(.horizontal, 24)
+        GeometryReader { proxy in
+            let isWide = proxy.size.width >= m(820)
+            Group {
+                switch step {
+                case .welcome:
+                    fitted(isWide: isWide, height: proxy.size.height) {
+                        welcome(isWide: isWide)
+                    }
+                case .microphone:
+                    fitted(isWide: isWide, height: proxy.size.height) {
+                        microphone(isWide: isWide)
+                    }
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(maxHeight: 430)
-
-            pageDots
-                .padding(.bottom, 18)
-
-            setupStatus
-                .padding(.horizontal, 28)
-                .padding(.bottom, 16)
-
-            Button(action: primaryAction) {
-                HStack(spacing: 8) {
-                    Text(primaryTitle)
-                    Image(systemName: primaryImage)
-                        .font(.subheadline.weight(.semibold))
-                }
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 15)
-                .background(VoicelyTheme.accent, in: Capsule())
-                .shadow(color: VoicelyTheme.accent.opacity(0.28), radius: 14, y: 8)
-            }
-            .buttonStyle(.plain)
-            .disabled(isRequestingMicrophone)
-            .accessibilityIdentifier(
-                asksForMicrophone
-                ? AccessibilityIdentifiers.Onboarding.allowMicrophoneButton
-                : isLastPage
-                ? AccessibilityIdentifiers.Onboarding.finishButton
-                : AccessibilityIdentifiers.Onboarding.nextButton
-            )
-            .padding(.horizontal, 28)
-            .padding(.bottom, isLastPage ? 8 : 28)
-
-            if isLastPage {
-                microphoneFooter
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 20)
-            }
+            // The outgoing step leaves at once so the two layouts never overlap.
+            .transition(.asymmetric(insertion: .opacity, removal: .identity))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(backgroundView)
+        .background(VoicelyTheme.groupedBackground.ignoresSafeArea())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.screen)
     }
 
-    private func onboardingPage(_ page: FirstLaunchOnboardingPage) -> some View {
-        VStack(spacing: 24) {
-            ZStack {
-                Circle()
-                    .fill(page.accentColor.opacity(0.16))
-                    .frame(width: 148, height: 148)
-                Image(systemName: page.systemImage)
-                    .font(.system(size: 70, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(page.accentColor)
-            }
-
-            VStack(spacing: 12) {
-                Text(page.title)
-                    .font(.title2.weight(.bold))
-                    .multilineTextAlignment(.center)
-                    .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.pageTitle)
-                Text(page.subtitle)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .frame(maxWidth: 330)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var pageDots: some View {
-        HStack(spacing: 8) {
-            ForEach(0..<FirstLaunchOnboarding.pages.count, id: \.self) { index in
-                Capsule()
-                    .fill(index == selectedPage ? VoicelyTheme.accent : Color.secondary.opacity(0.28))
-                    .frame(width: index == selectedPage ? 24 : 8, height: 8)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.85), value: selectedPage)
-            }
-        }
-        .accessibilityLabel("Page \(selectedPage + 1) of \(FirstLaunchOnboarding.pages.count)")
-    }
-
-    private var setupStatus: some View {
-        HStack(spacing: 10) {
-            setupStatusAccessory
-            VStack(alignment: .leading, spacing: 2) {
-                Text(modelSetupStatus.title)
-                    .font(.caption.weight(.semibold))
-                Text(modelSetupStatus.detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-    }
-
+    /// A wide window shows the step as laid out; a narrow one scrolls, so
+    /// large Dynamic Type or a short phone never clips the buttons.
     @ViewBuilder
-    private var setupStatusAccessory: some View {
-        if modelSetupStatus.showsProgress {
-            if let progress = modelSetupStatus.progress {
-                ProgressView(value: progress, total: 1)
-                    .controlSize(.small)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-            }
+    private func fitted<Content: View>(
+        isWide: Bool,
+        height: CGFloat,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        if isWide {
+            content()
         } else {
-            Image(systemName: modelSetupStatus.systemImageName)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(modelSetupStatus.tint)
-                .frame(width: 20, height: 20)
+            ScrollView {
+                content()
+                    .frame(minHeight: height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
         }
     }
 
-    private var backgroundView: some View {
-        ZStack {
-            VoicelyTheme.groupedBackground.ignoresSafeArea()
-            LinearGradient(
-                colors: [
-                    VoicelyTheme.accent.opacity(0.20),
-                    Color.clear,
-                    Color.orange.opacity(0.10)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-        }
-    }
+    // MARK: - Welcome
 
-    /// Lets the user finish without deciding, or explains a microphone that is
-    /// already off. Recording asks again, or points to Settings, when needed.
     @ViewBuilder
-    private var microphoneFooter: some View {
+    private func welcome(isWide: Bool) -> some View {
+        if isWide {
+            HStack(alignment: .center, spacing: m(56)) {
+                // Kept together and centered, so a tall window does not strand
+                // the button at the bottom.
+                VStack(alignment: .leading, spacing: 0) {
+                    welcomeIntro(isWide: true)
+                    HStack(spacing: m(22)) {
+                        continueButton(fullWidth: false)
+                        statusLine
+                    }
+                    .padding(.top, m(56))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                previewCard
+                    .frame(width: m(400))
+            }
+            .frame(maxWidth: m(1100))
+            .padding(.top, m(56))
+            .padding(.leading, m(64))
+            .padding(.trailing, m(56))
+            .padding(.bottom, m(52))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                welcomeIntro(isWide: false)
+                Spacer(minLength: m(40))
+                VStack(spacing: m(16)) {
+                    statusLine
+                        .frame(maxWidth: .infinity)
+                    continueButton(fullWidth: true)
+                }
+            }
+            .padding(.horizontal, m(24))
+            .padding(.top, m(40))
+            .padding(.bottom, m(24))
+        }
+    }
+
+    private func welcomeIntro(isWide: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: m(10)) {
+                RoundedRectangle(cornerRadius: m(9), style: .continuous)
+                    .fill(VoicelyTheme.accent)
+                    .frame(width: m(32), height: m(32))
+                    .overlay(
+                        Image(systemName: "waveform")
+                            .font(.system(size: m(17), weight: .bold))
+                            .foregroundStyle(Self.accentInk)
+                    )
+                    .accessibilityHidden(true)
+                Text("Voicely")
+                    .font(font(isWide ? 19 : 18, .semibold))
+            }
+
+            Text("Record the meeting.\nRead it when it ends.")
+                .font(font(isWide ? 46 : 36, .bold))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.pageTitle)
+                .padding(.top, m(isWide ? 48 : 36))
+
+            VStack(alignment: .leading, spacing: m(isWide ? 28 : 26)) {
+                ForEach(FirstLaunchOnboarding.features(deviceName: deviceName)) { feature in
+                    featureRow(feature, isWide: isWide)
+                }
+            }
+            .padding(.top, m(isWide ? 48 : 44))
+        }
+    }
+
+    private func featureRow(_ feature: FirstLaunchOnboardingFeature, isWide: Bool) -> some View {
+        HStack(spacing: m(isWide ? 18 : 16)) {
+            iconTile(
+                feature.systemImage,
+                tint: VoicelyTheme.accent,
+                size: isWide ? 48 : 46,
+                symbolSize: 22,
+                cornerRadius: 12
+            )
+            VStack(alignment: .leading, spacing: m(4)) {
+                Text(feature.title)
+                    .font(font(isWide ? 20 : 19, .semibold))
+                Text(feature.detail)
+                    .font(font(16))
+                    .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func continueButton(fullWidth: Bool) -> some View {
+        primaryButton("Continue", trailingImage: "arrow.right", fullWidth: fullWidth) {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                step = .microphone
+            }
+        }
+        .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.nextButton)
+    }
+
+    private var statusLine: some View {
+        Group {
+            switch modelSetupStatus.visualState {
+            case .ready:
+                HStack(spacing: m(8)) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: m(9), height: m(9))
+                    Text(modelSetupStatus.title)
+                }
+            case .idle:
+                HStack(spacing: m(8)) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(modelSetupStatus.title)
+                }
+            case .active:
+                if let progress = modelSetupStatus.progress {
+                    VStack(alignment: .leading, spacing: m(7)) {
+                        Text("\(modelSetupStatus.title) · \(Int(progress * 100))%")
+                        ProgressView(value: progress, total: 1)
+                            .tint(VoicelyTheme.accent)
+                            .frame(width: m(200))
+                    }
+                } else {
+                    HStack(spacing: m(8)) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(modelSetupStatus.title)
+                    }
+                }
+            case .failed:
+                Label(modelSetupStatus.title, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(modelSetupStatus.detail ?? "")
+            }
+        }
+        .font(font(15))
+        .foregroundStyle(.secondary)
+    }
+
+    /// A still of a meeting being transcribed, so the welcome step shows the
+    /// product instead of describing it.
+    private var previewCard: some View {
+        VStack(alignment: .leading, spacing: m(20)) {
+            HStack(spacing: m(10)) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: m(10), height: m(10))
+                Text("Recording")
+                    .font(font(16, .semibold))
+                Spacer(minLength: 0)
+                Text("18:42")
+                    .font(font(16))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .center, spacing: m(3)) {
+                ForEach(Array(Self.previewLevels.enumerated()), id: \.offset) { index, level in
+                    RoundedRectangle(cornerRadius: m(2), style: .continuous)
+                        .fill(index < 34 ? VoicelyTheme.accent : Color.secondary.opacity(0.3))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: m(6 + level * 42))
+                }
+            }
+            .frame(height: m(48))
+
+            VStack(alignment: .leading, spacing: m(6)) {
+                Text("Design is done. The build is in review.")
+                    .padding(.horizontal, m(12))
+                    .padding(.vertical, m(10))
+                HStack(alignment: .firstTextBaseline, spacing: m(10)) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: m(12)))
+                        .foregroundStyle(VoicelyTheme.accent)
+                    Text("If it passes, we ship Monday.")
+                }
+                .padding(.horizontal, m(12))
+                .padding(.vertical, m(10))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    VoicelyTheme.accent.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: m(12), style: .continuous)
+                )
+                HStack(spacing: m(3)) {
+                    Text("I’ll send the copy tonight")
+                        .foregroundStyle(.secondary)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(VoicelyTheme.accent)
+                        .frame(width: m(2), height: m(18))
+                }
+                .padding(.horizontal, m(12))
+                .padding(.vertical, m(10))
+            }
+            .font(font(17))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(m(24))
+        .background(VoicelyTheme.surface, in: RoundedRectangle(cornerRadius: m(20), style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: m(20), style: .continuous)
+                .stroke(VoicelyTheme.hairline, lineWidth: 1)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Example of a meeting being transcribed")
+    }
+
+    // MARK: - Microphone
+
+    private func microphone(isWide: Bool) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        step = .welcome
+                    }
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                        .font(font(17))
+                        .foregroundStyle(.secondary)
+                        .frame(minHeight: m(44))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isRequestingMicrophone)
+                Spacer()
+            }
+
+            Spacer(minLength: m(24))
+            microphoneContent(isWide: isWide)
+            Spacer(minLength: m(24))
+
+            Text("Change it anytime in \(settingsName) › Privacy & Security › Microphone")
+                .font(font(15))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, m(isWide ? 56 : 24))
+        .padding(.top, m(isWide ? 40 : 16))
+        .padding(.bottom, m(isWide ? 52 : 24))
+    }
+
+    private func microphoneContent(isWide: Bool) -> some View {
+        let symbol: String
+        let tint: Color
+        let title: String
+        let message: String
         switch microphonePermission {
         case .undetermined:
-            Button("Not now", action: onComplete)
-                .font(.subheadline)
+            symbol = "mic.fill"
+            tint = VoicelyTheme.accent
+            title = "Allow the microphone"
+            message = "Voicely only listens while you record."
+        case .denied:
+            symbol = "mic.slash.fill"
+            tint = .orange
+            title = "Microphone is off"
+            message = "Turn it on in \(settingsName) to record."
+        case .granted:
+            symbol = "checkmark"
+            tint = .green
+            title = "You’re all set"
+            message = "Press Record when a meeting starts."
+        }
+
+        return VStack(spacing: 0) {
+            iconTile(
+                symbol,
+                tint: tint,
+                size: isWide ? 96 : 88,
+                symbolSize: isWide ? 42 : 38,
+                cornerRadius: 26
+            )
+
+            Text(title)
+                .font(font(isWide ? 42 : 32, .bold))
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.pageTitle)
+                .padding(.top, m(32))
+
+            Text(message)
+                .font(font(isWide ? 20 : 18))
                 .foregroundStyle(.secondary)
+                .padding(.top, m(14))
+
+            VStack(spacing: m(8)) {
+                microphoneButtons(fullWidth: !isWide)
+            }
+            .padding(.top, m(40))
+        }
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func microphoneButtons(fullWidth: Bool) -> some View {
+        switch microphonePermission {
+        case .undetermined:
+            primaryButton("Allow Microphone", leadingImage: "mic.fill", fullWidth: fullWidth) {
+                isRequestingMicrophone = true
+                Task {
+                    await requestMicrophone()
+                    isRequestingMicrophone = false
+                    // Either answer finishes onboarding; recording explains a refusal.
+                    onComplete()
+                }
+            }
+            .disabled(isRequestingMicrophone)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.allowMicrophoneButton)
+
+            secondaryButton("Not now", action: onComplete)
                 .disabled(isRequestingMicrophone)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.skipMicrophoneButton)
         case .denied:
-            VStack(spacing: 6) {
-                Text("Microphone access is off. Turn it on in Settings to record.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                #if canImport(UIKit)
-                Button("Open Settings") { MicrophoneSettings.open() }
-                    .font(.subheadline)
-                #endif
+            primaryButton("Open \(settingsName)", fullWidth: fullWidth) {
+                MicrophoneSettings.open()
             }
+            secondaryButton("Continue without it", action: onComplete)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.skipMicrophoneButton)
         case .granted:
-            Label("Microphone allowed", systemImage: "checkmark.circle.fill")
-                .font(.subheadline)
-                .foregroundStyle(.green)
+            primaryButton("Start using Voicely", fullWidth: fullWidth, action: onComplete)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.finishButton)
         }
     }
 
-    private func primaryAction() {
-        if asksForMicrophone {
-            isRequestingMicrophone = true
-            Task {
-                await requestMicrophone()
-                isRequestingMicrophone = false
-                // Either answer finishes onboarding; recording explains a refusal.
-                onComplete()
+    // MARK: - Building blocks
+
+    private func iconTile(
+        _ systemImage: String,
+        tint: Color,
+        size: CGFloat,
+        symbolSize: CGFloat,
+        cornerRadius: CGFloat
+    ) -> some View {
+        RoundedRectangle(cornerRadius: m(cornerRadius), style: .continuous)
+            .fill(tint.opacity(0.14))
+            .frame(width: m(size), height: m(size))
+            .overlay(
+                Image(systemName: systemImage)
+                    .font(.system(size: m(symbolSize), weight: .semibold))
+                    .foregroundStyle(tint)
+            )
+            .accessibilityHidden(true)
+    }
+
+    private func primaryButton(
+        _ title: String,
+        leadingImage: String? = nil,
+        trailingImage: String? = nil,
+        fullWidth: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: m(10)) {
+                if let leadingImage {
+                    Image(systemName: leadingImage)
+                }
+                Text(title)
+                if let trailingImage {
+                    Image(systemName: trailingImage)
+                }
             }
-        } else if isLastPage {
-            onComplete()
-        } else {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.88)) {
-                selectedPage += 1
-            }
+            .font(font(18, .semibold))
+            .foregroundStyle(Self.accentInk)
+            .padding(.horizontal, m(30))
+            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: m(fullWidth ? 54 : 50))
+            .background(VoicelyTheme.accent, in: Capsule())
+            .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
+    }
+
+    private func secondaryButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(font(17))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, m(16))
+                .frame(minHeight: m(44))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -26,14 +26,14 @@ struct FirstLaunchOnboardingTests {
         #expect(FirstLaunchOnboarding.shouldPresent(defaults: defaults, isRunningTests: true) == false)
     }
 
-    @Test func onboardingEndsByAskingForTheMicrophone() {
-        #expect(FirstLaunchOnboarding.pages.map(\.title) == [
-            "Record the whole meeting",
-            "Transcribed on this device",
-            "Ready when the meeting ends",
-            "Allow the microphone"
+    @Test func welcomeFeaturesNameTheDevice() {
+        let features = FirstLaunchOnboarding.features(deviceName: "Mac")
+
+        #expect(features.map(\.title) == [
+            "Records the whole meeting",
+            "Stays on this Mac",
+            "Ready when it ends"
         ])
-        #expect(FirstLaunchOnboarding.pages.last?.id == "microphone")
     }
 
     @Test func modelSetupStatusReflectsActualPreparationState() {
@@ -44,8 +44,8 @@ struct FirstLaunchOnboardingTests {
         )
 
         #expect(optimizing.visualState == .active)
-        #expect(optimizing.title == "Optimizing offline transcription")
-        #expect(optimizing.detail == "Voicely is preparing the speech model for this device.")
+        #expect(optimizing.title == "Preparing speech model")
+        #expect(optimizing.detail == nil)
         #expect(optimizing.progress == 0.82)
 
         let ready = FirstLaunchOnboarding.modelSetupStatus(
@@ -55,9 +55,18 @@ struct FirstLaunchOnboardingTests {
         )
 
         #expect(ready.visualState == .ready)
-        #expect(ready.title == "Offline transcription ready")
-        #expect(ready.detail == "The speech model is loaded and ready to use.")
+        #expect(ready.title == "Ready · works offline")
+        #expect(ready.detail == nil)
         #expect(ready.progress == nil)
+
+        let failed = FirstLaunchOnboarding.modelSetupStatus(
+            for: .loading,
+            progress: 0.4,
+            errorMessage: "Out of memory"
+        )
+
+        #expect(failed.visualState == .failed)
+        #expect(failed.detail == "Out of memory")
     }
 
     private func makeDefaults() -> UserDefaults {

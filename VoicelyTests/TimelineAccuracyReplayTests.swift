@@ -38,7 +38,12 @@ struct TimelineAccuracyReplayTests {
         var reference: Double
         var estimates: [Method: Double]
         var sentence: String
+        /// Where a tap on this sentence would start playback, by strategy.
+        var seeks: [String: Double] = [:]
     }
+
+    static let seekStrategies = ["lead 1.0s", "lead 1.5s", "lead 2.0s",
+                                 "pause back 3s", "pause back 2s", "pause nearest 2s"]
 
     @Test func measureSentenceStartErrors() async throws {
         let audioDirectory = TimelineAccuracyInput.directory.appendingPathComponent("audio")
@@ -57,9 +62,13 @@ struct TimelineAccuracyReplayTests {
         let vad = try SileroNeuralVoiceActivityDetector()
 
         var rows: [Row] = []
+        var skips: [String: [String: Int]] = [:]
         for recording in recordings {
-            rows += try await measure(recording, store: store, aligner: aligner, vad: vad)
+            let (measured, skipped) = try await measure(recording, store: store, aligner: aligner, vad: vad)
+            rows += measured
+            skips[recording.lastPathComponent] = skipped
         }
+        try #require(!rows.isEmpty)
         await store.unloadModel()
 
         var report = "recording\tunits\t" + Method.allCases.map { "\($0.rawValue): mean|med|p90|max|≤1s|≤2s|bias" }.joined(separator: "\t") + "\n"
@@ -80,6 +89,22 @@ struct TimelineAccuracyReplayTests {
             }
             report += "\n"
         }
+        report += "\nskipped sentences\n"
+        for (name, counts) in skips.sorted(by: { $0.key < $1.key }) {
+            report += "\(name)\t" + counts.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }.joined(separator: " ") + "\n"
+        }
+        // Tap: missing the head = playback starts after the sentence does; the
+        // cost of starting early = how much comes before the head.
+        report += "\ntap strategy\tmissed head\tmissed by (median)\theard before head median|p90|max\n"
+        for strategy in Self.seekStrategies {
+            let pairs = rows.map { ($0.seeks[strategy]!, $0.reference) }
+            let late = pairs.filter { $0.0 > $0.1 + 0.15 }.map { $0.0 - $0.1 }.sorted()
+            let before = pairs.filter { $0.0 <= $0.1 + 0.15 }.map { max(0, $0.1 - $0.0) }.sorted()
+            func q(_ v: [Double], _ p: Double) -> Double { v.isEmpty ? 0 : v[min(v.count - 1, Int(Double(v.count) * p))] }
+            report += String(format: "%@\t%.1f%%\t%.2fs\t%.2f|%.2f|%.1f\n", strategy,
+                             Double(late.count) / Double(pairs.count) * 100, q(late, 0.5),
+                             q(before, 0.5), q(before, 0.9), before.last ?? 0)
+        }
         var detail = "recording\tslice\treference\t" + Method.allCases.map(\.rawValue).joined(separator: "\t") + "\tsentence\n"
         for row in rows {
             detail += "\(row.recording)\t\(row.sliceStart)\t\(row.reference)\t"
@@ -92,7 +117,8 @@ struct TimelineAccuracyReplayTests {
     }
 
     private func measure(_ recording: URL, store: Qwen3ASRModelStore, aligner: Qwen3ForcedAligner,
-                         vad: SileroNeuralVoiceActivityDetector) async throws -> [Row] {
+                         vad: SileroNeuralVoiceActivityDetector) async throws -> ([Row], [String: Int]) {
+        var skipped: [String: Int] = [:]
         // A 16 kHz mono copy, so file frames and samples are the same unit.
         let samples = try Qwen3AudioPCM.loadPCM16kMono(url: recording)
         let pcmURL = FileManager.default.temporaryDirectory.appendingPathComponent("acc_\(UUID().uuidString).caf")
@@ -131,11 +157,15 @@ struct TimelineAccuracyReplayTests {
             let language = Self.isMostlyCJK(text) ? "Chinese" : "English"
             let words = aligner.align(audio: slice, text: text, sampleRate: 16_000, language: language)
             let wordOffsets = Self.locate(words, in: text)
-            guard !wordOffsets.isEmpty else { continue }
 
             // What ships: the production units over a one-slice timeline.
             let span = TranscriptSpan(length: text.utf16.count, start: sliceStart, end: sliceEnd)
             let units = TranscriptTimeline.units(text: text, spans: [span])
+            skipped["total", default: 0] += units.count
+            guard !wordOffsets.isEmpty else {
+                skipped["slice not aligned", default: 0] += units.count
+                continue
+            }
             let voiced = Self.voicedIntervals(try vad.speechProbabilities(in: slice))
             let syllableWeights = Self.syllableWeights(text)
             let characterWeights = Array(repeating: 1.0, count: text.utf16.count)
@@ -145,7 +175,12 @@ struct TimelineAccuracyReplayTests {
                 // Reference: the first aligned word that starts inside this sentence.
                 guard let first = wordOffsets.first(where: {
                     $0.offset >= location && $0.offset < location + unit.range.length
-                }) else { continue }
+                }) else {
+                    let sentence = (text as NSString).substring(with: unit.range)
+                    let hasContent = sentence.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+                    skipped[hasContent ? "no aligned word in sentence" : "punctuation only", default: 0] += 1
+                    continue
+                }
                 let reference = sliceStart + Double(first.word.startTime)
                 let sentence = (text as NSString).substring(with: unit.range)
                 func estimate(_ weights: [Double], voicedOnly: Bool) -> Double {
@@ -165,10 +200,11 @@ struct TimelineAccuracyReplayTests {
                         .snapped: Self.snap(unit.start, toOnsetsIn: voiced, sliceStart: sliceStart, window: 1.5),
                         .snappedWide: Self.snap(unit.start, toOnsetsIn: voiced, sliceStart: sliceStart, window: 2.5)
                     ],
-                    sentence: sentence))
+                    sentence: sentence,
+                    seeks: try Self.tapSeeks(estimate: unit.start, slice: slice, sliceStart: sliceStart, vad: vad)))
             }
         }
-        return rows
+        return (rows, skipped)
     }
 
     // MARK: Helpers
@@ -191,7 +227,13 @@ struct TimelineAccuracyReplayTests {
             let range = nsText.range(of: word.text, options: [.caseInsensitive],
                                      range: NSRange(location: cursor, length: nsText.length - cursor))
             guard range.location != NSNotFound else { continue }
-            result.append((word, range.location))
+            // The aligner glues punctuation onto the next word ("。Hello");
+            // the word starts at its first letter or digit.
+            var start = range.location
+            while start < range.location + range.length,
+                  let scalar = UnicodeScalar(nsText.character(at: start)),
+                  !CharacterSet.alphanumerics.contains(scalar) { start += 1 }
+            result.append((word, start))
             cursor = range.location + range.length
         }
         return result
@@ -206,6 +248,41 @@ struct TimelineAccuracyReplayTests {
             if let last = intervals.last, s - last.1 < 0.2 { intervals[intervals.count - 1].1 = e } else { intervals.append((s, e)) }
         }
         return intervals
+    }
+
+    /// Where a tap starts playback under each strategy. The pause strategies
+    /// run the VAD on a few seconds around the estimate, as a tap would, and
+    /// start just before speech resumes after a pause; a slice start counts as
+    /// one (slices are cut in pauses). Without a pause in reach they fall back
+    /// to a 1 s lead.
+    static func tapSeeks(estimate: Double, slice: [Float], sliceStart: Double,
+                         vad: SileroNeuralVoiceActivityDetector) throws -> [String: Double] {
+        let sliceEnd = sliceStart + Double(slice.count) / 16_000
+        var seeks: [String: Double] = [:]
+        for lead in [1.0, 1.5, 2.0] {
+            seeks[String(format: "lead %.1fs", lead)] = max(sliceStart, estimate - lead)
+        }
+        let windowStart = max(sliceStart, estimate - 3)
+        let windowEnd = min(sliceEnd, estimate + 1)
+        let from = max(0, Int((windowStart - sliceStart) * 16_000)), to = min(slice.count, Int((windowEnd - sliceStart) * 16_000))
+        var onsets: [Double] = windowStart <= sliceStart + 0.01 ? [sliceStart] : []
+        if to > from {
+            let intervals = voicedIntervals(try vad.speechProbabilities(in: Array(slice[from..<to])))
+            var previousEnd = 0.0
+            for (s, e) in intervals {
+                if s > 0.05, s - previousEnd >= 0.25 { onsets.append(windowStart + s) }
+                previousEnd = e
+            }
+        }
+        let fallback = max(sliceStart, estimate - 1)
+        func cushion(_ onset: Double) -> Double { max(sliceStart, onset - 0.15) }
+        for back in [3.0, 2.0] {
+            let candidates = onsets.filter { $0 >= estimate - back && $0 <= estimate + 0.3 }
+            seeks["pause back \(Int(back))s"] = candidates.max().map(cushion) ?? fallback
+        }
+        let near = onsets.filter { abs($0 - estimate) <= 2 }.min { abs($0 - estimate) < abs($1 - estimate) }
+        seeks["pause nearest 2s"] = near.map(cushion) ?? fallback
+        return seeks
     }
 
     /// Moves an estimate to the nearest point where speech resumes after a

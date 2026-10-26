@@ -109,7 +109,7 @@ struct TranscriptTimelineTests {
     @Test func aSeekStartsALittleEarlyButNeverBeforeItsSpan() {
         let inside = TranscriptUnit(range: NSRange(location: 0, length: 1), start: 13, spanStart: 10)
         let first = TranscriptUnit(range: NSRange(location: 0, length: 1), start: 10.4, spanStart: 10)
-        #expect(TranscriptTimeline.seekTime(for: inside) == 12)
+        #expect(TranscriptTimeline.seekTime(for: inside) == 11.5)
         #expect(TranscriptTimeline.seekTime(for: first) == 10)
     }
 

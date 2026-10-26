@@ -306,10 +306,13 @@ enum TranscriptTimeline {
     }
 
     /// Estimated starts can be early or late by a few seconds, so a tap starts
-    /// playback a little before the sentence, never before its span.
+    /// playback a little before the sentence, never before its span. Measured
+    /// on 363 sentences (TimelineAccuracyReplayTests): 1 s missed the sentence
+    /// head 21% of the time, 1.5 s 15%, at a median of 1.1 s heard before the
+    /// head; starting at a nearby pause did no better.
     static func seekTime(for unit: TranscriptUnit) -> TimeInterval {
         max(unit.spanStart, unit.start - seekLeadIn)
     }
 
-    static let seekLeadIn: TimeInterval = 1.0
+    static let seekLeadIn: TimeInterval = 1.5
 }

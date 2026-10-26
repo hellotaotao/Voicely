@@ -66,30 +66,30 @@ enum FirstLaunchOnboarding {
     static let pages: [FirstLaunchOnboardingPage] = [
         FirstLaunchOnboardingPage(
             id: "capture",
-            title: "Capture every thought",
-            subtitle: "Open a note, start recording, and keep your audio and transcript together.",
+            title: "Record the whole meeting",
+            subtitle: "Tap record and the transcript builds while people talk. It keeps going with the screen locked.",
             systemImage: "waveform.circle.fill",
             accentColor: .blue
         ),
         FirstLaunchOnboardingPage(
             id: "private",
-            title: "Transcribe privately",
-            subtitle: "Speech recognition runs on this device, so meetings, ideas, and journals stay local.",
+            title: "Transcribed on this device",
+            subtitle: "Speech recognition runs on your device. Audio is never uploaded to be transcribed.",
             systemImage: "lock.shield.fill",
             accentColor: .green
         ),
         FirstLaunchOnboardingPage(
-            id: "metrics",
-            title: "Choose the right model",
-            subtitle: "Start with the recommended offline model, then explore faster or more accurate options whenever you need them.",
-            systemImage: "slider.horizontal.3",
+            id: "use",
+            title: "Ready when the meeting ends",
+            subtitle: "Read, copy, or share the transcript, or tap a sentence to hear it again.",
+            systemImage: "doc.on.doc.fill",
             accentColor: .purple
         ),
         FirstLaunchOnboardingPage(
-            id: "prepare",
-            title: "Ready when you are",
-            subtitle: "The first model setup can take a moment. This tour gives Voicely time to prepare.",
-            systemImage: "sparkles",
+            id: "microphone",
+            title: "Allow the microphone",
+            subtitle: "Voicely needs the microphone to record. Allow it now, so nothing is in your way when a meeting starts.",
+            systemImage: "mic.circle.fill",
             accentColor: .orange
         )
     ]
@@ -168,11 +168,31 @@ struct FirstLaunchOnboardingView: View {
         progress: 0,
         errorMessage: nil
     )
+    var microphonePermission: MicrophonePermission = .undetermined
+    /// Shows the system microphone prompt.
+    var requestMicrophone: () async -> Void = {}
     var onComplete: () -> Void
     @State private var selectedPage = 0
+    @State private var isRequestingMicrophone = false
 
     private var isLastPage: Bool {
         selectedPage >= FirstLaunchOnboarding.pages.count - 1
+    }
+
+    /// The last page asks for the microphone before finishing, unless the
+    /// user has already decided.
+    private var asksForMicrophone: Bool {
+        isLastPage && microphonePermission == .undetermined
+    }
+
+    private var primaryTitle: String {
+        if asksForMicrophone { return "Allow Microphone" }
+        return isLastPage ? "Start using Voicely" : "Next"
+    }
+
+    private var primaryImage: String {
+        if asksForMicrophone { return "mic.fill" }
+        return isLastPage ? "checkmark" : "arrow.right"
     }
 
     var body: some View {
@@ -182,7 +202,7 @@ struct FirstLaunchOnboardingView: View {
             VStack(spacing: 10) {
                 Text("Voicely")
                     .font(.largeTitle.weight(.bold))
-                Text("Private voice notes with offline transcription")
+                Text("Private meeting transcripts")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -208,8 +228,8 @@ struct FirstLaunchOnboardingView: View {
 
             Button(action: primaryAction) {
                 HStack(spacing: 8) {
-                    Text(isLastPage ? "Start using Voicely" : "Next")
-                    Image(systemName: isLastPage ? "checkmark" : "arrow.right")
+                    Text(primaryTitle)
+                    Image(systemName: primaryImage)
                         .font(.subheadline.weight(.semibold))
                 }
                 .font(.headline.weight(.semibold))
@@ -220,13 +240,22 @@ struct FirstLaunchOnboardingView: View {
                 .shadow(color: VoicelyTheme.accent.opacity(0.28), radius: 14, y: 8)
             }
             .buttonStyle(.plain)
+            .disabled(isRequestingMicrophone)
             .accessibilityIdentifier(
-                isLastPage
+                asksForMicrophone
+                ? AccessibilityIdentifiers.Onboarding.allowMicrophoneButton
+                : isLastPage
                 ? AccessibilityIdentifiers.Onboarding.finishButton
                 : AccessibilityIdentifiers.Onboarding.nextButton
             )
             .padding(.horizontal, 28)
-            .padding(.bottom, 28)
+            .padding(.bottom, isLastPage ? 8 : 28)
+
+            if isLastPage {
+                microphoneFooter
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 20)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(backgroundView)
@@ -330,8 +359,45 @@ struct FirstLaunchOnboardingView: View {
         }
     }
 
+    /// Lets the user finish without deciding, or explains a microphone that is
+    /// already off. Recording asks again, or points to Settings, when needed.
+    @ViewBuilder
+    private var microphoneFooter: some View {
+        switch microphonePermission {
+        case .undetermined:
+            Button("Not now", action: onComplete)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .disabled(isRequestingMicrophone)
+                .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.skipMicrophoneButton)
+        case .denied:
+            VStack(spacing: 6) {
+                Text("Microphone access is off. Turn it on in Settings to record.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                #if canImport(UIKit)
+                Button("Open Settings") { MicrophoneSettings.open() }
+                    .font(.subheadline)
+                #endif
+            }
+        case .granted:
+            Label("Microphone allowed", systemImage: "checkmark.circle.fill")
+                .font(.subheadline)
+                .foregroundStyle(.green)
+        }
+    }
+
     private func primaryAction() {
-        if isLastPage {
+        if asksForMicrophone {
+            isRequestingMicrophone = true
+            Task {
+                await requestMicrophone()
+                isRequestingMicrophone = false
+                // Either answer finishes onboarding; recording explains a refusal.
+                onComplete()
+            }
+        } else if isLastPage {
             onComplete()
         } else {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.88)) {

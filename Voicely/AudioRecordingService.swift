@@ -10,6 +10,9 @@ import Accelerate
 import Combine
 import Foundation
 import os
+#if canImport(UIKit)
+import UIKit
+#endif
 
 #if DEBUG
 /// A callback duration comparison, not evidence of a hardware audio overload.
@@ -111,6 +114,29 @@ struct RecordingStopResult {
     }
 }
 
+enum MicrophonePermission: Equatable {
+    case undetermined
+    case granted
+    case denied
+}
+
+#if canImport(UIKit)
+enum MicrophoneSettings {
+    static let deniedExplanation = "Voicely needs the microphone to record. Turn it on for Voicely in Settings, then come back and tap record."
+
+    /// Voicely's page in Settings on iPhone and iPad; the Microphone privacy
+    /// pane of System Settings on the Mac, where per-app pages do not exist.
+    @MainActor static func open() {
+        #if targetEnvironment(macCatalyst)
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        #else
+        let url = URL(string: UIApplication.openSettingsURLString)
+        #endif
+        if let url { UIApplication.shared.open(url) }
+    }
+}
+#endif
+
 @MainActor
 class AudioRecordingService: ObservableObject {
 
@@ -119,7 +145,11 @@ class AudioRecordingService: ObservableObject {
     @Published var isRecording = false
     @Published var isPaused = false
     @Published var recordingDuration: TimeInterval = 0
-    @Published var hasPermission = false
+    @Published private(set) var microphonePermission: MicrophonePermission = .undetermined
+    var hasPermission: Bool { microphonePermission == .granted }
+    /// Set when a recording could not start because the user turned the
+    /// microphone off; the controls explain how to turn it back on.
+    @Published var isShowingMicrophoneDeniedNotice = false
     @Published private(set) var isPreparingRecordingSession = false
 
     // MARK: New: exposes PCM file URL and live frame position
@@ -170,7 +200,7 @@ class AudioRecordingService: ObservableObject {
     // MARK: Init
 
     init() {
-        checkPermission()
+        refreshPermission()
         registerForAudioSessionInterruptions()
     }
 
@@ -214,50 +244,38 @@ class AudioRecordingService: ObservableObject {
 
     // MARK: Permission
 
-    func checkPermission() {
-        #if targetEnvironment(macCatalyst)
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted: hasPermission = true
-        case .denied:  hasPermission = false
-        case .undetermined:
-            AVAudioApplication.requestRecordPermission { [weak self] allowed in
-                DispatchQueue.main.async { self?.hasPermission = allowed }
-            }
-        @unknown default: hasPermission = false
-        }
-        #elseif os(macOS)
+    /// Reads the microphone permission without asking. Onboarding asks with an
+    /// explanation, and the first recording asks if onboarding was skipped, so
+    /// the system prompt never appears unexplained at launch.
+    func refreshPermission() {
+        #if os(macOS) && !targetEnvironment(macCatalyst)
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: hasPermission = true
-        case .denied, .restricted: hasPermission = false
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] allowed in
-                DispatchQueue.main.async { self?.hasPermission = allowed }
-            }
-        @unknown default: hasPermission = false
+        case .authorized: microphonePermission = .granted
+        case .notDetermined: microphonePermission = .undetermined
+        default: microphonePermission = .denied
         }
         #else
-        if #available(iOS 17.0, *) {
-            switch AVAudioApplication.shared.recordPermission {
-            case .granted: hasPermission = true
-            case .denied:  hasPermission = false
-            case .undetermined:
-                AVAudioApplication.requestRecordPermission { [weak self] allowed in
-                    DispatchQueue.main.async { self?.hasPermission = allowed }
-                }
-            @unknown default: hasPermission = false
-            }
-        } else {
-            switch audioSession.recordPermission {
-            case .granted: hasPermission = true
-            case .denied:  hasPermission = false
-            case .undetermined:
-                audioSession.requestRecordPermission { [weak self] allowed in
-                    DispatchQueue.main.async { self?.hasPermission = allowed }
-                }
-            @unknown default: hasPermission = false
-            }
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted: microphonePermission = .granted
+        case .undetermined: microphonePermission = .undetermined
+        default: microphonePermission = .denied
         }
         #endif
+    }
+
+    /// Shows the system prompt when the user has not decided yet. Returns
+    /// whether recording is allowed.
+    @discardableResult
+    func requestPermission() async -> Bool {
+        refreshPermission()
+        guard microphonePermission == .undetermined else { return hasPermission }
+        #if os(macOS) && !targetEnvironment(macCatalyst)
+        let allowed = await AVCaptureDevice.requestAccess(for: .audio)
+        #else
+        let allowed = await AVAudioApplication.requestRecordPermission()
+        #endif
+        microphonePermission = allowed ? .granted : .denied
+        return allowed
     }
 
     // MARK: Recording Session Prewarm
@@ -313,8 +331,8 @@ class AudioRecordingService: ObservableObject {
 
     /// Starts recording. Returns the M4A filename (last path component) for cross-device compat.
     func startRecording() async -> String? {
-        guard hasPermission else {
-            checkPermission()
+        guard await requestPermission() else {
+            isShowingMicrophoneDeniedNotice = true
             return nil
         }
 

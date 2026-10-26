@@ -103,6 +103,8 @@ struct ContentView: View {
             guard !AppRuntime.isRunningTests else { return }
             if newValue == .background { transcriptionService.savedTranscriptionsDidEnterBackground() }
             if newValue == .active {
+                // The user may have changed microphone access in Settings.
+                audioService.refreshPermission()
                 Task { @MainActor in
                     await transcriptionService.resumeSavedTranscriptionsInForeground()
                     await processQueuedTranscriptionsIfReady()
@@ -157,6 +159,8 @@ struct ContentView: View {
             if shouldShowFirstLaunchOnboarding {
                 FirstLaunchOnboardingView(
                     modelSetupStatus: onboardingModelSetupStatus,
+                    microphonePermission: audioService.microphonePermission,
+                    requestMicrophone: { await audioService.requestPermission() },
                     onComplete: completeFirstLaunchOnboarding
                 )
                 .transition(.opacity)
@@ -1194,7 +1198,7 @@ struct RecordingControls: View {
     }
 
     private var statusTint: Color {
-        if !audioService.hasPermission { return .orange }
+        if audioService.microphonePermission == .denied { return .orange }
         guard let modelManager else { return .secondary }
         switch modelManager.modelState {
         case .loaded: return .green
@@ -1239,6 +1243,12 @@ struct RecordingControls: View {
         }
         .onChange(of: audioService.hasPermission) { _, _ in
             audioService.prewarmRecordingSessionIfPossible()
+        }
+        .alert("Microphone Access Is Off", isPresented: $audioService.isShowingMicrophoneDeniedNotice) {
+            Button("Open Settings") { MicrophoneSettings.open() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(MicrophoneSettings.deniedExplanation)
         }
         .sheet(item: $timerSheetRequest) { request in
             RecordingTimerSheet(session: session, request: request)
@@ -1432,21 +1442,25 @@ struct RecordingControls: View {
     }
 
     private var recordButton: some View {
-        Button(action: { session.startRecording() }) {
-            Image(systemName: audioService.hasPermission ? "mic.fill" : "mic.slash.fill")
+        // Stays tappable without permission: an undecided user is asked on the
+        // spot, and a user who turned the microphone off is told where to turn it on.
+        let microphoneOff = audioService.microphonePermission == .denied
+        return Button(action: { session.startRecording() }) {
+            Image(systemName: microphoneOff ? "mic.slash.fill" : "mic.fill")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Color.black)
                 .frame(width: 44, height: 44)
                 .background(
-                    Circle().fill(audioService.hasPermission ? VoicelyTheme.accent : Color.gray)
+                    Circle().fill(microphoneOff ? Color.gray : VoicelyTheme.accent)
                 )
-                .shadow(color: audioService.hasPermission ? VoicelyTheme.accent.opacity(0.35) : .clear, radius: 12, y: 4)
+                .shadow(color: microphoneOff ? .clear : VoicelyTheme.accent.opacity(0.35), radius: 12, y: 4)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
         }
         .buttonStyle(.plain)
-        .disabled(!audioService.hasPermission || session.isStartingRecording)
+        .disabled(session.isStartingRecording)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(audioService.hasPermission ? "Record" : "Record unavailable")
+        .accessibilityLabel("Record")
+        .accessibilityHint(microphoneOff ? "Microphone access is off" : "")
         .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordButton)
     }
 

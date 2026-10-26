@@ -6,6 +6,8 @@ enum AccessibilityIdentifiers {
         static let pageTitle = "FirstLaunchOnboardingPageTitle"
         static let nextButton = "FirstLaunchOnboardingNextButton"
         static let finishButton = "FirstLaunchOnboardingFinishButton"
+        static let allowMicrophoneButton = "FirstLaunchOnboardingAllowMicrophoneButton"
+        static let skipMicrophoneButton = "FirstLaunchOnboardingSkipMicrophoneButton"
     }
 
     enum Navigation {

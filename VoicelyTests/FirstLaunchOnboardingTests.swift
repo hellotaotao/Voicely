@@ -26,14 +26,14 @@ struct FirstLaunchOnboardingTests {
         #expect(FirstLaunchOnboarding.shouldPresent(defaults: defaults, isRunningTests: true) == false)
     }
 
-    @Test func onboardingContainsFourIntroPages() {
-        #expect(FirstLaunchOnboarding.pages.count == 4)
+    @Test func onboardingEndsByAskingForTheMicrophone() {
         #expect(FirstLaunchOnboarding.pages.map(\.title) == [
-            "Capture every thought",
-            "Transcribe privately",
-            "Choose the right model",
-            "Ready when you are"
+            "Record the whole meeting",
+            "Transcribed on this device",
+            "Ready when the meeting ends",
+            "Allow the microphone"
         ])
+        #expect(FirstLaunchOnboarding.pages.last?.id == "microphone")
     }
 
     @Test func modelSetupStatusReflectsActualPreparationState() {

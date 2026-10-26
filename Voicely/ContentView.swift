@@ -1580,8 +1580,10 @@ struct VoiceNoteDetailView: View {
         isLocallyTranscribing || isLiveUpdatingTranscript || isRecordingInProgress || isFinalizingTranscription
     }
 
+    /// Another device holds the note and nothing has come of it yet. Not offered
+    /// while that device is still recording: the audio does not exist yet.
     private var shouldShowTakeOverAction: Bool {
-        note.transcription.isEmpty && isRemoteTranscribing
+        note.transcription.isEmpty && isRemoteTranscribing && !transcriptionService.isStillRecordingElsewhere(note)
     }
 
     private var shouldShowPendingState: Bool {
@@ -2165,7 +2167,7 @@ struct VoiceNoteDetailView: View {
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)
         .buttonStyle(.plain)
-        .disabled(note.audioFilePath.isEmpty || isTranscribingHere || isRemoteTranscribing)
+        .disabled(note.audioFilePath.isEmpty || isTranscribingHere || (isRemoteTranscribing && !shouldShowTakeOverAction))
     }
 
     private func transcriptionActionIdentifier(for title: String) -> String {

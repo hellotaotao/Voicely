@@ -122,6 +122,15 @@ struct SpeechGateReplayTests {
         for dropped in cases where dropped.answer != nil && dropped.keptText == nil {
             print("GATE \(backend.rawValue) dropped \(dropped.answer!) \(Int(dropped.levelDb!))dB on \(dropped.background): presence=\(dropped.presence) engine=\(dropped.engineText.map { "\"\($0)\"" } ?? "-")")
         }
+
+        // Noise alone must never become text, and an answer at ordinary
+        // speaking levels must survive any background quieter than itself.
+        let keptNoise = cases.filter { $0.answer == nil && $0.keptText != nil }
+        #expect(keptNoise.isEmpty, "Noise came out as text: \(keptNoise.map(\.background))")
+        let droppedAudible = cases.filter {
+            $0.answer != nil && $0.keptText == nil && ($0.levelDb ?? 0) >= -35 && $0.background != "rumble-40dB"
+        }
+        #expect(droppedAudible.isEmpty, "Audible answers were dropped: \(droppedAudible.map { "\($0.answer!) \($0.levelDb!)dB on \($0.background)" })")
     }
 
     // MARK: Synthetic audio

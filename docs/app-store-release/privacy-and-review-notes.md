@@ -26,9 +26,9 @@ Without iCloud, audio stays in the app's local Documents folder and notes in the
 
 Paste into App Store Connect, adjusted for the final build:
 
-> Voicely records meetings and transcribes them on the device. The speech recognition model (Qwen3-ASR) is bundled with the app, which is why the download is about 1.1 GB; the app never downloads models and never sends audio or text to a server. No account or login is needed.
+> Voicely records meetings and transcribes them on the device. The speech recognition model (Qwen3-ASR) is bundled with the app, which is why the download is about 1.1 GB. The app never downloads models and never uploads audio or text for transcription; the developer runs no server. No account or login is needed.
 >
-> To test: tap the record button, allow microphone access, speak for 20–30 seconds, then stop. Text appears while recording and the note completes a few seconds after stopping. Tap a sentence to play from there. Settings shows the speech model and an optional language setting (Auto Detect by default).
+> To test: allow microphone access when the app first opens, tap the record button, speak for 20–30 seconds, then stop. Text appears while recording and the note completes a few seconds after stopping. Tap a sentence to play from there. Settings shows the speech model and an optional language setting (Auto Detect by default).
 >
 > The audio background mode keeps recording and live transcription running when the screen locks, as in any voice recorder; a Live Activity shows the recording on the Lock Screen and Dynamic Island. Background processing is used to finish transcribing after a recording stops.
 >
@@ -71,7 +71,7 @@ If the owner prefers the conservative reading of iCloud sync, declare instead: U
 
 | Permission | When it is asked | Purpose string |
 | --- | --- | --- |
-| Microphone | First recording | `NSMicrophoneUsageDescription`: "This app needs access to your microphone to record voice notes for transcription." |
+| Microphone | First launch (`AudioRecordingService.init` calls `checkPermission()`) | `NSMicrophoneUsageDescription`: "This app needs access to your microphone to record voice notes for transcription." |
 | Notifications | First time a stop time is set | System prompt; no purpose string. Used for the reminder before a scheduled stop and the "saved" confirmation. |
 
 Consider rewording the microphone string to name the feature reviewers look for, e.g. "Voicely uses the microphone to record meetings so it can transcribe them on this device."

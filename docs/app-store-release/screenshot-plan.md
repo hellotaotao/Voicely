@@ -1,49 +1,41 @@
 # Screenshot Plan
 
-Goal: tell a privacy-conscious professional story, not a generic voice memo story. Use synthetic meeting names and transcript text. Do not screenshot real sensitive meetings.
+Story: record a meeting, get the whole transcript on the device, use it. Use invented meeting names and transcript text; never a real meeting.
 
-## 6.7-Inch iPhone Narrative
+## Sizes
 
-Use 5-6 screenshots. Recommended set: 6 screenshots on a 6.7-inch iPhone simulator/device, with consistent status bar and a clean light-mode UI unless the final brand direction prefers dark mode.
+Check App Store Connect's current requirements before capturing.
 
-| # | Screen/state | Exact overlay caption | Capture notes |
-| --- | --- | --- | --- |
-| 1 | Library with a sensitive but synthetic meeting note selected, for example "Vendor Risk Review" | "Sensitive meetings, captured local-first" | Show Voicely as a professional meeting record system. Avoid empty-state positioning. |
-| 2 | Active recording screen with waveform/timer and model rail visible | "Record meeting-length audio on iPhone" | Use a realistic elapsed time, not just a few seconds. Keep the red/recording state visible. |
-| 3 | Detail screen while local transcription is running | "Transcribe with WhisperKit on device" | Show progress UI and the note status. Do not imply that model download is unnecessary. |
-| 4 | Completed transcript detail screen | "Review and edit the transcript" | Show readable transcript text, model badge, playback controls, and the Edit button. |
-| 5 | Transcript actions plus list/delete affordance or Share Sheet entry point | "Keep, delete, copy, or share" | Show copy/share buttons and a context where deletion is visible or easy to infer. If using Share Sheet, keep personal destinations hidden. |
-| 6 | Settings model management/language/compute screen, optionally with iCloud sync indicator shown elsewhere | "Control models, language, and iCloud" | Show Model Status, Available Models, Language Settings, and Compute Settings. If iCloud sync is active, capture the iCloud status indicator/action sheet as an alternate shot. |
+- iPhone 6.9-inch: 1320 × 2868 portrait (iPhone 17 Pro Max / 16 Pro Max class). Required; smaller iPhone sizes are scaled from it.
+- iPad 13-inch: 2064 × 2752 portrait. Required because the app runs on iPad.
+- Mac: 16:10, e.g. 2880 × 1800 or 1440 × 900.
 
-## Visual Direction
+## iPhone Set (6 screenshots)
 
-- The screenshots should look like an internal/professional tool for sensitive meetings.
-- Use realistic enterprise-facing sample content: "Board prep", "Legal intake", "HR policy review", "Client strategy session".
-- Keep captions short and benefit-led.
-- Avoid claims such as "compliant", "certified", "zero cloud", or "never syncs". Current code supports iCloud/CloudKit sync and model downloads.
-- If captions are added outside the app UI, keep them consistent, high contrast, and away from the app navigation bar and action buttons.
+| # | Screen and state | Caption |
+| --- | --- | --- |
+| 1 | Recording in progress: timer past 30 minutes, waveform, live transcript filling in below | Transcribes while you record |
+| 2 | Finished note: full transcript, playback bar, a highlighted sentence | Tap any sentence to hear it |
+| 3 | Lock Screen with the recording Live Activity | Keeps going when your iPhone is locked |
+| 4 | Mixed Chinese and English transcript | Handles meetings in two languages |
+| 5 | Stop timer: "Stops at 15:30" with the +10 min option | Stops on time, or keeps going |
+| 6 | Settings: the speech model card and "Fully on-device" (after its wording is fixed for iCloud) | Speech recognition stays on your device |
 
-## Optional 6.5-Inch Adaptation
+Alternative for 6: the transcript's Copy and Share actions, captioned "Copy it into your AI assistant".
 
-- Reuse the same six-shot story.
-- Re-capture rather than crop if text or buttons become cramped.
-- Keep overlay captions identical unless App Store Connect size constraints require shorter text.
-- Confirm current App Store Connect screenshot-size requirements before upload.
+## iPad Set
 
-## Optional iPad Adaptation
+The split view: note list on the left, transcript and playback on the right. Reuse captions 1, 2, 4 and 6.
 
-- Use iPad screenshots only if the final App Store listing targets iPad screenshots for this release.
-- Lean into the split-view layout: library on the left, selected transcript detail on the right.
-- Suggested iPad captions:
-  - "Meeting library and transcript side by side"
-  - "Review audio and transcript together"
-  - "Manage local models for each device"
-- Avoid using iPad screenshots that make the product look like a generic notes app. Keep the meeting transcription story visible.
+## Mac Set
 
-## Screenshot Data Checklist
+The same split view in a Mac window, one shot recording and one finished transcript. Captions 1 and 2, plus "Fast transcription on Apple silicon".
 
-- Use fabricated names, organizations, and meeting content.
-- Include at least one transcript that reads like a professional meeting, not a quick reminder.
-- Include model name/status where possible, because model control is part of the value proposition.
-- Include iCloud only as optional user-account sync, not as the transcription engine.
-- Hide personal Share Sheet contacts before capturing.
+## Capture Notes
+
+- Mac first: capture the Mac set from the running app; the iPhone and iPad sets need the simulator or a device, which belongs to the pre-release iPhone pass.
+- Clean status bar on the simulator: `xcrun simctl status_bar booted override --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4`; reset with `xcrun simctl status_bar booted clear`.
+- Sample note titles: "Q3 Vendor Review", "Product Sync", "Hiring Debrief", "季度规划会".
+- Avoid claims the app cannot back: "compliant", "certified", "zero cloud", "never syncs". iCloud sync exists and is optional.
+- Hide personal contacts in any Share Sheet before capturing.
+- Captions sit outside the app UI, high contrast, clear of navigation bars and buttons.

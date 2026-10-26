@@ -1,64 +1,48 @@
 # App Store Release Checklist
 
-This checklist prepares the package only. Do not submit to Apple until the product owner explicitly approves the final listing and build.
+For Voicely's first public release (iPhone, iPad, and Mac in one listing). This package prepares the submission; clicking Submit for Review is the owner's call.
 
-## Local Preflight
+## Before Archiving
 
-- Confirm final release version and build number. Current app target is `MARKETING_VERSION = 0.15.3` and `CURRENT_PROJECT_VERSION = 1` in `Voicely.xcodeproj/project.pbxproj`.
-- Decide whether the first official App Store version should be `1.0`, `1.0.0`, or remain `0.15.3`.
-- Confirm bundle ID is `com.hellotaotao.Voicely`.
-- Confirm deployment target and device families: iPhone and iPad are enabled in the app target.
-- Confirm the release archive uses App Store distribution signing.
-- Confirm production archive entitlements for iCloud/CloudKit and APNs. The checked-in entitlements file contains development APNs values, so verify the archived entitlements from Xcode Organizer before upload.
-- Confirm `ITSAppUsesNonExemptEncryption=false` remains accurate.
-- Confirm CloudKit container `iCloud.com.hellotaotao.Voicely` and production schema are ready if shipping iCloud sync.
-- Confirm microphone and speech/transcription permission strings are acceptable for the final build.
-- Confirm a clean install can download/load a WhisperKit model and transcribe a short recording.
+- Pass the iPhone acceptance in `docs/stable-roadmap.md` (item 6): a minimum-supported and a recent device, foreground and locked, a 60–90 minute meeting end to end, iOS 18 and iOS 26 background paths, scheduled stop on the Lock Screen, recovery after the app is killed mid-recording. The listing's background claims depend on it.
+- Reword the in-app privacy card in Settings so it no longer says audio and text never leave the device (iCloud sync); see `privacy-and-review-notes.md`.
+- Decide the public version (`1.0` or `0.28.x`) and set it in `Config/Version.xcconfig`, the only place versions are set.
+- Deploy the CloudKit schema from development to production in CloudKit Console (container `iCloud.com.hellotaotao.Voicely`). Release and TestFlight builds use production; an outdated production schema makes sync fail.
+- Confirm `ITSAppUsesNonExemptEncryption = false` still holds.
+- Confirm a clean install transcribes a short recording with no network (airplane mode, iCloud off).
 
-## Xcode / Build Upload
+## Build And Upload
 
-- Open `Voicely.xcodeproj` in Xcode.
-- Select the `Voicely` scheme and a generic iOS device destination.
-- Set final version/build values if needed.
-- Product > Archive.
-- In Organizer, select the archive and validate it.
-- If no suitable TestFlight build exists, Distribute App > App Store Connect > Upload.
-- Wait for App Store Connect processing.
-- Do not push or submit from this release-prep task.
+Follow the release procedure (bundled model, arm64-only Mac archive):
 
-## App Store Connect Setup
+1. Run `scripts/fetch-speech-models.sh` if `Models/` is missing.
+2. Commit and push the version bump, then tag `vX.Y.Z`.
+3. Archive both platforms:
+   - iOS: `xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=iOS' archive`
+   - Mac: `xcodebuild -scheme Voicely -configuration Release -destination 'generic/platform=macOS,variant=Mac Catalyst' ARCHS=arm64 archive`
+4. Upload each with `xcodebuild -exportArchive` (App Store Connect, upload) or from Organizer. Each package is about 1.1 GB and takes roughly 15 minutes to upload.
+5. In Organizer, check that the archived entitlements use the production push environment.
+6. Wait for processing, then smoke-test both builds from TestFlight.
 
-- Create or open the app record for Voicely.
-- Add a new app version matching the uploaded build version.
-- Select the processed build from TestFlight/build list.
-- Fill metadata from `docs/app-store-release/app-store-metadata.md`.
-- Upload screenshots using `docs/app-store-release/screenshot-plan.md`.
-- Set category to Productivity, with Business as secondary if desired.
-- Complete age rating questionnaire using the notes in `app-store-metadata.md`.
-- Complete App Privacy answers using `privacy-and-review-notes.md`.
-- Complete export compliance. Based on current `Info.plist`, answer that the app does not use non-exempt encryption, assuming no new encryption code was added.
-- Set pricing and availability.
-- Add review contact information.
-- Paste App Review notes from `privacy-and-review-notes.md`, adjusted for the final build.
-- Save all changes.
-- Stop before clicking Submit for Review unless explicitly approved.
+## App Store Connect
 
-## Manual Items The Owner Must Complete
+- Create the app version for iOS and for macOS, using the same version number.
+- Select the processed builds.
+- Metadata from `app-store-metadata.md`; add the Chinese (Simplified) localization.
+- Screenshots from `screenshot-plan.md`.
+- Category: Productivity, secondary Business.
+- Age rating questionnaire (likely 4+).
+- App Privacy from `privacy-and-review-notes.md` (recommended: Data Not Collected); privacy policy URL must match.
+- Export compliance: no non-exempt encryption.
+- Mac availability: Apple silicon only.
+- Pricing and availability.
+- Review contact details and the App Review notes from `privacy-and-review-notes.md`.
+- Save; submit only after the owner approves the listing and builds.
 
-- Publish and enter a live Support URL.
-- Publish and enter a live Marketing URL if using one.
-- Confirm copyright/legal entity.
-- Confirm privacy policy/support page wording.
-- Confirm App Privacy Nutrition Label with legal/privacy owner.
-- Confirm CloudKit production readiness and any required container/schema deployment.
-- Confirm pricing, availability, age rating, content rights, and export compliance.
-- Confirm final screenshots and captions.
-- Confirm the final selected build is the intended TestFlight-tested build.
-- Click Submit for Review only after final approval.
+## Owner Items
 
-## Post-Package Verification
-
-- Run `git diff --check`.
-- Review the created docs under `docs/app-store-release/`.
-- Commit locally with `docs: prepare App Store release package`.
-- Do not push.
+- Publish the support page and privacy policy; enter their URLs (and a marketing URL if used).
+- Confirm the copyright holder.
+- Choose the App Privacy answer and keep the privacy policy consistent with it.
+- Approve final screenshots and copy.
+- Click Submit for Review.

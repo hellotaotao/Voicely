@@ -1,98 +1,91 @@
 # App Store Metadata
 
-Prepared for the first official App Store release package. Primary copy is English. Chinese copy is optional localization/reference copy.
+Prepared for Voicely's first public App Store release; it has only shipped through TestFlight so far, so this is a new listing, not an update. Primary copy is English; the Chinese copy is a localization.
 
 ## Source Grounding
 
-- App target name and bundle: `Voicely.xcodeproj/project.pbxproj:116`, `Voicely.xcodeproj/project.pbxproj:325`
-- Current app version/build: `Voicely.xcodeproj/project.pbxproj:301`, `Voicely.xcodeproj/project.pbxproj:324`
-- WhisperKit package and version: `Voicely.xcodeproj/project.pbxproj:621`, `Voicely.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved:43`
-- Local transcription path: `Voicely/TranscriptionService.swift:631`
-- Recording and audio storage path: `Voicely/AudioRecordingService.swift:116`, `Voicely/CloudStorageManager.swift:157`
-- iCloud/CloudKit sync support: `Voicely/VoicelyApp.swift:22`, `Voicely/CloudStorageManager.swift:23`, `Voicely/Voicely.entitlements:9`
-- Transcript review, editing, copy, share, and retranscribe actions: `Voicely/ContentView.swift:1240`, `Voicely/ContentView.swift:1587`, `Voicely/ContentView.swift:1609`, `Voicely/ContentView.swift:1613`
+- Speech engine: Qwen3-ASR 0.6B, bundled in the app (`Voicely/Qwen3TranscriptionEngine.swift`, `scripts/embed-speech-model.sh`). The Mac app runs it with MLX on the GPU; iPhone and iPad run it with Core ML on the CPU and Neural Engine. Nothing is downloaded at runtime.
+- Supported languages: the 30 in `Qwen3ASRDefaults.languageNames`, plus auto-detect, which also handles Chinese mixed with English.
+- Recording: `Voicely/AudioRecordingService.swift`; transcription while recording and after stop: `Voicely/RecordingSession.swift`, `Voicely/TranscriptionService.swift`.
+- iCloud: SwiftData with CloudKit for notes, iCloud Documents for audio (`Voicely/VoicelyApp.swift`, `Voicely/CloudStorageManager.swift`).
+- Audio import: `CFBundleDocumentTypes` in `Voicely/Info.plist` (m4a, mp3, wav, aiff).
+- System entry points: Live Activity (`VoicelyWidgets/`), App Intents (`StartRecordingIntent.swift`, `ToggleRecordingPauseIntent.swift`), Home Screen quick action.
+- Version: `Config/Version.xcconfig` (currently `0.28.0` build `1`).
 
 ## App Store Connect Fields
 
 | Field | Proposed value |
 | --- | --- |
 | App name | Voicely |
-| Subtitle | Private Meeting Transcripts |
-| Subtitle length | 27 characters, within 30 |
-| Promotional text | Record sensitive meetings and create editable transcripts on your iPhone with local WhisperKit transcription and iCloud sync when enabled. |
-| Promotional text length | 138 characters, within 170 |
-| Short description | Local-first meeting recording and transcription for privacy-conscious professional work. |
-| Full description length | 1,660 characters, within 4,000 |
-| Keywords | meeting transcription,offline,privacy,WhisperKit,voice recorder,notes,legal,HR,consulting |
-| Keywords length | 89 characters, within 100 |
-| Primary category suggestion | Productivity |
-| Secondary category suggestion | Business |
-| Support URL | TODO before submission: use a live public support page, for example `https://hellotaotao.com/voicely/support` |
-| Marketing URL | Optional, but recommended: use a live public product page, for example `https://hellotaotao.com/voicely` |
-| Privacy Policy URL | TODO before submission: use a live public privacy policy page |
-| Copyright | TODO: confirm legal owner name for App Store Connect |
-| Current source version | `0.15.3` build `1`; decide whether the official App Store version should be `1.0` or keep `0.15.3` before archiving |
+| Subtitle | Private Meeting Transcripts (27 of 30 characters) |
+| Promotional text | Record meetings and get a full transcript on your iPhone, iPad or Mac. Speech recognition runs on the device; nothing is uploaded for transcription. (148 of 170) |
+| Keywords | meeting,transcription,transcribe,recorder,offline,private,speech to text,minutes,interview,notes (96 of 100) |
+| Primary category | Productivity |
+| Secondary category | Business |
+| Platforms | iPhone and iPad (iOS/iPadOS 18 or later); Mac with Apple silicon (macOS 15 or later, Mac Catalyst build). Intel Macs are not supported. |
+| App size | About 1.1 GB per platform, almost all of it the speech model. Over the cellular download limit, so first install usually needs Wi-Fi or the user's permission. |
+| Support URL | TODO before submission: a live public page, e.g. `https://hellotaotao.com/voicely/support` |
+| Marketing URL | Optional: e.g. `https://hellotaotao.com/voicely` |
+| Privacy Policy URL | TODO before submission: a live public page; draft in `privacy-and-review-notes.md` |
+| Copyright | TODO: confirm the legal owner name |
+| Version | Decide whether the first public version is `1.0` or continues from `0.28.x`, then set it in `Config/Version.xcconfig` |
 
 ## Full Description
 
-Voicely is built for meetings where the content matters and discretion matters too. Record long-form discussions, run local transcription on iPhone with WhisperKit and Core ML, and keep a transcript with the original audio for review.
+Voicely records your meetings and turns them into a full transcript, on your own device. The speech model ships inside the app, so recognition works offline and your audio is never uploaded for transcription.
 
-Unlike cloud transcription workflows, Voicely is designed so the speech-to-text step runs on your device after a model is installed. That makes it a practical fit for sensitive internal discussions, client meetings, legal and HR interviews, government contractor work, consulting sessions, and strategy reviews where sending audio to a transcription vendor is not appropriate.
+Start recording and the transcript builds while the meeting runs. When you stop, Voicely finishes the last few seconds and the text is ready to read, copy, or paste into the AI assistant you use for summaries and action items.
 
-Use Voicely to:
+- Record meetings of any length on iPhone, iPad, or Mac.
+- Transcripts appear while you record and finish shortly after you stop.
+- Transcription keeps running after you lock your iPhone or switch apps.
+- Tap a sentence to hear it; the transcript follows along during playback.
+- Mixed-language meetings work: auto-detect handles Chinese with English. Choose from 30 languages if you need to.
+- Set a recording to stop at a time or after a duration, with a reminder before it stops and one-tap extensions.
+- Import audio files from Files or other apps and transcribe them.
+- Copy, share, edit, or re-transcribe any note.
+- Pause or resume from the Lock Screen and Dynamic Island; start recording from Shortcuts or the Home Screen icon.
+- Sync notes and audio across your devices with your own iCloud account, if you turn on iCloud for Voicely.
 
-- Capture meeting-length audio from your iPhone.
-- Transcribe recordings locally with WhisperKit models.
-- Review, edit, copy, and share transcript text.
-- Re-transcribe a recording with a different selected model.
-- Keep audio and transcripts together for later playback.
-- Delete recordings and their audio files when they are no longer needed.
-- Choose language, custom prompt, model, and compute settings.
-- Sync through the user's iCloud account when iCloud is available and enabled.
+Voicely has no account, no ads, and no analytics. Recordings and transcripts stay on your devices and in your iCloud account; the developer cannot see them.
 
-Voicely does not claim compliance certification or replace your organization's records, retention, or legal review process. It is a local-first transcription tool: recordings and transcripts are stored in the app's data store and may sync through the user's iCloud account when CloudKit and iCloud Drive are available. Model downloads and iCloud sync require network connectivity.
-
-Transcription speed and accuracy depend on the selected WhisperKit model, device performance, audio quality, recording length, speaker clarity, and language.
+Voicely does not claim any compliance certification and does not replace your organization's recording-consent, retention, or legal review policies. Accuracy depends on audio quality, distance from the speakers, crosstalk, and language.
 
 ## Age Rating Notes
 
-Suggested age rating questionnaire posture: likely 4+, assuming no built-in objectionable content, gambling, purchases, social networking, or unrestricted in-app web browsing. The app records and transcribes user-created audio, but it does not provide public user-generated content feeds. Settings can open the external WhisperKit model repository in the system browser, not an embedded browser.
+Likely 4+: no objectionable content, gambling, purchases, social features, or web browsing. The app records and transcribes the user's own audio and has no public user-generated content. Confirm the questionnaire against the final build.
 
-Confirm these answers manually in App Store Connect against the final build and any product/legal policy changes.
-
-## Optional Chinese Copy
-
-### App name
-
-Voicely
+## Chinese Localization
 
 ### Subtitle
 
-私密会议本地转写
+私密会议转写（本机识别）
 
 ### Promotional text
 
-在 iPhone 上录制敏感会议，并使用 WhisperKit 本地转写；可按用户的 iCloud 设置进行同步。
+在 iPhone、iPad 或 Mac 上录下会议，得到完整文字稿。语音识别在设备上完成，不上传任何音频做转写。
 
-### Short description
+### Keywords
 
-面向注重隐私的专业会议录音与本地转写工具。
+会议,转写,录音,语音转文字,会议记录,离线,隐私,访谈,纪要,笔记
 
 ### Full description
 
-Voicely 面向内容敏感、需要谨慎处理的会议场景。你可以录制长时间讨论，在 iPhone 上通过 WhisperKit 和 Core ML 进行本地转写，并将原始音频与文字稿保存在一起，便于后续回听、整理和复核。
+Voicely 录下你的会议，并在你自己的设备上把它变成完整的文字稿。语音模型随 App 一起安装，识别不需要联网，音频不会为了转写而上传。
 
-与依赖云端转写服务的流程不同，Voicely 的语音转文字步骤设计为在安装模型后于设备本地运行。它适合内部策略会议、客户访谈、法律与 HR 访谈、政府承包商工作、咨询项目会议，以及其他不希望把会议音频发送给转写供应商的专业场景。
+开始录音后，文字稿随会议进行逐段生成。停止录音后，Voicely 把最后几秒转完，文字稿就可以阅读、复制，或者粘贴给你常用的 AI 助手去做总结和待办整理。
 
-你可以用 Voicely：
+- 在 iPhone、iPad 或 Mac 上录制任意长度的会议。
+- 录音时边录边转，停止后很快完成。
+- 锁屏或切到其他 App 后，转写继续进行。
+- 点一句文字即可从这句开始回放，播放时文字稿自动跟随。
+- 支持中英混说：自动识别能处理中文里夹英文；需要时也可以从 30 种语言中手动指定。
+- 可以设定到点或按时长自动停止录音，停止前有提醒，可一键延长。
+- 从"文件"或其他 App 导入音频并转写。
+- 复制、分享、编辑文字稿，或重新转写。
+- 在锁屏和灵动岛上暂停或继续录音；从快捷指令或主屏幕图标直接开始录音。
+- 打开 iCloud 后，笔记和音频通过你自己的 iCloud 账户在设备间同步。
 
-- 在 iPhone 上录制会议长度的音频。
-- 使用 WhisperKit 模型在本地生成文字稿。
-- 查看、编辑、复制并分享转写文本。
-- 使用不同模型重新转写录音。
-- 将音频和文字稿保存在同一条记录中，方便回放。
-- 不再需要时删除录音及其音频文件。
-- 选择语言、自定义提示词、模型和计算设置。
-- 在用户启用并可用的 iCloud 环境中进行同步。
+Voicely 不需要注册账户，没有广告，也不做任何统计分析。录音和文字稿只保存在你的设备和你的 iCloud 账户里，开发者无法看到。
 
-Voicely 不声称具备合规认证，也不能替代组织内部的记录留存、法律审查或合规流程。它是一款本地优先的转写工具：录音和文字稿保存在应用数据中，并可能在 CloudKit 和 iCloud Drive 可用时通过用户的 iCloud 账户同步。模型下载和 iCloud 同步需要网络连接。
+Voicely 不声称具备任何合规认证，也不能替代你所在组织关于录音告知、记录留存或法律审查的规定。转写准确度取决于音质、与说话人的距离、多人同时说话的情况以及语言。

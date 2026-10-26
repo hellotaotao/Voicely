@@ -1,98 +1,90 @@
 # Privacy And App Review Notes
 
-These notes are a release-prep draft, not legal advice. Confirm final App Privacy answers in App Store Connect against the exact archived build.
+Release-prep draft, not legal advice. Confirm the final App Privacy answers in App Store Connect against the exact archived build.
 
 ## Implementation References
 
-- Microphone capture: `Voicely/AudioRecordingService.swift:67`, `Voicely/AudioRecordingService.swift:116`
-- Local WhisperKit transcription: `Voicely/TranscriptionService.swift:631`, `Voicely/TranscriptionService.swift:723`
-- Model download and local model storage: `Voicely/ModelManager.swift:103`, `Voicely/ModelManager.swift:127`, `Voicely/ModelManager.swift:258`, `Voicely/ModelManager.swift:325`
-- Voice note data model: `Voicely/Item.swift:17`
-- SwiftData CloudKit configuration: `Voicely/VoicelyApp.swift:18`, `Voicely/VoicelyApp.swift:22`
-- iCloud audio file storage and sync: `Voicely/CloudStorageManager.swift:23`, `Voicely/CloudStorageManager.swift:25`, `Voicely/CloudStorageManager.swift:89`
-- Entitlements: `Voicely/Voicely.entitlements:5`, `Voicely/Voicely.entitlements:9`, `Voicely/Voicely.entitlements:13`
-- Export compliance flag: `Voicely/Info.plist:10`
-- Permission strings in build settings: `Voicely.xcodeproj/project.pbxproj:312`, `Voicely.xcodeproj/project.pbxproj:357`
+- Microphone capture: `Voicely/AudioRecordingService.swift`. Live PCM goes to `Application Support/LiveRecordings` (excluded from backups) and is exported to `.m4a` when recording stops.
+- On-device speech recognition: `Voicely/Qwen3TranscriptionEngine.swift` (Qwen3-ASR 0.6B, bundled as `SpeechModel/` in the app). Mac: MLX on the GPU. iPhone and iPad: Core ML on the CPU and Neural Engine.
+- Voice activity detection: bundled Silero VAD Core ML model (`Voicely/silero_vad.mlmodelc`, `Voicely/NeuralSpeechAnalyzer.swift`).
+- Note model: `VoiceNote` in `Voicely/Item.swift`.
+- iCloud: SwiftData with CloudKit (`Voicely/VoicelyApp.swift`), audio in iCloud Documents (`Voicely/CloudStorageManager.swift`).
+- Local notifications for scheduled stops: `Voicely/RecordingStopNotifier.swift`.
+- Background work: `UIBackgroundModes` (`audio`, `processing`, `remote-notification`) and `BGTaskSchedulerPermittedIdentifiers` in `Voicely/Info.plist`; continued processing on iOS 26 in `Voicely/ContinuedProcessingTask.swift`.
+- Entitlements: `Voicely/Voicely.entitlements`. Export compliance flag: `ITSAppUsesNonExemptEncryption = false` in `Voicely/Info.plist`.
 
-## App Review Notes Draft
+## Network Use
 
-Voicely is a user-initiated meeting recorder and transcription app.
+The app makes no network requests of its own. The speech and VAD models are inside the app bundle; there is no model download, account, analytics, advertising, or crash-reporting SDK. The only traffic is Apple's:
 
-Audio recording uses the device microphone through AVFoundation. Transcription is performed on device with WhisperKit/Core ML after a WhisperKit model is installed and loaded. The app does not call a cloud transcription API or send recordings to a third-party transcription vendor in the inspected code path.
+- CloudKit sync of notes and iCloud Drive sync of audio, when iCloud is available for the app.
+- Push notifications CloudKit uses to announce changes (`remote-notification`).
 
-The app may use the network for:
+Without iCloud, audio stays in the app's local Documents folder and notes in the local store; everything else works the same.
 
-- Downloading WhisperKit Core ML model files from the configured WhisperKit model repository when the selected model is not already local.
-- iCloud/CloudKit sync when the user has iCloud available for this app.
-- CloudKit remote notification registration for sync updates.
-- Opening the external WhisperKit model page from Settings when the user taps View Models.
+## App Review Notes
 
-If iCloud is available, SwiftData is configured with automatic CloudKit sync for `VoiceNote` records, and audio files are stored in the app's iCloud Documents container `iCloud.com.hellotaotao.Voicely`. If iCloud is unavailable, audio files fall back to the local app documents directory. Transcripts, note metadata, and transcription coordination fields are represented in the SwiftData `VoiceNote` model.
+Paste into App Store Connect, adjusted for the final build:
 
-The app sets `ITSAppUsesNonExemptEncryption` to `false` in `Info.plist`. Based on the inspected project, Voicely does not implement custom non-exempt encryption. It relies on standard Apple platform networking/security for iCloud, CloudKit, and model downloads.
+> Voicely records meetings and transcribes them on the device. The speech recognition model (Qwen3-ASR) is bundled with the app, which is why the download is about 1.1 GB; the app never downloads models and never sends audio or text to a server. No account or login is needed.
+>
+> To test: tap the record button, allow microphone access, speak for 20–30 seconds, then stop. Text appears while recording and the note completes a few seconds after stopping. Tap a sentence to play from there. Settings shows the speech model and an optional language setting (Auto Detect by default).
+>
+> The audio background mode keeps recording and live transcription running when the screen locks, as in any voice recorder; a Live Activity shows the recording on the Lock Screen and Dynamic Island. Background processing is used to finish transcribing after a recording stops.
+>
+> iCloud sync is optional and uses the user's own iCloud account (CloudKit private database and iCloud Drive). The developer has no server and no access to user data.
+>
+> The Mac version requires Apple silicon.
 
-No login is required to test the core app. To test transcription, install/load a WhisperKit model in Settings, make a short recording, then open the note to view or re-run transcription. iCloud sync behavior requires an iCloud account and iCloud availability on the test device.
+## App Privacy Nutrition Label
 
-## App Privacy Nutrition Label Draft
+### Recommendation: Data Not Collected
 
-### Tracking
+Apple defines collecting as transmitting data off the device in a way that lets the developer or a third party access it. Voicely sends nothing to the developer or any third party:
 
-- Data used to track users: No.
-- Third-party advertising tracking: Not observed in source.
-- IDFA or advertising SDKs: Not observed in source.
+- Transcription and VAD run on the device.
+- iCloud sync stores notes in the user's CloudKit **private** database and audio in the user's iCloud Drive container. Both belong to the user's Apple account; the developer cannot read them.
+- No analytics, advertising, crash-reporting, or other third-party SDKs.
+- The per-device identifier written into notes (`transcriptionOriginDeviceID`, a random UUID used to decide which device transcribes a note) is not an advertising identifier and only travels inside the user's own iCloud data.
 
-### Data Types To Consider Disclosing
+Tracking: No. Data linked to the user: none. Data used for advertising: none.
 
-| App Store data type | Likely answer | Purpose | Linked to user | Notes |
-| --- | --- | --- | --- | --- |
-| Audio Data | Yes, if using conservative disclosure | App Functionality | Potentially yes when synced through user's iCloud | User-created recordings are stored locally or in the user's iCloud Documents container when available. |
-| Other User Content | Yes | App Functionality | Potentially yes when synced through CloudKit | Includes note titles, transcripts, transcription errors/status, and transcript edits. |
-| Identifiers | Possibly | App Functionality | Possibly | The app creates a local UUID-style device identity for transcription ownership coordination. It is not an advertising identifier. Confirm whether to disclose based on App Store Connect guidance. |
-| Diagnostics | No, unless Apple crash reporting or another SDK is added | N/A | N/A | No custom analytics or diagnostics collection was observed. |
-| Contact Info, Location, Purchases, Financial Info, Contacts, Browsing History, Search History | No, based on inspected source | N/A | N/A | Not observed in current code. |
+If the owner prefers the conservative reading of iCloud sync, declare instead: User Content > Audio Data and Other User Content, purpose App Functionality, linked to the user, not used for tracking. Pick one answer and make the privacy policy match it.
 
-### Storage And Sync Explanation
+## Privacy Policy Draft
 
-- Recordings are user-created audio files.
-- Transcripts and note metadata are stored in SwiftData.
-- SwiftData is configured for automatic CloudKit sync outside tests.
-- Audio files use iCloud Documents when `CloudStorageManager` can access the iCloud container; otherwise they use local app storage.
-- WhisperKit model files are downloaded and stored locally in the app documents area. Users can delete downloaded models in Settings.
-- The custom transcription prompt and selected language/model settings are stored locally via `UserDefaults`.
+> **Voicely Privacy Policy**
+>
+> Voicely does not collect any personal data. There is no account, no analytics, no advertising, and no developer server.
+>
+> **Recordings and transcripts.** Audio you record or import and the transcripts Voicely creates are stored on your device. Speech recognition runs entirely on your device; audio is never sent anywhere to be transcribed.
+>
+> **iCloud.** If iCloud is turned on for Voicely, your notes and audio sync between your devices through your own iCloud account, under Apple's privacy policy. The developer cannot access your iCloud data. Turn off iCloud for Voicely in Settings to keep everything on one device.
+>
+> **Permissions.** Microphone access is used only while you record. Notification permission is used only for reminders and confirmations when you set a recording to stop at a certain time.
+>
+> **Deleting data.** Deleting a note deletes its audio and transcript; with iCloud on, the deletion syncs to your other devices. Deleting the app removes its local data.
+>
+> **Contact.** TODO: support email or page.
 
-### Conservative Privacy Label Recommendation
+## Permissions
 
-For a first official release, use conservative App Privacy answers:
+| Permission | When it is asked | Purpose string |
+| --- | --- | --- |
+| Microphone | First recording | `NSMicrophoneUsageDescription`: "This app needs access to your microphone to record voice notes for transcription." |
+| Notifications | First time a stop time is set | System prompt; no purpose string. Used for the reminder before a scheduled stop and the "saved" confirmation. |
 
-- Disclose User Content: Audio Data and Other User Content.
-- Purpose: App Functionality.
-- Tracking: No.
-- Data shared with third-party advertisers/data brokers: No.
-- Data used for advertising: No.
-- Data may be linked to user: Yes if CloudKit/iCloud sync is considered linked to the user's Apple ID. Confirm with App Store privacy guidance and counsel.
+Consider rewording the microphone string to name the feature reviewers look for, e.g. "Voicely uses the microphone to record meetings so it can transcribe them on this device."
 
-## Permission Purpose Strings And Rationale
+## Export Compliance
 
-Current generated Info.plist build-setting strings:
-
-- `NSMicrophoneUsageDescription`: "This app needs access to your microphone to record voice notes for transcription."
-
-Recommended App Review rationale:
-
-- Microphone access is required only when the user records audio.
-- Recorded audio is used to create a voice note and provide local transcription.
-- The app uses WhisperKit/Core ML for transcription rather than a cloud transcription service.
-
-## Export Compliance Notes
-
-Current source sets `ITSAppUsesNonExemptEncryption` to `false` in `Voicely/Info.plist`. The App Store Connect export compliance answer should be consistent with that only if no new encryption code or encrypted communication features are added before archive.
-
-Suggested answer: the app does not use non-exempt encryption. It uses standard Apple platform services for iCloud/CloudKit and standard network transport for model downloads.
+`ITSAppUsesNonExemptEncryption` is `false`. The app implements no encryption of its own and only uses Apple's platform services (CloudKit, iCloud Drive). Answer that the app does not use non-exempt encryption, as long as nothing changes before the archive.
 
 ## Review Risks To Check Before Submission
 
-- Confirm the final production archive has production App Store signing and production CloudKit/APNs entitlements, even though the checked-in entitlements file currently contains development APNs values.
-- Confirm CloudKit schema/container are ready for production if the release build will sync data.
-- Confirm support URL and privacy policy/support pages are live.
-- Confirm App Privacy answers with a conservative interpretation of iCloud sync.
-- Confirm model downloads work on a clean device and that the app has a clear path when no model is loaded.
+- **In-app privacy wording.** Settings currently says "Your audio and text never leave this device unless you export them." That is not true once iCloud sync is on; reword it before submission (e.g. "…stay on your devices and your own iCloud account") so the app, the listing, and the privacy label agree.
+- **CloudKit production schema.** Deploy the development schema to production in CloudKit Console before the release build ships; the production schema has lagged behind before, which breaks sync for Release and TestFlight builds.
+- **Push environment.** The checked-in entitlements use the development APNs environment; confirm the archived build's entitlements show production in Organizer.
+- **Background claims.** The listing says transcription continues after locking the iPhone. Confirm it on a real iPhone (roadmap item 6) before submitting, on both iOS 18 and iOS 26, since finishing after stop uses continued processing only on iOS 26.
+- **Download size.** About 1.1 GB per platform. Reviewers and users on cellular will see the large-download prompt; the review note explains it.
+- **Mac.** The Mac build is arm64 only; set Apple silicon as the requirement and make sure no Intel Mac is offered the app.

@@ -10,10 +10,10 @@ Extend Voicely beyond the main app with lightweight system entry points that rei
 
 ## Current Codebase Baseline
 
-- Current app target has no `WidgetKit`, `AppIntents`, `Intents`, `Shortcuts`, `WidgetBundle`, or extension code found by static search.
+- Shipped since this plan was written: the `VoicelyWidgets` extension with the recording Live Activity, `StartRecordingIntent` and `ToggleRecordingPauseIntent`, and a Home Screen quick action. There are no Home Screen widgets yet.
 - Core data model is SwiftData `VoiceNote` in `Voicely/Item.swift` with fields including title, timestamp, duration, audio path, transcription, transcription state/progress, model identifier, pending transcription, and ownership/lease metadata.
 - Main app already has recording controls in `Voicely/ContentView.swift`, transcription actions, copy/share, re-transcribe, delete note/audio, and CloudKit/iCloud support.
-- Local transcription is implemented through `Voicely/TranscriptionService.swift` using WhisperKit/CoreML.
+- Local transcription is implemented through `Voicely/TranscriptionService.swift` with the bundled Qwen3-ASR model (MLX on Mac, Core ML on iPhone and iPad).
 - Audio and iCloud storage are handled through `Voicely/AudioRecordingService.swift`, `Voicely/AudioPlayerService.swift`, and `Voicely/CloudStorageManager.swift`.
 
 ## Product Principle
@@ -189,7 +189,7 @@ Acceptance criteria:
 - User can share/open an audio file into Voicely.
 - Imported audio is copied into app-controlled storage.
 - Original file remains untouched.
-- Transcription uses same local WhisperKit flow.
+- Transcription uses the same on-device flow as recordings.
 
 ## Phase 5 — Advanced AppIntents
 
@@ -231,7 +231,7 @@ For widgets:
 
 ### Keep heavy work in the app
 
-Do not run recording or WhisperKit transcription inside widget/intent extension processes. Use intents/widgets to launch or route the user into the main app.
+Do not run recording or transcription inside widget/intent extension processes; the speech model needs the main app's memory budget. Use intents/widgets to launch or route the user into the main app.
 
 ## App Store / Marketing Impact
 

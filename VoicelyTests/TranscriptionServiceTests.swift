@@ -333,6 +333,84 @@ struct TranscriptionServiceTests {
         #expect(attempts == 2)
     }
 
+    @Test @MainActor func lapsedRemoteClaimIsTakenOverWithoutAnotherTrigger() async {
+        let queuedAt = Date(timeIntervalSince1970: 10_000)
+        var now = queuedAt.addingTimeInterval(3600)
+        let service = makeService(deviceID: "desktop")
+        service.nowProvider = { now }
+        service.waitingRecheckInterval = 0.05
+        service.transcribeImpl = { _, _ in "Taken over" }
+        let note = VoiceNote(title: "Remote", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: queuedAt)
+        note.claimTranscription(
+            ownerDeviceID: "phone",
+            attemptID: "phone-attempt",
+            queuedAt: queuedAt,
+            leaseExpiresAt: now.addingTimeInterval(300)
+        )
+
+        await service.processPendingTranscriptions(notes: [note])
+        #expect(note.transcriptionOwnerDeviceID == "phone")
+        #expect(note.transcription.isEmpty)
+
+        // The phone stops renewing its lease.
+        now = now.addingTimeInterval(301)
+        let deadline = Date().addingTimeInterval(5)
+        while note.transcription.isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(note.transcription == "Taken over")
+    }
+
+    @Test @MainActor func audioArrivingDuringGracePeriodShowsTheOriginDeviceWait() async {
+        let queuedAt = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "desktop", now: queuedAt.addingTimeInterval(60))
+        var audioArrived = false
+        service.isAudioAbsentLocally = { _ in !audioArrived }
+        service.transcribeImpl = { _, _ in "Should not run" }
+        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.queueTranscription(at: queuedAt)
+
+        await service.processPendingTranscriptions(notes: [note])
+        #expect(service.waitReason(for: note) == .waitingForAudio)
+
+        audioArrived = true
+        await service.processPendingTranscriptions(notes: [note])
+        #expect(service.waitReason(for: note) == .waitingForOriginDevice(
+            takeOverAt: queuedAt.addingTimeInterval(service.nonOriginQueueGracePeriod)
+        ))
+        #expect(note.transcription.isEmpty)
+    }
+
+    @Test @MainActor func cancellingTheNextUpNoteMovesTheQueueForward() async {
+        let service = makeService(deviceID: "desktop")
+        service.transcribeImpl = { _, _ in "Done" }
+        let notes = ["second", "third"].map { name in
+            let note = VoiceNote(title: name, audioFilePath: "\(name).m4a")
+            note.transcriptionOriginDeviceID = "desktop"
+            note.queueTranscription(at: Date())
+            return note
+        }
+        // An import holds the decoder, so the loop dequeues "second" and waits.
+        let importID = UUID()
+        service.beginExternalTranscription(noteID: importID)
+
+        let run = Task { await service.processPendingTranscriptions(notes: notes) }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(service.localQueueOrder == notes.map(\.id))
+
+        service.cancelTranscription(for: notes[0])
+        #expect(service.localQueueOrder == [notes[1].id])
+        #expect(service.waitReason(for: notes[1]) == .inLine(position: 1))
+
+        service.endExternalTranscription(noteID: importID)
+        await run.value
+        #expect(notes[0].transcription.isEmpty)
+        #expect(notes[1].transcription == "Done")
+    }
+
     @Test @MainActor func foreignOwnerWithActiveLeaseIsSkipped() async {
         let now = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "desktop", now: now)

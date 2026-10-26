@@ -499,6 +499,8 @@ class TranscriptionService: ObservableObject {
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         waitingNotes.removeValue(forKey: note.id)
         audioWaitNoteIDs.remove(note.id)
+        // The loop may already hold it while the decoder is busy; it skips the note on its own.
+        if nextUpNoteID == note.id { nextUpNoteID = nil }
         publishQueueOrder()
         previewByNoteID.removeValue(forKey: note.id)
         note.cancelTranscription()
@@ -528,6 +530,8 @@ class TranscriptionService: ObservableObject {
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         waitingNotes.removeValue(forKey: note.id)
         audioWaitNoteIDs.remove(note.id)
+        // The loop may already hold it while the decoder is busy; it skips the note on its own.
+        if nextUpNoteID == note.id { nextUpNoteID = nil }
         publishQueueOrder()
         previewByNoteID.removeValue(forKey: note.id)
     }
@@ -1023,11 +1027,17 @@ private extension TranscriptionService {
 
         for note in notes {
             guard processingAction(for: note, now: now) != nil else {
-                if shouldShowPendingState(note, now: now), !note.audioFilePath.isEmpty,
+                if mayBecomeRunnableLater(note, now: now), !note.audioFilePath.isEmpty,
                    !discardedNoteIDs.contains(note.id), pendingTranscriptionQueue[note.id] == nil {
                     waitingNotes[note.id] = note
-                    if awaitsAudioFromAnotherDevice(note), !audioWaitNoteIDs.contains(note.id) {
-                        audioWaitNoteIDs.insert(note.id)
+                    // Audio can arrive while another blocker (the grace period) still holds the note.
+                    let awaitsAudio = awaitsAudioFromAnotherDevice(note)
+                    if awaitsAudio != audioWaitNoteIDs.contains(note.id) {
+                        if awaitsAudio {
+                            audioWaitNoteIDs.insert(note.id)
+                        } else {
+                            audioWaitNoteIDs.remove(note.id)
+                        }
                     }
                 } else {
                     waitingNotes.removeValue(forKey: note.id)
@@ -1055,13 +1065,19 @@ private extension TranscriptionService {
         if order != localQueueOrder { localQueueOrder = order }
     }
 
+    /// Pending here, or claimed by another device whose lease can lapse if it stops
+    /// renewing it; either becomes runnable without an event the UI would notice.
+    private func mayBecomeRunnableLater(_ note: VoiceNote, now: Date) -> Bool {
+        shouldShowPendingState(note, now: now) || isTranscribingOnAnotherDevice(note, now: now)
+    }
+
     /// Notes blocked outside the queue become runnable without any event the UI
-    /// would notice (a grace period ends, audio finishes syncing), so poll them.
+    /// would notice (a grace period or lease ends, audio finishes syncing), so poll them.
     private func scheduleWaitingRecheck() {
         let now = nowProvider()
         waitingNotes = waitingNotes.filter { id, note in
             !discardedNoteIDs.contains(id) && pendingTranscriptionQueue[id] == nil
-                && shouldShowPendingState(note, now: now)
+                && mayBecomeRunnableLater(note, now: now)
         }
         let audioWaits = audioWaitNoteIDs.filter { waitingNotes[$0] != nil || pendingTranscriptionQueue[$0] != nil }
         if audioWaits != audioWaitNoteIDs { audioWaitNoteIDs = audioWaits }
@@ -1074,10 +1090,17 @@ private extension TranscriptionService {
         guard waitingRecheckTask == nil else { return }
 
         var delay = waitingRecheckInterval
-        for note in waitingNotes.values where note.transcriptionState == .queued
-            && !canCurrentDeviceClaimQueuedNote(note, now: now) {
-            if let queuedAt = note.transcriptionQueuedAt {
-                delay = min(delay, max(1, queuedAt.addingTimeInterval(nonOriginQueueGracePeriod).timeIntervalSince(now)))
+        for note in waitingNotes.values {
+            let unblocksAt: Date?
+            if note.transcriptionState == .queued, !canCurrentDeviceClaimQueuedNote(note, now: now) {
+                unblocksAt = note.transcriptionQueuedAt?.addingTimeInterval(nonOriginQueueGracePeriod)
+            } else if isTranscribingOnAnotherDevice(note, now: now) {
+                unblocksAt = note.transcriptionLeaseExpiresAt
+            } else {
+                unblocksAt = nil
+            }
+            if let unblocksAt {
+                delay = min(delay, max(1, unblocksAt.timeIntervalSince(now)))
             }
         }
         waitingRecheckTask = Task { @MainActor [weak self] in

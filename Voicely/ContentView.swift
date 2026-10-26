@@ -676,6 +676,9 @@ struct ContentView: View {
     private func configureRecordingSession() {
         recordingSession.onRecordingComplete = { [modelContext, selection = $selectedNoteID, navigationPath = $compactNavigationPath] note in
             modelContext.insert(note)
+            // Save now rather than at the next autosave: if the app dies mid-recording,
+            // launch recovery can only reattach the live PCM file to a saved note.
+            try? modelContext.save()
             selection.wrappedValue = note.id
             navigationPath.wrappedValue = [note.id]
         }

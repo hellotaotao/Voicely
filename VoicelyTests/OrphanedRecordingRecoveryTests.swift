@@ -15,15 +15,19 @@ struct OrphanedRecordingRecoveryTests {
 
     private let thisDevice = "this-device"
 
-    /// A tmp directory and an audio directory, isolated per test.
+    /// The recorder's live directory, the legacy tmp directory and an audio
+    /// directory, isolated per test.
     @MainActor
     private final class Sandbox {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("orphan_recovery_\(UUID().uuidString)", isDirectory: true)
+        var live: URL { root.appendingPathComponent("live", isDirectory: true) }
         var tmp: URL { root.appendingPathComponent("tmp", isDirectory: true) }
         var audio: URL { root.appendingPathComponent("audio", isDirectory: true) }
+        var now = Date()
 
         init() throws {
+            try FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: audio, withIntermediateDirectories: true)
         }
@@ -32,7 +36,8 @@ struct OrphanedRecordingRecoveryTests {
 
         var storage: OrphanedRecordingStorage {
             var storage = OrphanedRecordingStorage.live
-            storage.temporaryDirectory = { [tmp] in tmp }
+            storage.pcmDirectories = { [live, tmp] in [live, tmp] }
+            storage.now = { [unowned self] in self.now }
             storage.isAudioAbsent = { [audio] path in
                 !FileManager.default.fileExists(atPath: audio.appendingPathComponent(path).path)
             }
@@ -41,10 +46,10 @@ struct OrphanedRecordingRecoveryTests {
         }
 
         /// Writes the live PCM file a recording started at `start` would leave behind.
-        func orphanedPCM(startedAt start: TimeInterval, seconds: Double) throws -> URL {
+        func orphanedPCM(startedAt start: TimeInterval, seconds: Double, inTmp: Bool = false) throws -> URL {
             let source = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: seconds)
-            let url = tmp.appendingPathComponent(
-                "\(AudioRecordingService.pcmTemporaryFilePrefix)\(Int(start))_\(UUID().uuidString).caf")
+            let url = AudioRecordingService.makeLivePCMURL(
+                now: Date(timeIntervalSince1970: start), in: inTmp ? tmp : live)
             try FileManager.default.moveItem(at: source, to: url)
             return url
         }
@@ -158,5 +163,74 @@ struct OrphanedRecordingRecoveryTests {
         #expect(note.duration == 0)
         #expect(note.transcriptionLastErrorMessage == nil)
         #expect(FileManager.default.fileExists(atPath: pcm.path))
+    }
+
+    @Test func aPCMFileLeftInTmpByAnEarlierVersionIsStillRecovered() async throws {
+        let sandbox = try Sandbox()
+        let start = 1_792_457_173.749301
+        let pcm = try sandbox.orphanedPCM(startedAt: start, seconds: 1, inTmp: true)
+        let note = interruptedNote(startedAt: start, origin: thisDevice)
+        let (session, _) = makeSession(sandbox)
+
+        for task in session.recoverInterruptedRecordings(in: [note]) { await task.value }
+
+        #expect(abs(note.duration - 1) < 0.05)
+        #expect(FileManager.default.fileExists(atPath: sandbox.audio.appendingPathComponent(note.audioFilePath).path))
+        #expect(!FileManager.default.fileExists(atPath: pcm.path))
+        #expect(note.transcriptionState == .queued)
+    }
+
+    @Test func pcmFilesNoNoteClaimsAreRemovedOnlyOnceTheyAreAWeekOld() throws {
+        let sandbox = try Sandbox()
+        let start = 1_792_457_173.749301
+        let stale = try sandbox.orphanedPCM(startedAt: start, seconds: 1)
+        let recent = try sandbox.orphanedPCM(startedAt: start + 600, seconds: 1)
+        // A note whose export and fallback copy failed plays its PCM file directly.
+        let playedDirectly = try sandbox.orphanedPCM(startedAt: start + 1200, seconds: 1)
+        let note = VoiceNote(title: "Kept", audioFilePath: playedDirectly.path)
+        let unrelated = sandbox.root.appendingPathComponent("live/notes.caf")
+        try Data([1]).write(to: unrelated)
+        let weekAgo = sandbox.now.addingTimeInterval(-RecordingSession.unclaimedPCMRetention - 60)
+        for url in [stale, playedDirectly, unrelated] {
+            try FileManager.default.setAttributes([.modificationDate: weekAgo], ofItemAtPath: url.path)
+        }
+        let (session, _) = makeSession(sandbox)
+
+        #expect(session.recoverInterruptedRecordings(in: [note]).isEmpty)
+
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(FileManager.default.fileExists(atPath: recent.path))
+        #expect(FileManager.default.fileExists(atPath: playedDirectly.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
+    @Test func aRecoveryStillExportingKeepsItsFileThroughLaterPasses() async throws {
+        let sandbox = try Sandbox()
+        let start = 1_792_457_173.749301
+        let pcm = try sandbox.orphanedPCM(startedAt: start, seconds: 1)
+        try FileManager.default.setAttributes(
+            [.modificationDate: sandbox.now.addingTimeInterval(-RecordingSession.unclaimedPCMRetention * 2)],
+            ofItemAtPath: pcm.path)
+        let note = interruptedNote(startedAt: start, origin: thisDevice)
+        let (session, _) = makeSession(sandbox)
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        var storage = sandbox.storage
+        storage.convert = { source, destination in
+            for await _ in gate { break }
+            try await AudioRecordingService.convertCAFToM4A(from: source, to: destination)
+        }
+        session.orphanedRecordingStorage = storage
+
+        let tasks = session.recoverInterruptedRecordings(in: [note])
+        #expect(tasks.count == 1)
+        // The app becomes active again while the first export is still running.
+        #expect(session.recoverInterruptedRecordings(in: [note]).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: pcm.path))
+        #expect(note.transcriptionLastErrorMessage == nil)
+
+        release.yield()
+        for task in tasks { await task.value }
+        #expect(FileManager.default.fileExists(atPath: sandbox.audio.appendingPathComponent(note.audioFilePath).path))
+        #expect(!FileManager.default.fileExists(atPath: pcm.path))
     }
 }

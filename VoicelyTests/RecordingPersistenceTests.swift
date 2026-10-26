@@ -65,8 +65,16 @@ struct RecordingPersistenceTests {
         #expect(try Data(contentsOf: source) == bytes)
     }
 
+    @Test func liveRecordingsStayOutOfTmpAndBackups() throws {
+        let directory = try #require(AudioRecordingService.liveRecordingDirectory())
+        let url = AudioRecordingService.makeLivePCMURL()
+        #expect(url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL)
+        #expect(!url.path.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path))
+        #expect(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+    }
+
     @Test func recordingNamesNeverCollide() {
         let now = Date()
-        #expect(AudioRecordingService.makePCMTemporaryURL(now: now) != AudioRecordingService.makePCMTemporaryURL(now: now))
+        #expect(AudioRecordingService.makeLivePCMURL(now: now) != AudioRecordingService.makeLivePCMURL(now: now))
     }
 }

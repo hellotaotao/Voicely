@@ -333,7 +333,7 @@ class AudioRecordingService: ObservableObject {
         guard !isRecording else { return nil }
 
         let m4aURL = CloudStorageManager.shared.generateAudioFilename()
-        let pcmURL = Self.makePCMTemporaryURL()
+        let pcmURL = Self.makeLivePCMURL()
 
         pendingM4AURL = m4aURL
 
@@ -662,10 +662,31 @@ class AudioRecordingService: ObservableObject {
 
     /// Live PCM files are named `<prefix><unixSeconds>_<uuid>.caf`; launch recovery
     /// parses the start time back out of the name.
-    nonisolated static let pcmTemporaryFilePrefix = "voicely_rec_"
+    nonisolated static let livePCMFilePrefix = "voicely_rec_"
 
-    nonisolated static func makePCMTemporaryURL(now: Date = Date()) -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("\(pcmTemporaryFilePrefix)\(Int(now.timeIntervalSince1970))_\(UUID().uuidString).caf")
+    /// Where live PCM files go. Until stop exports it, the PCM file is the only
+    /// copy of the recording, and the system may empty tmp while the app is not
+    /// running, so it lives in Application Support, kept out of device backups.
+    nonisolated static func liveRecordingDirectory(fileManager: FileManager = .default) -> URL? {
+        guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        var directory = support.appendingPathComponent("LiveRecordings", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try directory.setResourceValues(values)
+        } catch {
+            debugLog("⚠️ [AudioRecordingService] Live recording directory unavailable: \(error)")
+            return nil
+        }
+        return directory
+    }
+
+    nonisolated static func makeLivePCMURL(now: Date = Date(), in directory: URL? = liveRecordingDirectory()) -> URL {
+        (directory ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("\(livePCMFilePrefix)\(Int(now.timeIntervalSince1970))_\(UUID().uuidString).caf")
     }
 
     // MARK: PCM (CAF) → M4A conversion

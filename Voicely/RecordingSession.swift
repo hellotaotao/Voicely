@@ -190,6 +190,8 @@ final class RecordingSession: ObservableObject {
 
     /// Where launch recovery looks for, and saves, audio of recordings that never stopped.
     var orphanedRecordingStorage: OrphanedRecordingStorage = .live
+    /// PCM files an earlier recovery pass is still exporting.
+    private var recoveringPCMFiles: Set<URL> = []
 
     /// Keeps post-recording finalization running after the user leaves the app.
     var continuedProcessingDriver: (any ContinuedProcessingDriver)? = SystemContinuedProcessingDriver.shared
@@ -520,7 +522,7 @@ final class RecordingSession: ObservableObject {
     /// Recovers notes whose app died while still recording (crash, app update,
     /// jetsam). Stop never ran, so the note has no duration and its `.m4a` was
     /// never exported, yet it stays queued on every device for audio that will
-    /// never arrive. The live PCM file may still be in tmp: export it the way
+    /// never arrive. The live PCM file is still on disk: export it the way
     /// stop does and transcribe it. Without it the audio is lost, so the note
     /// stops waiting and says so. Only the recording device can do either.
     /// Returns the export tasks so callers can await them.
@@ -539,13 +541,18 @@ final class RecordingSession: ObservableObject {
                 && transcriptionService.activeNoteID != note.id
                 && storage.isAudioAbsent(note.audioFilePath)
         }
-        guard !interrupted.isEmpty else { return [] }
 
         let livePCMURL = audioService.currentPCMFileURL?.standardizedFileURL
-        let pcmFiles = ((try? FileManager.default.contentsOfDirectory(
-            at: storage.temporaryDirectory(), includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.standardizedFileURL != livePCMURL }
+        let pcmFiles = storage.pcmDirectories()
+            .flatMap { (try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)) ?? [] }
+            .filter { url in
+                OrphanedRecordingMatcher.startTime(ofPCMFile: url) != nil
+                    && url.standardizedFileURL != livePCMURL
+                    && !recoveringPCMFiles.contains(url.standardizedFileURL)
+            }
         let matches = OrphanedRecordingMatcher.match(interrupted, to: pcmFiles)
+        removeUnclaimedPCMFiles(pcmFiles, claimed: Set(matches.values), notes: notes, storage: storage)
+        guard !interrupted.isEmpty else { return [] }
 
         var tasks: [Task<Void, Never>] = []
         for note in interrupted {
@@ -565,6 +572,27 @@ final class RecordingSession: ObservableObject {
             }
         }
         return tasks
+    }
+
+    /// How long a PCM file no note claims is kept. Stop and recovery delete the
+    /// files they export; what is left belongs to a note that is gone or to a
+    /// recording whose note was never saved.
+    static let unclaimedPCMRetention: TimeInterval = 7 * 24 * 60 * 60
+
+    private func removeUnclaimedPCMFiles(
+        _ pcmFiles: [URL],
+        claimed: Set<URL>,
+        notes: [VoiceNote],
+        storage: OrphanedRecordingStorage
+    ) {
+        // A note whose export and fallback copy both failed plays the PCM file itself.
+        let referenced = Set(notes.map { URL(fileURLWithPath: $0.audioFilePath).lastPathComponent })
+        let cutoff = storage.now().addingTimeInterval(-Self.unclaimedPCMRetention)
+        for url in pcmFiles where !claimed.contains(url) && !referenced.contains(url.lastPathComponent) {
+            guard let modified = storage.modificationDate(url), modified < cutoff else { continue }
+            debugLog("🔍 [RecordingSession] Removing unclaimed recording \(url.lastPathComponent)")
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func isWaitingForTranscription(_ note: VoiceNote) -> Bool {
@@ -591,9 +619,12 @@ final class RecordingSession: ObservableObject {
         // Keep the queue off the note until its audio exists.
         transcriptionService.beginLocalRecording(noteID: note.id)
         preparingAudioNoteIDs.insert(note.id)
+        let recoveringURL = pcmURL.standardizedFileURL
+        recoveringPCMFiles.insert(recoveringURL)
 
         return Task { @MainActor in
             defer {
+                recoveringPCMFiles.remove(recoveringURL)
                 preparingAudioNoteIDs.remove(note.id)
                 transcriptionService.endLocalRecording(noteID: note.id)
             }

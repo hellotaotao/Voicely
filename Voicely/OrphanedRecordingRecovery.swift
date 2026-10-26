@@ -8,10 +8,14 @@ import Foundation
 
 /// File-system access for recovering recordings whose process died before stop
 /// (crash, app update, jetsam). Such a note never got its `.m4a`; the only audio
-/// left is the live PCM file in tmp. Tests replace these hooks.
+/// left is the live PCM file. Tests replace these hooks.
 struct OrphanedRecordingStorage {
-    /// Directory the recorder writes live PCM files into.
-    var temporaryDirectory: () -> URL
+    /// Directories that may hold live PCM files: the recorder's own, then tmp,
+    /// where earlier versions wrote them.
+    var pcmDirectories: () -> [URL]
+    /// When a file was last written, to age out PCM files no note claims.
+    var modificationDate: (URL) -> Date?
+    var now: () -> Date
     /// True when neither the audio nor its iCloud placeholder is on this device.
     var isAudioAbsent: @MainActor (String) -> Bool
     /// Where a recovered recording is exported, given the note's audio file name.
@@ -21,7 +25,14 @@ struct OrphanedRecordingStorage {
 
     @MainActor static var live: OrphanedRecordingStorage {
         OrphanedRecordingStorage(
-            temporaryDirectory: { FileManager.default.temporaryDirectory },
+            pcmDirectories: {
+                [AudioRecordingService.liveRecordingDirectory(), FileManager.default.temporaryDirectory]
+                    .compactMap { $0 }
+            },
+            modificationDate: { url in
+                try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            },
+            now: { Date() },
             isAudioAbsent: { path in
                 let cloud = CloudStorageManager.shared
                 guard let url = cloud.getFileURL(for: path) else { return true }
@@ -50,7 +61,7 @@ enum OrphanedRecordingMatcher {
     /// The whole second the recording started, from `voicely_rec_<unixSeconds>_<uuid>.caf`.
     static func startTime(ofPCMFile url: URL) -> TimeInterval? {
         let name = url.lastPathComponent
-        let prefix = AudioRecordingService.pcmTemporaryFilePrefix
+        let prefix = AudioRecordingService.livePCMFilePrefix
         guard name.hasPrefix(prefix), url.pathExtension == "caf" else { return nil }
         let seconds = name.dropFirst(prefix.count).prefix { $0 != "_" }
         return TimeInterval(seconds)

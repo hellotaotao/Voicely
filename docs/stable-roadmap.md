@@ -43,7 +43,7 @@
 **发布前专项（iPhone）**
 5a. ✅ **模型随 app 安装**（2026-10-25）：不再从 Hugging Face 下载（中国大陆连不上）。`scripts/fetch-speech-models.sh` 按固定版本把模型放到不进 git 的 `Models/`，构建阶段"Embed Speech Model"把它拷进 app 的 `SpeechModel/`：Mac 包带 MLX 8-bit（约 1.0 GB），iPhone/iPad 包带 CoreML（902 MB，Release 包共 961 MB）。启动直接从安装包离线加载；Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮已删除；以前下载到 Application Support/Qwen3ASR 的模型在启动时清掉。`VOICELY_MODEL_DIRECTORY` 可让测试或回放改读别的目录（如在 Mac 上跑 CoreML 后端）。
    - **苹果托管（Background Assets）暂缓**：对用户没有区别（essential 资源包同样在安装时下完），好处主要是上传 TestFlight 不必每次带模型：带模型后每个包约 1.1 GB，0.28.0 实测每个平台上传约 15.5 分钟，两个平台合计半小时左右。等要加第二个模型（如 Parakeet）、需要按需或预取下载时再评估。2026-10-22 已查明：`AssetPackManager.url(for:)` 支持返回目录（含 `.mlmodelc`）；要加 `ManagedDownloaderExtension` 下载扩展、App Group 和三个 Info.plist 键；Mac Catalyst 收哪个平台的包未知，需上传标记资源包实测；最低版本要升到 iOS 26 / macOS 26，会失去 iPhone XS/XS Max/XR 和 iPad 第 7 代，以及能升级但还没升级的设备；"这些老设备本来也跑不动"只是按算力推算，未实测。托管的另一个好处是模型能独立于 app 更新，但对现在只有一个模型的首发不构成迁移理由。
-5b. **录音中的原始音频改存持久目录**（数据丢失风险，最优先，全部能在 Mac 上完成）：录音时的 PCM 现在写在 `temporaryDirectory`（`AudioRecordingService.makePCMTemporaryURL`），苹果允许在 app 不运行时清理它，第 9 项的进程被杀恢复就靠读这里的文件。改存到不会被系统清理的本地目录，记录会话与文件的对应关系，确认导出成功、笔记已保存后再删除；验证导出失败时保留原文件、恢复可以重复执行、失败不会留下永远 Queued 的笔记。
+5b. ✅ **录音中的原始音频改存持久目录**（2026-10-26 实现，Mac 实测通过）：录音时的 PCM 改写到 `Application Support/LiveRecordings`（`AudioRecordingService.makeLivePCMURL`，目录排除出设备备份），不再放系统可随时清理的 `tmp`。启动恢复同时扫这个目录和旧版留在 `tmp` 里的文件；正在导出的文件不会被后续恢复轮次误删；没有笔记认领、也不被任何笔记直接引用的 PCM 保留 7 天后删除（`RecordingSession.unclaimedPCMRetention`）。导出失败保留原文件、笔记持久化后才删除源文件，沿用原有逻辑。实测发现开始录音时笔记只 insert 不 save，10 秒内被杀则数据库里没有这条笔记、PCM 无人认领；现在开始录音时立即保存。Mac 上录 14 秒后 `kill -9`，重启后笔记时长 14.8 s、`.m4a` 已导出、PCM 已删除。真机验收并入第 9 项。
 5c. **CoreML 可靠性**（逻辑与回放在 Mac 上做）：
    - 解码进展只在整片解完后才加一（`TranscriptionService.transcribeWithQwen` 里的 `decodeWorkCounter`）。iOS 约 30 s 收不到进展就判后台任务停滞，手机上一片 29 s 音频若解码超过 30 s，P-0d 的问题会回来。改为在解码循环里按生成的 token 上报真实进展（不用计时器伪造），并覆盖取消和后台过期；用注入的慢片在 Mac 上验证。
    - 每片记录结束原因（遇到结束符 / 撞到 448 token 上限）、输出 token 数和耗时。撞上限会静默截断（P-0n），目前没有任何记录，不知道真实录音有没有碰到过。
@@ -51,7 +51,7 @@
 6. 千问 CoreML 路径的真机验收：一台最低支持的设备加一台较新的设备；前台、锁屏、内存、后台进度上报；至少一条 60–90 分钟的完整流程，记录加载峰值、后半程速度、最长进度间隔、停止到落定的时间。最低支持 iOS 18，而后台续跑（continued processing）依赖 iOS 26，两条路径分别验。同一轮验 ③ 定时停止：锁屏时一秒一次的计时检查是否照常运行、到点能否停止并保存；锁屏通知上的"延长 10/30 分钟""立即停止"按钮；Live Activity 副标题显示"Stops at"。
 7. 语音门控两个方向都要验（P-0o）：CoreML 在白噪声上会编出整句话，确认真实环境噪声都落在"确定静音"那一档；反过来，小声的短回答（"不行""同意""No"这类决定会议结论的话）不能被当成噪声丢掉。
 8. 上架文档按千问重写（P-0n）。
-9. 录音中被杀进程的恢复（2026-10-21 实现，Mac 单元测试通过）：真机录音中途被杀（崩溃、TestFlight 自动更新、jetsam）时，停止流程没跑，笔记 duration 为 0、`.m4a` 从未导出，以前会在所有设备上永远显示 Queued（10-20 11:16 那条就是这样丢的）。现在启动时 `RecordingSession.recoverInterruptedRecordings` 在 tmp 里按文件名里的开始时间找遗留的 `voicely_rec_*.caf`，找到就按停止时的同一条导出路径转成 `.m4a` 并排队转写；找不到就标为失败，提示 "Recording was interrupted before it was saved."。Mac 上已确认 SIGKILL 后的 CAF 能读出完整时长并导出。真机验收：录音中途从 App 切换器划掉或让 Xcode 停止进程，重新打开后确认这条笔记有音频、时长正确并转写完成；tmp 可能被系统清理的问题由 5b 根治。
+9. 录音中被杀进程的恢复（2026-10-21 实现，Mac 单元测试通过）：真机录音中途被杀（崩溃、TestFlight 自动更新、jetsam）时，停止流程没跑，笔记 duration 为 0、`.m4a` 从未导出，以前会在所有设备上永远显示 Queued（10-20 11:16 那条就是这样丢的）。现在启动时 `RecordingSession.recoverInterruptedRecordings` 按文件名里的开始时间找遗留的 `voicely_rec_*.caf`（5b 起在 `Application Support/LiveRecordings`，兼容旧版留在 tmp 的），找到就按停止时的同一条导出路径转成 `.m4a` 并排队转写；找不到就标为失败，提示 "Recording was interrupted before it was saved."。Mac 上已确认 SIGKILL 后的 CAF 能读出完整时长并导出。真机验收：录音中途从 App 切换器划掉或让 Xcode 停止进程，重新打开后确认这条笔记有音频、时长正确并转写完成。
 
 **等设备都升级过 0.26.0 后**
 10. 删除 `RetiredWhisperModels` 和千问不支持的旧语言设置迁移（P-0n）。

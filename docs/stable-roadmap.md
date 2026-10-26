@@ -54,7 +54,7 @@
 7. 语音门控两个方向都要验（P-0o）：CoreML 在白噪声上会编出整句话，确认真实环境噪声都落在"确定静音"那一档；反过来，小声的短回答（"不行""同意""No"这类决定会议结论的话）不能被当成噪声丢掉。
    - **Mac 构造素材已验**（2026-10-26，`SpeechGateReplayTests`，两个后端结果一致）：系统 TTS 合成 11 段短回答（不行、同意、可以、不同意、No、Yes、Agreed，两个声音），按 −25/−35/−45/−55 dBFS 放进 20 s 的四种背景（数字静音、−60 dB 白噪声、敲键盘、−40 dB 低频轰鸣）。纯噪声（另加 −45 dB 白噪声）5 种全部判为确定静音，没写出一个字。短回答在静音、白噪声、敲键盘背景下到 −55 dB 都保留；丢掉的 12 例都在轰鸣背景里，其中 11 例是回答比噪声还低 5–15 dB、VAD 判为静音，只有 1 例（−45 dB 的 "No."）是 VAD 判"拿不准"、模型写对了却因不足 3 个词被丢。3 个词的规则不改：P-0o 里千问在近静音上编出的碎片恰好也是 "No." 这类，区分不开。
    - **还没验**：合成噪声全部落在确定静音档，"拿不准"档里 CoreML 编长句的风险这组素材没覆盖到。真实环境噪声（人声嘈杂、音乐、关门、远场小声回答）留到第 6 项真机录。
-8. ✅ 上架文档按千问重写（2026-10-26）：`docs/app-store-release/` 的元数据（中英文）、隐私与审核说明（新增隐私政策草稿，App Privacy 建议填"不收集数据"）、截图计划（iPhone 6.9 寸、iPad 13 寸、Mac）、检查清单都已改为随包千问模型、iPhone/iPad/Mac 同一个上架条目。设置页"Fully on-device"卡片原来说音频和文字"永不离开本机"，与 iCloud 同步矛盾，已改为"留在你的设备和你自己的 iCloud 账户里"。提交前还剩：支持页和隐私政策页上线；定版本号；部署 CloudKit Prod schema；截图（iPhone/iPad 的截图在第 6 项真机验收时一起拍）。
+8. ✅ 上架文档按千问重写（2026-10-26，存在本地 `promo/app-store-release/`，不进 git）：元数据（中英文）、隐私与审核说明（新增隐私政策草稿，App Privacy 建议填"不收集数据"）、截图计划（iPhone 6.9 寸、iPad 13 寸、Mac）、检查清单都已改为随包千问模型、iPhone/iPad/Mac 同一个上架条目。设置页"Fully on-device"卡片原来说音频和文字"永不离开本机"，与 iCloud 同步矛盾，已改为"留在你的设备和你自己的 iCloud 账户里"。提交前还剩：支持页和隐私政策页上线；定版本号；部署 CloudKit Prod schema；截图（iPhone/iPad 的截图在第 6 项真机验收时一起拍）。
 9. 录音中被杀进程的恢复（2026-10-21 实现，Mac 单元测试通过）：真机录音中途被杀（崩溃、TestFlight 自动更新、jetsam）时，停止流程没跑，笔记 duration 为 0、`.m4a` 从未导出，以前会在所有设备上永远显示 Queued（10-20 11:16 那条就是这样丢的）。现在启动时 `RecordingSession.recoverInterruptedRecordings` 按文件名里的开始时间找遗留的 `voicely_rec_*.caf`（5b 起在 `Application Support/LiveRecordings`，兼容旧版留在 tmp 的），找到就按停止时的同一条导出路径转成 `.m4a` 并排队转写；找不到就标为失败，提示 "Recording was interrupted before it was saved."。Mac 上已确认 SIGKILL 后的 CAF 能读出完整时长并导出。真机验收：录音中途从 App 切换器划掉或让 Xcode 停止进程，重新打开后确认这条笔记有音频、时长正确并转写完成。
 
 **等设备都升级过 0.26.0 后**
@@ -444,7 +444,7 @@ Debug 版 app 转一条 64 分钟录音时，进程占了 13 GB，其中 12 GB �
 
 ### P-0n ⬜ 已核实、暂不处理（2026-10-18）
 
-- **上架文档还写着 WhisperKit**：`docs/app-store-release/` 的元数据、隐私与审核说明、截图计划、检查清单都要按千问改。列为首次公开发布的前置条件。
+- **上架文档还写着 WhisperKit**（已由第 8 项改完）：上架材料的元数据、隐私与审核说明、截图计划、检查清单都要按千问改。列为首次公开发布的前置条件。
 - **CoreML 解码到 448 token 上限时静默截断**，与正常结束无法区分（`Qwen3CoreMLModel` 的生成循环）。未证实发生过；试更长切片前先记录结束原因。
 - **接缝处多余的句号**（见 P-0l）：根治需要知道句子在音频里的起点，依赖对齐模型，暂无方案。
 - **重叠 + 对齐模型切分**：iPhone 上 ASR 与对齐模型同时常驻的内存未测；CoreML 对齐模型输入固定 768 token，中文 29 s 片约 1/5 超限；对齐模型的词结束时间会盖住停顿。
@@ -583,6 +583,6 @@ R0 验收剩余未完成项：真实 iPhone 升级后旧音频与文字可读；
 
 - 共享 scheme 的 Archive 已没有 pre-action（`16a7c37` 起），archive 不再自动 `git tag`/`git push`。0.23.4–0.23.9 因此都没有 tag；0.23.9 更是从未提交的工作区打的包。以后先 commit 再 archive，版本和提交才对得上。
 - 0.23.10 为 `BGContinuedProcessingTask` 在 `UIBackgroundModes` 里加了 `processing`（与 stash 里的实现一致；SDK 文档只对 `BGProcessingTask` 明确要求它）。首次公开发布前确认它是否必需，不需要就去掉，免得审核追问。
-- 上架材料在 [app-store-release/](app-store-release/)。注意 `release-checklist.md` 里写的 `MARKETING_VERSION = 0.15.3` 已过时，且版本源已迁至 `Config/Version.xcconfig`，以 xcconfig 为准。
+- 上架材料（文案、审核说明、隐私政策草稿、截图计划、检查清单）只存在本地 `promo/app-store-release/`，由 `.git/info/exclude` 排除，不进 git。版本号以 `Config/Version.xcconfig` 为准。
 - Voicely 从未正式上架，只发过 TestFlight，下次提交是首次公开发布而非更新。
-- `app-store-release/widget-shortcuts-roadmap.md` 中的 Phase 编号属于早期系统入口专题规划，**不代表本文件的 ①~⑦ 发布顺序**。
+- [widget-shortcuts-roadmap.md](widget-shortcuts-roadmap.md) 中的 Phase 编号属于早期系统入口专题规划，**不代表本文件的 ①~⑦ 发布顺序**。

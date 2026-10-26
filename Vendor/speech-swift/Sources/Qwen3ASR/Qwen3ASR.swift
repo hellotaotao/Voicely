@@ -53,6 +53,10 @@ public struct Qwen3DecodingOptions: Sendable {
     /// default in `E2EQwen3DecodingOptionsTests`.
     public var longInputNoRepeatNgramSize: Int = 3
 
+    /// Called with each token as the decoder emits it, on the decoding
+    /// thread. Lets callers report progress inside a long decode.
+    public var onToken: (@Sendable (Int32) -> Void)?
+
     public init(
         maxTokens: Int = 448,
         language: String? = nil,
@@ -370,7 +374,8 @@ public class Qwen3ASRModel {
                 textDecoder: textDecoder,
                 initialLogits: logits,
                 cache: cache!,
-                maxTokens: maxTokens
+                maxTokens: maxTokens,
+                onToken: decodingOptions.onToken
             )
         } else {
             generatedTokens = Self.generateSlow(
@@ -421,7 +426,8 @@ public class Qwen3ASRModel {
         textDecoder: QuantizedTextModel,
         initialLogits: MLXArray,
         cache initialCache: [(MLXArray, MLXArray)],
-        maxTokens: Int
+        maxTokens: Int,
+        onToken: (@Sendable (Int32) -> Void)? = nil
     ) -> [Int32] {
         var generatedTokens: [Int32] = []
         guard maxTokens > 0 else { return generatedTokens }
@@ -479,6 +485,7 @@ public class Qwen3ASRModel {
             // into `generatedTokens` whenever EOS was the most recent
             // pick, so greedy stays bit-identical.
             generatedTokens.append(nextToken)
+            onToken?(nextToken)
             if nextToken == eosToken { break }
 
             guard let advancedCache = cacheN1, let advancedToken = nextTokenArrN1 else {
@@ -513,6 +520,7 @@ public class Qwen3ASRModel {
             options: options
         )
         generatedTokens.append(nextToken)
+        options.onToken?(nextToken)
 
         for _ in 1..<maxTokens {
             if nextToken == Int32(Qwen3ASRTokens.eosTokenId) { break }
@@ -531,6 +539,7 @@ public class Qwen3ASRModel {
                 options: options
             )
             generatedTokens.append(nextToken)
+            options.onToken?(nextToken)
         }
         return generatedTokens
     }

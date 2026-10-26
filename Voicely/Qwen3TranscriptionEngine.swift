@@ -14,6 +14,7 @@ import CoreML
 import Foundation
 import Metal
 import MLX
+import os
 import Qwen3ASR
 
 // MARK: - Backend
@@ -241,19 +242,33 @@ actor Qwen3ASRModelStore {
     }
 
     /// Runs one inference on a slice of 16 kHz mono audio no longer than
-    /// `Qwen3SliceLimits`. The model never leaves this actor.
-    func transcribe(samples: [Float], languageHint: String?) async throws -> String {
+    /// `Qwen3SliceLimits`. The model never leaves this actor. `onToken` runs
+    /// on the decoding thread after each generated token.
+    func transcribe(
+        samples: [Float],
+        languageHint: String?,
+        onToken: (@Sendable () -> Void)? = nil
+    ) async throws -> Qwen3SliceTranscript {
         try await load(progressHandler: nil)
         if let mlxModel {
-            return mlxModel.transcribe(audio: samples, sampleRate: 16_000,
-                                       options: Self.mlxOptions(languageHint: languageHint))
+            let tally = OSAllocatedUnfairLock(initialState: (count: 0, last: Int32(-1)))
+            var options = Self.mlxOptions(languageHint: languageHint)
+            options.onToken = { token in
+                tally.withLock { $0 = ($0.count + 1, token) }
+                onToken?()
+            }
+            let text = mlxModel.transcribe(audio: samples, sampleRate: 16_000, options: options)
+            let (count, last) = tally.withLock { $0 }
+            return Qwen3SliceTranscript(
+                text: text, tokenCount: count,
+                reachedTokenLimit: count >= options.maxTokens && last != Int32(Qwen3ASRTokens.eosTokenId))
         }
         guard let coreMLModel else { throw StoreError.modelMissing(modelDirectory) }
         // Each slice creates an MLState and several IOSurface-backed arrays;
         // without a pool they pile up until CoreML cannot allocate another one,
         // about 200 slices into a recording.
         return try autoreleasepool {
-            try coreMLModel.transcribe(samples, languageHint: languageHint)
+            try coreMLModel.transcribe(samples, languageHint: languageHint, onToken: onToken)
         }
     }
 
@@ -367,6 +382,16 @@ actor Qwen3ASRModelStore {
 /// The package's CoreML pipeline with the MLX hop removed, so nothing here can
 /// reach Metal. Its own `transcribeWithoutMLX` is not usable: it reads the
 /// Neural Engine's Float16 output as Float32 and prefills one token per call.
+/// What one slice decoded to.
+struct Qwen3SliceTranscript: Sendable, Equatable {
+    var text: String
+    /// Tokens generated, the closing end-of-turn included.
+    var tokenCount: Int
+    /// Decoding hit `Qwen3ASRDefaults.maxTokens` before end-of-turn, so the
+    /// text stops short of the slice's end.
+    var reachedTokenLimit: Bool
+}
+
 final class Qwen3CoreMLModel {
     private let encoder: CoreMLASREncoder
     private let decoder: CoreMLTextDecoder
@@ -379,7 +404,11 @@ final class Qwen3CoreMLModel {
         self.tokenizer = tokenizer
     }
 
-    func transcribe(_ audio: [Float], languageHint: String?) throws -> String {
+    func transcribe(
+        _ audio: [Float],
+        languageHint: String?,
+        onToken: (@Sendable () -> Void)? = nil
+    ) throws -> Qwen3SliceTranscript {
         let mel = featureExtractor.processRaw(audio, sampleRate: 16_000)
         let encoded = try encoder.encode(melFeatures: mel)
         let hidden = encoded.embeddings.shape[2].intValue
@@ -413,17 +442,19 @@ final class Qwen3CoreMLModel {
         for _ in 0..<Qwen3ASRDefaults.maxTokens {
             tokens.append(next)
             seen.insert(next)
+            onToken?()
             if next == endOfTurn { break }
+            try Task.checkCancellation()
             logits = try decoder.decoderStep(embedding: try decoder.embed(tokenId: next))
             next = Self.pickToken(logits, seen: seen, excluding: nil)
         }
 
-        let raw = tokenizer.decode(tokens: tokens.map { Int($0) })
+        var text = tokenizer.decode(tokens: tokens.map { Int($0) })
         // Auto-detect prepends "language XX<asr_text>" to the transcript.
-        if let marker = raw.range(of: "<asr_text>") {
-            return String(raw[marker.upperBound...]).trimmingCharacters(in: .whitespaces)
+        if let marker = text.range(of: "<asr_text>") {
+            text = String(text[marker.upperBound...]).trimmingCharacters(in: .whitespaces)
         }
-        return raw
+        return Qwen3SliceTranscript(text: text, tokenCount: tokens.count, reachedTokenLimit: tokens.last != endOfTurn)
     }
 
     /// Greedy pick with the same repetition penalty the MLX backend applies.

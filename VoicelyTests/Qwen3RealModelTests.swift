@@ -6,6 +6,7 @@
 import AVFoundation
 import Foundation
 import MLX
+import os
 import Testing
 @testable import Voicely
 
@@ -46,10 +47,25 @@ struct Qwen3RealModelTests {
         var pieces: [String] = []
         var audioSeconds = 0.0
         let decodeStart = ProcessInfo.processInfo.systemUptime
+        // Background tasks see progress only through the token callback, so the
+        // longest wait between tokens is what a slow phone has to stay under.
+        let ticks = OSAllocatedUnfairLock(initialState: (count: 0, last: decodeStart, longestGap: 0.0))
         var offset = 0
         while offset < min(samples.count, 60 * 16_000) {
             let end = min(offset + slice, samples.count)
-            pieces.append(try await store.transcribe(samples: Array(samples[offset..<end]), languageHint: nil))
+            let before = ticks.withLock { $0.count }
+            ticks.withLock { $0.last = ProcessInfo.processInfo.systemUptime }
+            let pass = try await store.transcribe(samples: Array(samples[offset..<end]), languageHint: nil) {
+                ticks.withLock {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    $0 = ($0.count + 1, now, max($0.longestGap, now - $0.last))
+                }
+            }
+            let reported = ticks.withLock { $0.count } - before
+            #expect(pass.tokenCount > 0)
+            #expect(reported == pass.tokenCount)
+            #expect(!pass.reachedTokenLimit)
+            pieces.append(pass.text)
             audioSeconds += Double(end - offset) / 16_000
             offset = end
         }
@@ -57,7 +73,8 @@ struct Qwen3RealModelTests {
         let transcript = pieces.joined(separator: "\n")
         print("""
         QWEN-REAL backend=\(backend.rawValue) load=\(loadSeconds)s audio=\(audioSeconds)s \
-        decode=\(decodeSeconds)s speed=\(audioSeconds / decodeSeconds)x
+        decode=\(decodeSeconds)s speed=\(audioSeconds / decodeSeconds)x \
+        tokens=\(ticks.withLock { $0.count }) longestTokenGap=\(ticks.withLock { $0.longestGap })s
         \(transcript)
         QWEN-REAL end
         """)
@@ -76,6 +93,38 @@ struct Qwen3RealModelTests {
             #expect(Memory.cacheLimit == Qwen3ASRDefaults.mlxCacheLimitBytes)
             print("QWEN-REAL cacheMB=\(Memory.cacheMemory / 1_048_576) activeMB=\(Memory.activeMemory / 1_048_576)")
         }
+        await store.unloadModel()
+    }
+
+    /// A CoreML slice runs as one synchronous call; cancelling it must stop
+    /// between tokens instead of after the whole slice.
+    @Test func cancellingStopsACoreMLSliceBetweenTokens() async throws {
+        let bundled = Qwen3ASRModelStore.defaultModelDirectory()
+        let directory = bundled.flatMap { Qwen3ASRModelStore.isComplete($0, backend: .coreML) ? $0 : nil }
+            ?? Qwen3RealModelInput.directory.appendingPathComponent(Qwen3Backend.coreML.rawValue, isDirectory: true)
+        try #require(Qwen3ASRModelStore.isComplete(directory, backend: .coreML))
+        let store = Qwen3ASRModelStore(backend: .coreML, modelDirectory: directory)
+        try await store.prepareModel()
+        let samples = try Qwen3AudioPCM.loadPCM16kMono(url: Qwen3RealModelInput.audioURL)
+        let slice = Array(samples.prefix(Int(Qwen3SliceLimits.production.chunkSeconds) * 16_000))
+
+        let tokens = OSAllocatedUnfairLock(initialState: 0)
+        let (firstToken, signal) = AsyncStream<Void>.makeStream()
+        let decode = Task {
+            try await store.transcribe(samples: slice, languageHint: nil) {
+                let count = tokens.withLock { $0 += 1; return $0 }
+                if count == 1 {
+                    signal.yield()
+                    // Give the test time to cancel before the next token.
+                    Thread.sleep(forTimeInterval: 0.2)
+                }
+            }
+        }
+        for await _ in firstToken { break }
+        decode.cancel()
+        await #expect(throws: CancellationError.self) { try await decode.value }
+        let emittedTokens = tokens.withLock { $0 }
+        #expect(emittedTokens <= 2)
         await store.unloadModel()
     }
 

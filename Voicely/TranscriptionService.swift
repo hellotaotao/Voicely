@@ -92,8 +92,8 @@ class TranscriptionService: ObservableObject {
 
     var continuedProcessingDriver: (any ContinuedProcessingDriver)? = SystemContinuedProcessingDriver.shared
 
-    /// Slices the engine has finished decoding. Background
-    /// tasks read it as proof of work while the audio position stands still.
+    /// Tokens the engine has decoded. Background tasks read it as proof of
+    /// work while the audio position stands still, including inside one slice.
     nonisolated let decodeWorkCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
     var decodeWorkCount: UInt64 { decodeWorkCounter.withLock { $0 } }
 
@@ -199,9 +199,11 @@ class TranscriptionService: ObservableObject {
         return modelManager.isModelLoaded()
     }
 
-    /// Runs one inference on a slice of 16 kHz mono audio. Tests replace it.
-    var transcribeSamples: ([Float], String?) async throws -> String = { samples, languageHint in
-        try await Qwen3ASRModelStore.shared.transcribe(samples: samples, languageHint: languageHint)
+    /// Runs one inference on a slice of 16 kHz mono audio, calling the
+    /// closure after each token. Tests replace it.
+    var transcribeSamples: ([Float], String?, @escaping @Sendable () -> Void) async throws -> Qwen3SliceTranscript = {
+        samples, languageHint, onToken in
+        try await Qwen3ASRModelStore.shared.transcribe(samples: samples, languageHint: languageHint, onToken: onToken)
     }
 
     func configureNewNote(_ note: VoiceNote, shouldStartImmediately: Bool) {
@@ -1404,25 +1406,15 @@ private extension TranscriptionService {
 
         let languageHint = Qwen3ASRDefaults.languageHint(
             forSelectedLanguageKey: UserDefaults.standard.string(forKey: "selectedLanguage"))
-        // Callers slice to the engine's limit; anything longer is cut here so
-        // the model never sees more than it handles reliably.
-        let chunkSamples = Int(Qwen3ASRDefaults.singlePassSecondsLimit * 16_000)
-        var pieces: [String] = []
-        var offset = 0
+        let pieces: [String]
         do {
-            while offset < samples.count {
-                let end = min(offset + chunkSamples, samples.count)
-                let passStart = ProcessInfo.processInfo.systemUptime
-                let text = try await transcribeSamples(Array(samples[offset..<end]), languageHint)
-                Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passEnded seconds=\(ProcessInfo.processInfo.systemUptime - passStart) audioSeconds=\(Double(end - offset) / 16_000)")
-                decodeWorkCounter.withLock { $0 &+= 1 }
-                if cancelRequested || Task.isCancelled {
-                    return .cancelled
-                }
-                pieces.append(text)
-                offset = end
-                updateProgressOnMain(0.1 + 0.9 * Float(offset) / Float(samples.count))
-            }
+            guard let decoded = try await decodePasses(
+                samples, languageHint: languageHint, diagnosticID: diagnosticID,
+                progress: { updateProgressOnMain(0.1 + 0.9 * $0) }
+            ) else { return .cancelled }
+            pieces = decoded
+        } catch is CancellationError {
+            return .cancelled
         } catch is Qwen3ASRModelStore.StoreError {
             currentEngine = .notAvailable
             return .modelUnavailable
@@ -1504,6 +1496,40 @@ extension TranscriptionService {
 
     /// Engine output after the speech gate. Text that is only whitespace or
     /// punctuation is noise, not a decoder failure, and must not fail the note.
+    /// Decodes `samples` in passes no longer than the engine's limit; callers
+    /// slice to that limit already, so this cut is a safeguard. Each token
+    /// counts as decode work. Returns nil when cancelled between passes.
+    func decodePasses(
+        _ samples: [Float],
+        languageHint: String?,
+        diagnosticID: String,
+        progress: (Float) -> Void
+    ) async throws -> [String]? {
+        let chunkSamples = Int(Qwen3ASRDefaults.singlePassSecondsLimit * 16_000)
+        let counter = decodeWorkCounter
+        var pieces: [String] = []
+        var offset = 0
+        while offset < samples.count {
+            let end = min(offset + chunkSamples, samples.count)
+            let passStart = ProcessInfo.processInfo.systemUptime
+            let pass = try await transcribeSamples(Array(samples[offset..<end]), languageHint) {
+                counter.withLock { $0 &+= 1 }
+            }
+            let endReason = pass.reachedTokenLimit ? "tokenLimit" : "endOfTurn"
+            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passEnded seconds=\(ProcessInfo.processInfo.systemUptime - passStart) audioSeconds=\(Double(end - offset) / 16_000) tokens=\(pass.tokenCount) endReason=\(endReason, privacy: .public)")
+            if pass.reachedTokenLimit {
+                debugLog("⚠️ [TranscriptionService] A \(Double(end - offset) / 16_000) s pass hit the \(Qwen3ASRDefaults.maxTokens)-token cap; its text is cut short")
+            }
+            if cancelRequested || Task.isCancelled {
+                return nil
+            }
+            pieces.append(pass.text)
+            offset = end
+            progress(Float(offset) / Float(samples.count))
+        }
+        return pieces
+    }
+
     nonisolated static func gatedOutput(_ text: String, presence: SpeechPresence) -> RawTranscription {
         guard LocalTranscriptFinalizer.hasContent(text) else { return .noSpeech }
         if presence == .uncertain, wordCount(text) < minimumUncertainWords { return .noSpeech }

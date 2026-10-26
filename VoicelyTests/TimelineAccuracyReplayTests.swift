@@ -126,7 +126,7 @@ struct TimelineAccuracyReplayTests {
             let sliceEnd = Double(end) / 16_000
             start = end
 
-            let raw = try await store.transcribe(samples: slice, languageHint: nil)
+            let raw = try await store.transcribe(samples: slice, languageHint: nil).text
             guard let text = IncrementalTranscriptionCoordinator.finalizedSegmentText(raw) else { continue }
             let language = Self.isMostlyCJK(text) ? "Chinese" : "English"
             let words = aligner.align(audio: slice, text: text, sampleRate: 16_000, language: language)

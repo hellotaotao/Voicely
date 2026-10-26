@@ -211,75 +211,39 @@ struct TranscriptionServiceTests {
         #expect(service.activeNoteID == nil)
     }
 
-    @Test @MainActor func nonOriginDeviceDoesNotClaimQueuedNoteBeforeGracePeriod() async {
-        let now = Date(timeIntervalSince1970: 10_000)
-        let service = makeService(deviceID: "desktop", now: now)
+    @Test @MainActor func nonOriginDeviceNeverClaimsQueuedNoteOnItsOwn() async {
+        let queuedAt = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "desktop", now: queuedAt.addingTimeInterval(3600))
+        service.waitingRecheckInterval = 0.05
         service.transcribeImpl = { _, _ in "Should not run" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
         note.transcriptionOriginDeviceID = "phone"
-        note.queueTranscription(at: now)
+        note.queueTranscription(at: queuedAt)
 
         await service.processPendingTranscriptions(notes: [note])
+        try? await Task.sleep(nanoseconds: 200_000_000)
 
         #expect(note.transcription.isEmpty)
         #expect(note.transcriptionState == .queued)
         #expect(note.transcriptionOwnerDeviceID == nil)
+        #expect(service.waitReason(for: note) == .waitingForOtherDevice)
     }
 
-    @Test @MainActor func nonOriginDeviceClaimsQueuedNoteAfterGracePeriod() async {
-        let queuedAt = Date(timeIntervalSince1970: 10_000)
-        let service = makeService(
-            deviceID: "desktop",
-            now: queuedAt.addingTimeInterval(301)
-        )
-        service.transcribeImpl = { _, _ in "Desktop result" }
-
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
-        note.transcriptionOriginDeviceID = "phone"
-        note.queueTranscription(at: queuedAt)
-
-        await service.processPendingTranscriptions(notes: [note])
-
-        #expect(note.transcription == "Desktop result")
-        #expect(note.transcriptionState == .completed)
-    }
-
-    @Test @MainActor func nonOriginNoteWaitsForItsAudioInsteadOfFailing() async {
-        let queuedAt = Date(timeIntervalSince1970: 10_000)
-        let service = makeService(deviceID: "desktop", now: queuedAt.addingTimeInterval(3600))
-        var audioArrived = false
-        service.isAudioAbsentLocally = { _ in !audioArrived }
-        service.transcribeImpl = { _, _ in "Desktop result" }
-
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
-        note.transcriptionOriginDeviceID = "phone"
-        note.queueTranscription(at: queuedAt)
-
-        await service.processPendingTranscriptions(notes: [note])
-        #expect(note.transcriptionState == .queued)
-        #expect(note.transcriptionOutcome == nil)
-        #expect(service.waitReason(for: note) == .waitingForAudio)
-
-        audioArrived = true
-        await service.processPendingTranscriptions(notes: [note])
-        #expect(note.transcription == "Desktop result")
-        #expect(service.waitReason(for: note) == nil)
-    }
-
-    @Test @MainActor func waitReasonNamesTheOriginDeviceGracePeriod() async {
+    @Test @MainActor func explicitRequestTranscribesAnotherDevicesQueuedNote() async {
         let queuedAt = Date(timeIntervalSince1970: 10_000)
         let service = makeService(deviceID: "desktop", now: queuedAt.addingTimeInterval(60))
-        service.transcribeImpl = { _, _ in "Should not run" }
+        service.transcribeImpl = { _, _ in "Desktop result" }
 
         let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
         note.transcriptionOriginDeviceID = "phone"
         note.queueTranscription(at: queuedAt)
-        await service.processPendingTranscriptions(notes: [note])
 
-        #expect(service.waitReason(for: note) == .waitingForOriginDevice(
-            takeOverAt: queuedAt.addingTimeInterval(service.nonOriginQueueGracePeriod)
-        ))
+        let didStart = await service.requestTranscription(for: note)
+
+        #expect(didStart == true)
+        #expect(note.transcription == "Desktop result")
+        #expect(note.transcriptionState == .completed)
     }
 
     @Test @MainActor func waitReasonReportsQueuePositions() async {
@@ -333,55 +297,176 @@ struct TranscriptionServiceTests {
         #expect(attempts == 2)
     }
 
-    @Test @MainActor func lapsedRemoteClaimIsTakenOverWithoutAnotherTrigger() async {
-        let queuedAt = Date(timeIntervalSince1970: 10_000)
-        var now = queuedAt.addingTimeInterval(3600)
-        let service = makeService(deviceID: "desktop")
-        service.nowProvider = { now }
+    @Test @MainActor func lapsedRemoteClaimStaysWithItsDevice() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "desktop", now: now)
         service.waitingRecheckInterval = 0.05
-        service.transcribeImpl = { _, _ in "Taken over" }
+        service.transcribeImpl = { _, _ in "Should not run" }
         let note = VoiceNote(title: "Remote", audioFilePath: "file.m4a")
         note.transcriptionOriginDeviceID = "phone"
-        note.queueTranscription(at: queuedAt)
         note.claimTranscription(
             ownerDeviceID: "phone",
             attemptID: "phone-attempt",
-            queuedAt: queuedAt,
-            leaseExpiresAt: now.addingTimeInterval(300)
+            queuedAt: now.addingTimeInterval(-3600),
+            leaseExpiresAt: now.addingTimeInterval(-600)
         )
 
         await service.processPendingTranscriptions(notes: [note])
-        #expect(note.transcriptionOwnerDeviceID == "phone")
-        #expect(note.transcription.isEmpty)
+        try? await Task.sleep(nanoseconds: 200_000_000)
 
-        // The phone stops renewing its lease.
-        now = now.addingTimeInterval(301)
+        // A lapsed lease may only mean the phone is asleep; it keeps the note.
+        #expect(note.transcription.isEmpty)
+        #expect(note.transcriptionOwnerDeviceID == "phone")
+        #expect(service.isTranscribingOnAnotherDevice(note))
+        #expect(service.waitReason(for: note) == nil)
+        // Only an explicit takeover moves it to this device.
+        #expect(await service.requestTranscription(for: note) == false)
+        #expect(await service.requestTranscription(for: note, force: true) == false)
+        #expect(note.transcriptionOwnerDeviceID == "phone")
+    }
+
+    @Test @MainActor func takeOverIsRefusedWhileTheOtherDeviceIsStillRecording() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "desktop", now: now)
+        service.transcribeImpl = { _, _ in "Should not run" }
+        let note = VoiceNote(title: "Recording", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.claimTranscription(
+            ownerDeviceID: "phone",
+            attemptID: "live",
+            queuedAt: now.addingTimeInterval(-900),
+            leaseExpiresAt: now.addingTimeInterval(-600)
+        )
+        note.isTranscribing = true
+
+        #expect(await service.requestTranscription(for: note, takeOver: true) == false)
+        #expect(note.transcriptionOwnerDeviceID == "phone")
+        #expect(note.isTranscribing)
+    }
+
+    @Test @MainActor func takeOverWorksForANoteLeftMidFinalizationElsewhere() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "desktop", now: now)
+        service.transcribeImpl = { _, _ in "Desktop result" }
+        // The phone stopped recording, then was killed while finalizing.
+        let note = VoiceNote(title: "Meeting", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.claimTranscription(
+            ownerDeviceID: "phone",
+            attemptID: "live",
+            queuedAt: now.addingTimeInterval(-7200),
+            leaseExpiresAt: now.addingTimeInterval(-3600)
+        )
+        note.isTranscribing = true
+        note.duration = 1800
+
+        #expect(await service.requestTranscription(for: note, takeOver: true) == true)
+        #expect(note.transcription == "Desktop result")
+        #expect(note.transcriptionState == .completed)
+    }
+
+    @Test @MainActor func unavailableAudioKeepsAManualTakeOver() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "desktop", now: now)
+        service.waitingRecheckInterval = 0.05
+        var attempts = 0
+        service.isAudioPermanentlyMissing = { _ in false }
+        service.transcribeImpl = { _, _ in "Desktop result" }
+        let note = VoiceNote(title: "Remote", audioFilePath: "file.m4a")
+        note.transcriptionOriginDeviceID = "phone"
+        note.claimTranscription(
+            ownerDeviceID: "phone",
+            attemptID: "phone-attempt",
+            queuedAt: now.addingTimeInterval(-60),
+            leaseExpiresAt: now.addingTimeInterval(240)
+        )
+
+        var ownerAtRetry: String?
+        service.prepareAudioFileForReading = { path in
+            attempts += 1
+            if attempts == 2 { ownerAtRetry = note.transcriptionOwnerDeviceID }
+            return attempts == 1 ? nil : URL(fileURLWithPath: path)
+        }
+
+        #expect(await service.requestTranscription(for: note, takeOver: true) == true)
+
         let deadline = Date().addingTimeInterval(5)
         while note.transcription.isEmpty, Date() < deadline {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
-        #expect(note.transcription == "Taken over")
+        #expect(note.transcription == "Desktop result")
+        #expect(attempts == 2)
+        // Queueing between attempts would have cleared the owner and handed the note back to the phone.
+        #expect(ownerAtRetry == "desktop")
     }
 
-    @Test @MainActor func audioArrivingDuringGracePeriodShowsTheOriginDeviceWait() async {
-        let queuedAt = Date(timeIntervalSince1970: 10_000)
-        let service = makeService(deviceID: "desktop", now: queuedAt.addingTimeInterval(60))
-        var audioArrived = false
-        service.isAudioAbsentLocally = { _ in !audioArrived }
+    @Test @MainActor func launchRecoveryLeavesAnotherDevicesRecordingAlone() async {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let service = makeService(deviceID: "desktop", now: now)
+        let recording = VoiceNote(title: "Live on phone", audioFilePath: "live.m4a")
+        recording.transcriptionOriginDeviceID = "phone"
+        recording.claimTranscription(
+            ownerDeviceID: "phone",
+            attemptID: "live",
+            queuedAt: now.addingTimeInterval(-900),
+            leaseExpiresAt: now.addingTimeInterval(-600)
+        )
+        recording.isTranscribing = true
+        // Being imported on another device: it has no state yet.
+        let importing = VoiceNote(title: "Importing elsewhere", audioFilePath: "")
+
+        service.migrateLegacyOwnershipIfNeeded(notes: [recording, importing])
+
+        #expect(recording.transcriptionState == .claimed)
+        #expect(recording.transcriptionOwnerDeviceID == "phone")
+        #expect(recording.isTranscribing)
+        #expect(!importing.hasOwnershipState)
+        #expect(importing.transcriptionOriginDeviceID == nil)
+    }
+
+    @Test @MainActor func legacyNoteOfUnknownOriginIsNotStartedAutomatically() async {
+        let service = makeService(deviceID: "desktop")
         service.transcribeImpl = { _, _ in "Should not run" }
-        let note = VoiceNote(title: "Queued", audioFilePath: "file.m4a")
+        let legacy = VoiceNote(title: "Legacy", audioFilePath: "file.m4a")
+        legacy.pendingTranscription = true
+
+        await service.processPendingTranscriptions(notes: [legacy])
+
+        #expect(legacy.transcriptionState == .queued)
+        #expect(legacy.transcriptionOriginDeviceID == nil)
+        #expect(legacy.transcription.isEmpty)
+        #expect(await service.requestTranscription(for: legacy) == true)
+        #expect(legacy.transcription == "Should not run")
+    }
+
+    @Test @MainActor func backgroundPauseLeavesANoteTakenOverElsewhere() async {
+        let service = makeService(deviceID: "phone")
+        let gate = TranscriptionGate()
+        service.transcribeImpl = { _, _ in
+            await gate.wait()
+            return "Phone result"
+        }
+        let note = VoiceNote(title: "Recorded", audioFilePath: "file.m4a")
         note.transcriptionOriginDeviceID = "phone"
-        note.queueTranscription(at: queuedAt)
+        note.queueTranscription(at: Date())
 
-        await service.processPendingTranscriptions(notes: [note])
-        #expect(service.waitReason(for: note) == .waitingForAudio)
+        let run = Task { await service.requestTranscription(for: note, force: true) }
+        await gate.waitUntilArmed()
+        // The Mac takes the note over; the change reaches the phone mid-run.
+        note.claimTranscription(
+            ownerDeviceID: "mac",
+            attemptID: "mac-attempt",
+            queuedAt: Date(),
+            leaseExpiresAt: Date().addingTimeInterval(300)
+        )
+        service.savedTranscriptionsDidEnterBackground()
+        await gate.resume()
+        _ = await run.value
 
-        audioArrived = true
-        await service.processPendingTranscriptions(notes: [note])
-        #expect(service.waitReason(for: note) == .waitingForOriginDevice(
-            takeOverAt: queuedAt.addingTimeInterval(service.nonOriginQueueGracePeriod)
-        ))
+        #expect(note.transcriptionState == .claimed)
+        #expect(note.transcriptionOwnerDeviceID == "mac")
         #expect(note.transcription.isEmpty)
+        #expect(!service.ownsSavedTranscription(noteID: note.id))
     }
 
     @Test @MainActor func cancellingTheNextUpNoteMovesTheQueueForward() async {
@@ -430,26 +515,6 @@ struct TranscriptionServiceTests {
         #expect(note.transcription.isEmpty)
         #expect(note.transcriptionState == .claimed)
         #expect(note.transcriptionOwnerDeviceID == "phone")
-    }
-
-    @Test @MainActor func expiredForeignLeaseIsTakenOver() async {
-        let now = Date(timeIntervalSince1970: 10_000)
-        let service = makeService(deviceID: "desktop", now: now)
-        service.transcribeImpl = { _, _ in "Desktop takeover" }
-
-        let note = VoiceNote(title: "Claimed", audioFilePath: "file.m4a")
-        note.transcriptionOriginDeviceID = "phone"
-        note.claimTranscription(
-            ownerDeviceID: "phone",
-            attemptID: "attempt-a",
-            queuedAt: now.addingTimeInterval(-600),
-            leaseExpiresAt: now.addingTimeInterval(-1)
-        )
-
-        await service.processPendingTranscriptions(notes: [note])
-
-        #expect(note.transcription == "Desktop takeover")
-        #expect(note.transcriptionState == .completed)
     }
 
     @Test @MainActor func explicitTakeOverClaimsActiveRemoteTranscription() async {
@@ -1897,7 +1962,6 @@ struct TranscriptionServiceTests {
         service.deviceIDProvider = { deviceID }
         service.nowProvider = { now }
         service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
-        service.isAudioAbsentLocally = { _ in false }
         service.audioDurationProvider = { _ in 10 }
         service.heartbeatInterval = 3600
         service.requiresBackgroundExecution = true

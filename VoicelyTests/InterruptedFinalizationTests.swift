@@ -15,12 +15,15 @@ import Testing
 struct InterruptedFinalizationTests {
 
     private func makeSession() -> RecordingSession {
-        RecordingSession(audioService: RecordingSessionTests.MockRecordingAudio(),
-                         transcriptionService: TranscriptionService())
+        let service = TranscriptionService()
+        service.deviceIDProvider = { "this-device" }
+        return RecordingSession(audioService: RecordingSessionTests.MockRecordingAudio(),
+                                transcriptionService: service)
     }
 
     @Test func aNoteLeftMidFinalizationIsReleasedAndKeepsItsLiveText() {
         let note = VoiceNote(title: "Meeting", audioFilePath: "/tmp/meeting.caf")
+        note.transcriptionOriginDeviceID = "this-device"
         note.duration = 3_600
         note.isTranscribing = true
         note.transcription = "text written by the live pass"
@@ -33,6 +36,24 @@ struct InterruptedFinalizationTests {
         #expect(note.transcriptionOutcome == .failed)
         #expect(note.transcriptionLastErrorMessage?.contains("interrupted") == true)
         #expect(!note.pendingTranscription)
+    }
+
+    @Test func anotherDevicesFinalizationIsLeftAlone() {
+        // Synced from a phone that is still finalizing: only the phone can tell it stalled.
+        let note = VoiceNote(title: "Meeting", audioFilePath: "/tmp/meeting.caf")
+        note.transcriptionOriginDeviceID = "phone"
+        note.claimTranscription(ownerDeviceID: "phone", attemptID: "live",
+                                queuedAt: Date(), leaseExpiresAt: Date().addingTimeInterval(-60))
+        note.duration = 3_600
+        note.isTranscribing = true
+        note.transcription = "text written by the live pass"
+
+        makeSession().recoverInterruptedFinalizations(in: [note])
+
+        #expect(note.isTranscribing)
+        #expect(note.transcriptionState == .claimed)
+        #expect(note.transcriptionOwnerDeviceID == "phone")
+        #expect(note.transcriptionOutcome == nil)
     }
 
     @Test func anActiveRecordingIsLeftAlone() {

@@ -59,8 +59,8 @@ enum TranscriptionWaitReason: Equatable {
     case waitingForModel
     /// The audio has not reached this device yet.
     case waitingForAudio
-    /// Recorded elsewhere: the recording device gets the first chance until this time.
-    case waitingForOriginDevice(takeOverAt: Date)
+    /// Recorded on another device, which transcribes it; this one only starts on request.
+    case waitingForOtherDevice
     case pausedInBackground
     case startingSoon
 }
@@ -124,18 +124,11 @@ class TranscriptionService: ObservableObject {
     var isAudioPermanentlyMissing: (String) -> Bool = { path in
         CloudStorageManager.shared.isAudioPermanentlyMissing(at: path)
     }
-    /// True when neither the audio nor its iCloud placeholder is on this device.
-    var isAudioAbsentLocally: (String) -> Bool = { path in
-        let cloud = CloudStorageManager.shared
-        guard let url = cloud.getFileURL(for: path) else { return true }
-        return cloud.isAudioFileMissing(at: url)
-    }
-    /// How often notes blocked outside the queue (audio, grace period) are checked again.
+    /// How often this device's notes blocked outside the queue (audio still syncing) are checked again.
     var waitingRecheckInterval: TimeInterval = 30
     var audioAvailabilityRetryWindow: TimeInterval = 5 * 60
     var leaseDuration: TimeInterval = 5 * 60
     var heartbeatInterval: TimeInterval = 60
-    var nonOriginQueueGracePeriod: TimeInterval = 5 * 60
 
     /// Shared with the import path (ContentView) so the in-flight guard and
     /// resume sidecars are consistent across imports and re-transcriptions.
@@ -232,12 +225,14 @@ class TranscriptionService: ObservableObject {
         let now = nowProvider()
 
         for note in notes {
-            _ = recoverInterruptedLiveRecordingIfNeeded(note, now: now)
+            _ = recoverInterruptedLiveRecordingIfNeeded(note)
         }
 
-        for note in notes where !note.hasOwnershipState {
-            note.transcriptionOriginDeviceID = note.transcriptionOriginDeviceID ?? currentDeviceID
-
+        // A note with no state and no audio yet may be an import another device is
+        // still transcribing; adopting it would mark it finished there. Notes from
+        // before ownership existed always have their audio. Their origin stays
+        // unknown, so no device starts one on its own; the user asks for it.
+        for note in notes where !note.hasOwnershipState && !note.audioFilePath.isEmpty {
             if !note.transcription.isEmpty {
                 note.completeTranscription()
             } else if note.pendingTranscription || note.isTranscribing {
@@ -333,7 +328,9 @@ class TranscriptionService: ObservableObject {
 
         migrateLegacyOwnershipIfNeeded(notes: [note])
 
-        if !takeOver, isTranscribingOnAnotherDevice(note) && !leaseHasExpired(note) {
+        // Another device's claim is only ever taken over by an explicit request, and
+        // never while that device is still recording: its audio does not exist yet.
+        if isTranscribingOnAnotherDevice(note), !takeOver || isStillRecordingElsewhere(note) {
             return false
         }
 
@@ -434,14 +431,27 @@ class TranscriptionService: ObservableObject {
         }
     }
 
+    /// Another device took the note over or finished it: drop this device's job so
+    /// neither a foreground resume nor a background pause touches the note again.
+    func forgetSavedTranscription(_ note: VoiceNote) {
+        guard savedTranscriptionNotes[note.id] != nil || savedContinuations[note.id] != nil else { return }
+        finishSavedContinuation(for: note, remove: true)
+    }
+
     private func pauseSavedTranscriptionForBackground(_ note: VoiceNote) {
         guard savedTranscriptionNotes[note.id] != nil, !isUserPaused(note),
               !isDiscarded(noteID: note.id) else { return }
+        if isTranscribingOnAnotherDevice(note) || note.transcriptionState == .completed {
+            // Taken over or finished elsewhere: nothing is left to pause or resume here.
+            if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
+            finishSavedContinuation(for: note, remove: true)
+            return
+        }
         backgroundPausedNoteIDs.insert(note.id)
         Self.savedJobLog.notice("event=savedJobPaused note=\(note.id.uuidString, privacy: .public) foreground=\(self.savedJobsAreInForeground)")
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         savedContinuations.removeValue(forKey: note.id)?.finish(success: false)
-        note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
+        holdOrQueue(note, queuedAt: note.transcriptionQueuedAt ?? nowProvider())
         backgroundStatusByNoteID[note.id] = "Transcription paused by iOS. Saved progress resumes when you return to the app."
         do { try note.modelContext?.save() }
         catch { note.markTranscriptionFailure("Could not save the paused state. Keep the app open. \(error.localizedDescription)") }
@@ -579,17 +589,26 @@ class TranscriptionService: ObservableObject {
         progressByNoteID.removeValue(forKey: noteID)
     }
 
-    func isTranscribingOnAnotherDevice(_ note: VoiceNote, now: Date? = nil) -> Bool {
-        guard note.transcriptionState == .claimed else {
+    /// Another device holds the note, lease or no lease: a lapsed lease may only
+    /// mean that device is asleep, so it stays its note until the user takes it over.
+    func isTranscribingOnAnotherDevice(_ note: VoiceNote) -> Bool {
+        guard note.transcriptionState == .claimed,
+              let ownerDeviceID = note.transcriptionOwnerDeviceID else {
             return false
         }
+        return ownerDeviceID != currentDeviceID
+    }
 
-        guard let ownerDeviceID = note.transcriptionOwnerDeviceID,
-              ownerDeviceID != currentDeviceID else {
-            return false
-        }
+    /// Another device is still recording the note (stop sets the duration). A note
+    /// left mid-finalization keeps `isTranscribing` but has its duration and audio.
+    func isStillRecordingElsewhere(_ note: VoiceNote) -> Bool {
+        isTranscribingOnAnotherDevice(note) && note.isTranscribing && note.duration <= 0
+    }
 
-        return !leaseHasExpired(note, now: now)
+    /// The user handed this device's recording to another device, which holds it
+    /// or already finished it; live text and finalization then leave it alone.
+    func wasTakenOverElsewhere(_ note: VoiceNote) -> Bool {
+        isTranscribingOnAnotherDevice(note) || note.transcriptionState == .completed
     }
 
     func shouldShowPendingState(_ note: VoiceNote, now: Date? = nil) -> Bool {
@@ -599,7 +618,22 @@ class TranscriptionService: ObservableObject {
             return true
         }
 
-        return note.transcriptionState == .claimed && leaseHasExpired(note, now: now)
+        return note.transcriptionState == .claimed && !isTranscribingOnAnotherDevice(note)
+            && leaseHasExpired(note, now: now)
+    }
+
+    /// Stops this device's work on a note. A note taken over from another device
+    /// stays claimed: queueing clears the owner, and the recording device would then
+    /// start a note the user handed to this one. This device's own notes go back to
+    /// the queue, which no other device starts on its own.
+    func holdOrQueue(_ note: VoiceNote, queuedAt: Date) {
+        if note.transcriptionState == .claimed, note.transcriptionOwnerDeviceID == currentDeviceID,
+           let originDeviceID = note.transcriptionOriginDeviceID, originDeviceID != currentDeviceID {
+            note.transcriptionQueuedAt = queuedAt
+            note.clearTransientTranscriptionFlags()
+        } else {
+            note.queueTranscription(at: queuedAt)
+        }
     }
 
     func isEngineAvailable() -> Bool {
@@ -867,11 +901,7 @@ extension TranscriptionService {
         if !isEngineLoaded { return .waitingForModel }
         if let index = localQueueOrder.firstIndex(of: note.id) { return .inLine(position: index + 1) }
         if audioWaitNoteIDs.contains(note.id) { return .waitingForAudio }
-        let now = now ?? nowProvider()
-        if note.transcriptionState == .queued, !canCurrentDeviceClaimQueuedNote(note, now: now),
-           let queuedAt = note.transcriptionQueuedAt {
-            return .waitingForOriginDevice(takeOverAt: queuedAt.addingTimeInterval(nonOriginQueueGracePeriod))
-        }
+        if !isLocalTask(note) { return .waitingForOtherDevice }
         return .startingSoon
     }
 }
@@ -931,26 +961,15 @@ private extension TranscriptionService {
             return nil
         }
 
+        // Work only starts on its own for notes this device is responsible for;
+        // another device's note waits for that device or for the user to take it over.
+        guard isLocalTask(note) else { return nil }
+
         switch note.transcriptionState {
         case .claimed:
-            if note.transcriptionOwnerDeviceID == currentDeviceID {
-                let attemptID = note.transcriptionAttemptID ?? UUID().uuidString
-                return .resumeOwned(attemptID: attemptID)
-            }
-
-            guard leaseHasExpired(note, now: now), !awaitsAudioFromAnotherDevice(note) else {
-                return nil
-            }
-
-            return .claimNew(
-                attemptID: UUID().uuidString,
-                queuedAt: note.transcriptionQueuedAt ?? now
-            )
+            let attemptID = note.transcriptionAttemptID ?? UUID().uuidString
+            return .resumeOwned(attemptID: attemptID)
         case .queued:
-            guard canCurrentDeviceClaimQueuedNote(note, now: now), !awaitsAudioFromAnotherDevice(note) else {
-                return nil
-            }
-
             return .claimNew(
                 attemptID: UUID().uuidString,
                 queuedAt: note.transcriptionQueuedAt ?? now
@@ -962,28 +981,13 @@ private extension TranscriptionService {
         }
     }
 
-    func canCurrentDeviceClaimQueuedNote(_ note: VoiceNote, now: Date) -> Bool {
-        guard note.transcriptionState == .queued else {
-            return false
+    /// This device holds the note, or it is unclaimed and was recorded or imported
+    /// here or requested here by the user.
+    func isLocalTask(_ note: VoiceNote) -> Bool {
+        if note.transcriptionState == .claimed {
+            return note.transcriptionOwnerDeviceID == currentDeviceID
         }
-
-        if savedTranscriptionNotes[note.id] != nil || note.transcriptionOriginDeviceID == currentDeviceID {
-            return true
-        }
-
-        guard let queuedAt = note.transcriptionQueuedAt else {
-            return true
-        }
-
-        return now.timeIntervalSince(queuedAt) >= nonOriginQueueGracePeriod
-    }
-
-    /// A note recorded elsewhere stays with its origin device until its audio reaches
-    /// this one: claiming it earlier can only fail and mark it failed on every device.
-    func awaitsAudioFromAnotherDevice(_ note: VoiceNote) -> Bool {
-        note.transcriptionOriginDeviceID != currentDeviceID
-            && savedTranscriptionNotes[note.id] == nil
-            && isAudioAbsentLocally(note.audioFilePath)
+        return note.transcriptionOriginDeviceID == currentDeviceID || savedTranscriptionNotes[note.id] != nil
     }
 
     func leaseHasExpired(_ note: VoiceNote, now: Date? = nil) -> Bool {
@@ -993,7 +997,7 @@ private extension TranscriptionService {
         return leaseExpiresAt <= (now ?? nowProvider())
     }
 
-    func recoverInterruptedLiveRecordingIfNeeded(_ note: VoiceNote, now: Date) -> Bool {
+    func recoverInterruptedLiveRecordingIfNeeded(_ note: VoiceNote) -> Bool {
         guard note.hasOwnershipState, note.transcriptionState != .cancelled else {
             return false
         }
@@ -1006,9 +1010,9 @@ private extension TranscriptionService {
             return false
         }
 
-        if let ownerDeviceID = note.transcriptionOwnerDeviceID,
-           ownerDeviceID != currentDeviceID,
-           !leaseHasExpired(note, now: now) {
+        // Live recording never renews its lease, so a lapsed one does not mean the
+        // recording stopped. Only the recording device can tell it was interrupted.
+        guard note.transcriptionOriginDeviceID == currentDeviceID, !isTranscribingOnAnotherDevice(note) else {
             return false
         }
 
@@ -1027,18 +1031,9 @@ private extension TranscriptionService {
 
         for note in notes {
             guard processingAction(for: note, now: now) != nil else {
-                if mayBecomeRunnableLater(note, now: now), !note.audioFilePath.isEmpty,
+                if mayBecomeRunnableLater(note), !note.audioFilePath.isEmpty,
                    !discardedNoteIDs.contains(note.id), pendingTranscriptionQueue[note.id] == nil {
                     waitingNotes[note.id] = note
-                    // Audio can arrive while another blocker (the grace period) still holds the note.
-                    let awaitsAudio = awaitsAudioFromAnotherDevice(note)
-                    if awaitsAudio != audioWaitNoteIDs.contains(note.id) {
-                        if awaitsAudio {
-                            audioWaitNoteIDs.insert(note.id)
-                        } else {
-                            audioWaitNoteIDs.remove(note.id)
-                        }
-                    }
                 } else {
                     waitingNotes.removeValue(forKey: note.id)
                 }
@@ -1065,19 +1060,18 @@ private extension TranscriptionService {
         if order != localQueueOrder { localQueueOrder = order }
     }
 
-    /// Pending here, or claimed by another device whose lease can lapse if it stops
-    /// renewing it; either becomes runnable without an event the UI would notice.
-    private func mayBecomeRunnableLater(_ note: VoiceNote, now: Date) -> Bool {
-        shouldShowPendingState(note, now: now) || isTranscribingOnAnotherDevice(note, now: now)
+    /// Unfinished work this device is responsible for. It can become runnable
+    /// without an event the UI would notice (its audio finishes syncing), so poll it.
+    /// Other devices' notes are never polled: only the user hands them to this one.
+    private func mayBecomeRunnableLater(_ note: VoiceNote) -> Bool {
+        isLocalTask(note) && !localRecordingNoteIDs.contains(note.id)
+            && (note.transcriptionState == .queued || note.transcriptionState == .claimed)
     }
 
-    /// Notes blocked outside the queue become runnable without any event the UI
-    /// would notice (a grace period or lease ends, audio finishes syncing), so poll them.
     private func scheduleWaitingRecheck() {
-        let now = nowProvider()
         waitingNotes = waitingNotes.filter { id, note in
             !discardedNoteIDs.contains(id) && pendingTranscriptionQueue[id] == nil
-                && mayBecomeRunnableLater(note, now: now)
+                && mayBecomeRunnableLater(note)
         }
         let audioWaits = audioWaitNoteIDs.filter { waitingNotes[$0] != nil || pendingTranscriptionQueue[$0] != nil }
         if audioWaits != audioWaitNoteIDs { audioWaitNoteIDs = audioWaits }
@@ -1089,20 +1083,7 @@ private extension TranscriptionService {
         }
         guard waitingRecheckTask == nil else { return }
 
-        var delay = waitingRecheckInterval
-        for note in waitingNotes.values {
-            let unblocksAt: Date?
-            if note.transcriptionState == .queued, !canCurrentDeviceClaimQueuedNote(note, now: now) {
-                unblocksAt = note.transcriptionQueuedAt?.addingTimeInterval(nonOriginQueueGracePeriod)
-            } else if isTranscribingOnAnotherDevice(note, now: now) {
-                unblocksAt = note.transcriptionLeaseExpiresAt
-            } else {
-                unblocksAt = nil
-            }
-            if let unblocksAt {
-                delay = min(delay, max(1, unblocksAt.timeIntervalSince(now)))
-            }
-        }
+        let delay = waitingRecheckInterval
         waitingRecheckTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, !Task.isCancelled else { return }
@@ -1336,7 +1317,7 @@ private extension TranscriptionService {
     }
 
     func requeueNote(_ note: VoiceNote, queuedAt: Date) {
-        note.queueTranscription(at: queuedAt)
+        holdOrQueue(note, queuedAt: queuedAt)
         // A dequeued note is not re-added by the running loop; the recheck picks it up.
         waitingNotes[note.id] = note
         scheduleWaitingRecheck()

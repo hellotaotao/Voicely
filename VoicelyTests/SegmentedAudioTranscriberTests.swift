@@ -342,6 +342,32 @@ struct SegmentedAudioTranscriberTests {
         #expect(note.transcriptionLeaseExpiresAt == nil)
     }
 
+    @Test @MainActor func stopsWithoutWritingOnceAnotherDeviceTakesOver() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 40)  // 3 segments
+        let store = SegmentedAudioTestSupport.makeStore()
+        let service = TranscriptionService()
+        service.deviceIDProvider = { "phone" }
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        let note = VoiceNote(title: "imported", audioFilePath: "")
+        let calls = Counter()
+        transcriber.transcribeSegmentOutcome = { _ in
+            if await calls.incrementAndGet() == 2 {
+                // The Mac's takeover reaches the phone while it decodes slice 2.
+                note.claimTranscription(ownerDeviceID: "mac", attemptID: "mac-attempt",
+                                        queuedAt: Date(), leaseExpiresAt: Date().addingTimeInterval(300))
+            }
+            return .transcribed(.init(text: "seg", duration: 1, modelIdentifier: "m"))
+        }
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+
+        #expect(await calls.value == 2)
+        #expect(note.transcription.isEmpty)
+        #expect(note.transcriptionState == .claimed)
+        #expect(note.transcriptionOwnerDeviceID == "mac")
+        #expect(note.transcriptionAttemptID == "mac-attempt")
+    }
+
     // MARK: Task 8 — background stop at boundary
 
     @Test @MainActor func stopsAtBoundaryWhenBackgroundExpires() async throws {

@@ -11,7 +11,7 @@ extension TranscriptionWaitReason {
         case .inLine(let position): return position == 1 ? "Next up" : "#\(position) in line"
         case .waitingForModel: return "Waiting for model"
         case .waitingForAudio: return "Waiting for audio"
-        case .waitingForOriginDevice: return "Waiting for other device"
+        case .waitingForOtherDevice: return "On another device"
         case .pausedInBackground: return "Paused in background"
         case .startingSoon: return "Queued"
         }
@@ -22,7 +22,7 @@ extension TranscriptionWaitReason {
         case .inLine, .startingSoon: return "clock.arrow.circlepath"
         case .waitingForModel: return "cpu"
         case .waitingForAudio: return "icloud.and.arrow.down"
-        case .waitingForOriginDevice: return "laptopcomputer.and.iphone"
+        case .waitingForOtherDevice: return "laptopcomputer.and.iphone"
         case .pausedInBackground: return "pause.circle"
         }
     }
@@ -33,7 +33,7 @@ extension TranscriptionWaitReason {
         case .inLine: return "Waiting for its turn to transcribe."
         case .waitingForModel: return "Transcribes once the speech model has loaded."
         case .waitingForAudio: return "The audio hasn't synced to this device yet."
-        case .waitingForOriginDevice: return "Recorded on another device, which transcribes it first."
+        case .waitingForOtherDevice: return "Recorded on another device, which transcribes it."
         case .pausedInBackground: return "Resumes when the app is back in the foreground."
         case .startingSoon: return "Queued for transcription."
         }
@@ -54,9 +54,9 @@ extension TranscriptionWaitReason {
         case .waitingForModel:
             return Text("Transcription starts once the speech model has loaded.")
         case .waitingForAudio:
-            return Text("The audio hasn't reached this device yet. Transcription starts automatically once it arrives.")
-        case .waitingForOriginDevice(let takeOverAt):
-            return Text("Recorded on another device, which gets the first chance to transcribe it. If it hasn't started by \(takeOverAt, style: .time), this device takes over.")
+            return Text("The audio hasn't reached this device yet. Transcription continues automatically once it arrives.")
+        case .waitingForOtherDevice:
+            return Text("Recorded on another device, which transcribes it. To transcribe it on this device instead, tap Transcribe Now.")
         case .pausedInBackground:
             return Text("Paused while the app was in the background. It resumes when you return.")
         case .startingSoon:

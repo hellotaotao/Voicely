@@ -320,7 +320,7 @@ final class RecordingSession: ObservableObject {
             audioService?.currentFramePosition ?? 0
         }
         coord.transcriptCallback = { [weak self, note] transcript in
-            guard let self else { return }
+            guard let self, !self.transcriptionService.wasTakenOverElsewhere(note) else { return }
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
 
             note.setTranscript(finalizedTranscript.text, spans: nil)
@@ -499,8 +499,12 @@ final class RecordingSession: ObservableObject {
     /// `isTranscribing` is persisted and no other code path clears it.
     /// Re-transcribing stays the user's explicit choice.
     func recoverInterruptedFinalizations(in notes: [VoiceNote]) {
+        let deviceID = transcriptionService.deviceIDProvider()
         for note in notes where note.isTranscribing && note.duration > 0 {
-            guard currentRecordingNote?.id != note.id,
+            // Another device's note may still be finalizing there; only its own device can tell.
+            guard note.transcriptionOriginDeviceID == deviceID,
+                  !transcriptionService.isTranscribingOnAnotherDevice(note),
+                  currentRecordingNote?.id != note.id,
                   !finalizingNoteIDs.contains(note.id),
                   !note.isAwaitingTranscription,
                   !transcriptionService.isLocalRecording(noteID: note.id),
@@ -534,6 +538,7 @@ final class RecordingSession: ObservableObject {
         let deviceID = transcriptionService.deviceIDProvider()
         let ownIdleNotes = notes.filter { note in
             note.transcriptionOriginDeviceID == deviceID
+                && !transcriptionService.isTranscribingOnAnotherDevice(note)
                 && !note.audioFilePath.isEmpty
                 && currentRecordingNote?.id != note.id
                 && !finalizingNoteIDs.contains(note.id)
@@ -659,6 +664,17 @@ final class RecordingSession: ObservableObject {
             guard let path = await export.resolvedFilePath() else { return }
             note.audioFilePath = path
             note.duration = duration
+            // Taken over on another device during the export: keep the audio only.
+            if transcriptionService.isTranscribingOnAnotherDevice(note) {
+                do {
+                    try note.modelContext?.save()
+                } catch {
+                    // Keep the PCM source until the note durably points at the export.
+                    return
+                }
+                await export.cleanupTemporaryAudio()
+                return
+            }
             note.transcriptionLastErrorMessage = nil
             // A finished note only gets here with audio it could not read; with
             // the audio back, the whole recording is transcribed again.
@@ -787,6 +803,9 @@ final class RecordingSession: ObservableObject {
             if await assetTask.value {
                 await stopResult.cleanupTemporaryAudio()
             }
+
+            // Taken over or finished on another device meanwhile: keep the audio, leave the text to it.
+            guard !transcriptionService.wasTakenOverElsewhere(note) else { return }
 
             let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(accumulatedTranscript)
             let trimmedTranscript = finalizedTranscript?.text ?? ""

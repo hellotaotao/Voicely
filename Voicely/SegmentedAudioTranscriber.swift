@@ -45,6 +45,8 @@ final class SegmentedAudioTranscriber {
     /// processing task that reports nothing for ~30 s.
     private var activeSegment: (noteID: UUID, start: Int64, end: Int64, total: Int64)?
     private var reportedProgress: Float = 0
+    /// The claim this run made; another device taking the note over replaces it.
+    private var attemptID: String?
 
     /// Files longer than one engine pass get sliced + a resume sidecar.
     private let singlePassFrameLimit: (Double) -> Int64 = { sampleRate in
@@ -80,6 +82,11 @@ final class SegmentedAudioTranscriber {
         }
         if Task.isCancelled || transcriptionService.isDiscarded(noteID: note.id)
             || transcriptionService.isUserPaused(note) || transcriptionService.isPausedForBackground(noteID: note.id) { return }
+        // Taken over on another device while this one waited: that device does it now.
+        if transcriptionService.isTranscribingOnAnotherDevice(note) {
+            transcriptionService.forgetSavedTranscription(note)
+            return
+        }
         // Drop a stale cancellation flag left by a prior, unrelated transcription.
         transcriptionService.clearPendingCancellation()
 
@@ -110,11 +117,16 @@ final class SegmentedAudioTranscriber {
         if duration.isFinite, duration > 0 { note.duration = duration }
         transcriptionService.setTelemetryAudioDuration(duration, session: session)
 
-        // Claim for this device before doing any work.
+        // Claim for this device before doing any work. An import is this device's
+        // from the start; say so before the note syncs without a state.
         let now = nowProvider()
+        let deviceID = transcriptionService.deviceIDProvider()
+        if note.transcriptionOriginDeviceID == nil { note.transcriptionOriginDeviceID = deviceID }
+        let attemptID = UUID().uuidString
+        self.attemptID = attemptID
         note.claimTranscription(
-            ownerDeviceID: transcriptionService.deviceIDProvider(),
-            attemptID: UUID().uuidString,
+            ownerDeviceID: deviceID,
+            attemptID: attemptID,
             queuedAt: note.transcriptionQueuedAt ?? now,
             leaseExpiresAt: now.addingTimeInterval(transcriptionService.leaseDuration))
         note.clearTransientTranscriptionFlags()
@@ -127,6 +139,7 @@ final class SegmentedAudioTranscriber {
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
             let outcome = await transcribeSegmentOutcome(sourceURL)
             if transcriptionService.isDiscarded(noteID: note.id) { return }
+            guard ownsRun(note) else { return }
             if transcriptionService.isRunCancelled(noteID: note.id) || transcriptionService.isUserPaused(note) || Task.isCancelled {
                 pause(note)
                 return
@@ -289,6 +302,7 @@ final class SegmentedAudioTranscriber {
         defer { activeSegment = nil }
         while start < info.totalFrames {
             if transcriptionService.isDiscarded(noteID: noteID) { return }
+            guard ownsRun(note) else { return }
             if transcriptionService.isRunCancelled(noteID: noteID) || transcriptionService.isUserPaused(note) || Task.isCancelled {
                 pause(note)
                 return
@@ -344,6 +358,8 @@ final class SegmentedAudioTranscriber {
             activeSegment = nil
 
             if transcriptionService.isDiscarded(noteID: noteID) { return }
+            // Checked again before this slice's text and lease are written.
+            guard ownsRun(note) else { return }
             if transcriptionService.isRunCancelled(noteID: noteID) || transcriptionService.isUserPaused(note) || Task.isCancelled {
                 pause(note)
                 return
@@ -386,6 +402,8 @@ final class SegmentedAudioTranscriber {
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             reportProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
+
+        guard ownsRun(note) else { return }
 
         // Re-transcription that produced no new text: keep the previous transcript.
         // A partial run is not lost — it is archived as a retained attempt the
@@ -433,10 +451,23 @@ final class SegmentedAudioTranscriber {
         transcriptionService.reportExternalProgress(value, for: noteID)
     }
 
+    /// False once this run may no longer write text, lease, or state: another
+    /// device took the note over, it was finished elsewhere, or a newer run on this
+    /// device replaced this one. A note this device paused back into the queue is
+    /// still this run's; the cancellation checks stop it.
+    private func ownsRun(_ note: VoiceNote) -> Bool {
+        if transcriptionService.isTranscribingOnAnotherDevice(note) || note.transcriptionState == .completed {
+            transcriptionService.forgetSavedTranscription(note)
+            return false
+        }
+        if note.transcriptionState == .claimed { return note.transcriptionAttemptID == attemptID }
+        return true
+    }
+
     private func pause(_ note: VoiceNote) {
         guard !transcriptionService.isDiscarded(noteID: note.id),
-              !transcriptionService.isUserPaused(note) else { return }
-        note.queueTranscription(at: note.transcriptionQueuedAt ?? nowProvider())
+              !transcriptionService.isUserPaused(note), ownsRun(note) else { return }
+        transcriptionService.holdOrQueue(note, queuedAt: note.transcriptionQueuedAt ?? nowProvider())
         try? note.modelContext?.save()
     }
 

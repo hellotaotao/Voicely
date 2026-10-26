@@ -18,6 +18,9 @@ struct OrphanedRecordingStorage {
     var now: () -> Date
     /// True when neither the audio nor its iCloud placeholder is on this device.
     var isAudioAbsent: @MainActor (String) -> Bool
+    /// True when the audio is on this device but cannot be opened, such as an
+    /// export cut short. A not-yet-downloaded iCloud placeholder is not damaged.
+    var isAudioDamaged: @MainActor (String) -> Bool
     /// Where a recovered recording is exported, given the note's audio file name.
     var destinationURL: @MainActor (String) -> URL
     var duration: (URL) -> TimeInterval?
@@ -37,6 +40,11 @@ struct OrphanedRecordingStorage {
                 let cloud = CloudStorageManager.shared
                 guard let url = cloud.getFileURL(for: path) else { return true }
                 return cloud.isAudioFileMissing(at: url)
+            },
+            isAudioDamaged: { path in
+                guard let url = CloudStorageManager.shared.getFileURL(for: path),
+                      FileManager.default.fileExists(atPath: url.path) else { return false }
+                return (try? AVAudioFile(forReading: url)) == nil
             },
             destinationURL: { name in
                 CloudStorageManager.shared.getAudioStorageDirectory().appendingPathComponent(name)

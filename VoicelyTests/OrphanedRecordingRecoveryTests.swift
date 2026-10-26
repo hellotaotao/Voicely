@@ -41,6 +41,10 @@ struct OrphanedRecordingRecoveryTests {
             storage.isAudioAbsent = { [audio] path in
                 !FileManager.default.fileExists(atPath: audio.appendingPathComponent(path).path)
             }
+            storage.isAudioDamaged = { [audio] path in
+                let url = audio.appendingPathComponent(path)
+                return FileManager.default.fileExists(atPath: url.path) && (try? AVAudioFile(forReading: url)) == nil
+            }
             storage.destinationURL = { [audio] name in audio.appendingPathComponent(name) }
             return storage
         }
@@ -232,5 +236,50 @@ struct OrphanedRecordingRecoveryTests {
         for task in tasks { await task.value }
         #expect(FileManager.default.fileExists(atPath: sandbox.audio.appendingPathComponent(note.audioFilePath).path))
         #expect(!FileManager.default.fileExists(atPath: pcm.path))
+    }
+
+    /// The app died while stop was exporting: the note points at a partial
+    /// `.m4a` that cannot be read, and the PCM file is the only good copy.
+    @Test func aNoteWithAPartialExportIsRebuiltFromItsPCMFile() async throws {
+        let sandbox = try Sandbox()
+        let start = 1_792_457_173.749301
+        let pcm = try sandbox.orphanedPCM(startedAt: start, seconds: 2)
+        let note = VoiceNote(title: "Voice Note 23:08", audioFilePath: "recording_\(start).m4a")
+        note.transcriptionOriginDeviceID = thisDevice
+        try Data(repeating: 0x5A, count: 4_096).write(to: sandbox.audio.appendingPathComponent(note.audioFilePath))
+        note.completeTranscription()
+        note.transcriptionOutcome = .failed
+        note.markTranscriptionFailure("Could not read audio duration.")
+        let (session, _) = makeSession(sandbox)
+
+        let tasks = session.recoverInterruptedRecordings(in: [note])
+        #expect(tasks.count == 1)
+        for task in tasks { await task.value }
+
+        let exported = sandbox.audio.appendingPathComponent(note.audioFilePath)
+        let file = try AVAudioFile(forReading: exported)
+        #expect(abs(Double(file.length) / file.fileFormat.sampleRate - 2) < 0.1)
+        #expect(abs(note.duration - 2) < 0.05)
+        #expect(note.transcriptionState == .queued)
+        #expect(note.transcriptionOutcome == nil)
+        #expect(note.transcriptionLastErrorMessage == nil)
+        #expect(!FileManager.default.fileExists(atPath: pcm.path))
+    }
+
+    @Test func aPlayableNoteNextToALeftoverPCMFileIsLeftAlone() throws {
+        let sandbox = try Sandbox()
+        let start = 1_792_457_173.749301
+        let pcm = try sandbox.orphanedPCM(startedAt: start, seconds: 1)
+        let note = VoiceNote(title: "Fine", audioFilePath: "recording_\(start).m4a")
+        note.transcriptionOriginDeviceID = thisDevice
+        let audio = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 1)
+        try FileManager.default.moveItem(at: audio, to: sandbox.audio.appendingPathComponent(note.audioFilePath))
+        note.duration = 1
+        note.completeTranscription()
+        let (session, _) = makeSession(sandbox)
+
+        #expect(session.recoverInterruptedRecordings(in: [note]).isEmpty)
+        #expect(note.transcriptionState == .completed)
+        #expect(FileManager.default.fileExists(atPath: pcm.path))
     }
 }

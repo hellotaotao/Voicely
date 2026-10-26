@@ -525,20 +525,24 @@ final class RecordingSession: ObservableObject {
     /// never arrive. The live PCM file is still on disk: export it the way
     /// stop does and transcribe it. Without it the audio is lost, so the note
     /// stops waiting and says so. Only the recording device can do either.
+    /// The same applies when the app died during stop's export: the note then
+    /// points at a partial `.m4a` that cannot be read, while the PCM is intact.
     /// Returns the export tasks so callers can await them.
     @discardableResult
     func recoverInterruptedRecordings(in notes: [VoiceNote]) -> [Task<Void, Never>] {
         let storage = orphanedRecordingStorage
         let deviceID = transcriptionService.deviceIDProvider()
-        let interrupted = notes.filter { note in
-            note.duration <= 0
-                && Self.isWaitingForTranscription(note)
-                && note.transcriptionOriginDeviceID == deviceID
+        let ownIdleNotes = notes.filter { note in
+            note.transcriptionOriginDeviceID == deviceID
                 && !note.audioFilePath.isEmpty
                 && currentRecordingNote?.id != note.id
                 && !finalizingNoteIDs.contains(note.id)
                 && !transcriptionService.isLocalRecording(noteID: note.id)
                 && transcriptionService.activeNoteID != note.id
+        }
+        let interrupted = ownIdleNotes.filter { note in
+            note.duration <= 0
+                && Self.isWaitingForTranscription(note)
                 && storage.isAudioAbsent(note.audioFilePath)
         }
 
@@ -550,11 +554,29 @@ final class RecordingSession: ObservableObject {
                     && url.standardizedFileURL != livePCMURL
                     && !recoveringPCMFiles.contains(url.standardizedFileURL)
             }
-        let matches = OrphanedRecordingMatcher.match(interrupted, to: pcmFiles)
+        // Only notes that started next to a leftover PCM file are probed, so a
+        // launch without leftovers opens no audio files.
+        let interruptedIDs = Set(interrupted.map(\.id))
+        let pcmStarts = pcmFiles.compactMap(OrphanedRecordingMatcher.startTime(ofPCMFile:))
+        let unplayable = ownIdleNotes.filter { note in
+            guard !interruptedIDs.contains(note.id) else { return false }
+            let start = floor(OrphanedRecordingMatcher.startTime(of: note))
+            guard pcmStarts.contains(where: { abs(start - $0) <= OrphanedRecordingMatcher.maximumStartGap }) else {
+                return false
+            }
+            return storage.isAudioAbsent(note.audioFilePath) || storage.isAudioDamaged(note.audioFilePath)
+        }
+
+        let matches = OrphanedRecordingMatcher.match(interrupted + unplayable, to: pcmFiles)
         removeUnclaimedPCMFiles(pcmFiles, claimed: Set(matches.values), notes: notes, storage: storage)
-        guard !interrupted.isEmpty else { return [] }
 
         var tasks: [Task<Void, Never>] = []
+        for note in unplayable {
+            guard let pcmURL = matches[note.id], let duration = storage.duration(pcmURL), duration > 0 else { continue }
+            debugLog("🔍 [RecordingSession] Re-exporting unreadable recording \(note.audioFilePath) from \(pcmURL.lastPathComponent)")
+            tasks.append(reattachOrphanedRecording(
+                pcmURL, duration: duration, to: note, storage: storage, replacingUnreadableAudio: true))
+        }
         for note in interrupted {
             if let pcmURL = matches[note.id],
                let duration = storage.duration(pcmURL), duration > 0 {
@@ -607,12 +629,18 @@ final class RecordingSession: ObservableObject {
         _ pcmURL: URL,
         duration: TimeInterval,
         to note: VoiceNote,
-        storage: OrphanedRecordingStorage
+        storage: OrphanedRecordingStorage,
+        replacingUnreadableAudio: Bool = false
     ) -> Task<Void, Never> {
         let name = URL(fileURLWithPath: note.audioFilePath).lastPathComponent
+        let destination = storage.destinationURL(name)
+        if replacingUnreadableAudio {
+            // The export cannot write over the partial file it replaces.
+            try? FileManager.default.removeItem(at: destination)
+        }
         let export = RecordingStopResult.converting(
             sourceURL: pcmURL,
-            destinationURL: storage.destinationURL(name),
+            destinationURL: destination,
             duration: duration,
             convert: storage.convert
         )
@@ -632,6 +660,9 @@ final class RecordingSession: ObservableObject {
             note.audioFilePath = path
             note.duration = duration
             note.transcriptionLastErrorMessage = nil
+            // A finished note only gets here with audio it could not read; with
+            // the audio back, the whole recording is transcribed again.
+            note.transcriptionOutcome = nil
             note.queueTranscription(at: Date())
             do {
                 try note.modelContext?.save()

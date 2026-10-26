@@ -5,8 +5,7 @@ import Testing
 @Suite(.serialized)
 struct SegmentProgressStoreTests {
     private func makeStore() -> SegmentProgressStore {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spstore_\(UUID().uuidString)")
+        let root = TestTemporaryDirectory.directoryURL(prefix: "spstore_")
         return SegmentProgressStore(rootDirectory: root)
     }
 
@@ -43,8 +42,7 @@ struct SegmentProgressStoreTests {
     @Test func importWorkingCopyCopiesBytesThenRemoveDeletes() throws {
         let store = makeStore()
         let id = UUID()
-        let source = FileManager.default.temporaryDirectory
-            .appendingPathComponent("src_\(UUID().uuidString).m4a")
+        let source = TestTemporaryDirectory.fileURL(prefix: "src_", extension: "m4a")
         try Data([1, 2, 3, 4]).write(to: source)
 
         let copy = try store.importWorkingCopy(from: source, for: id)

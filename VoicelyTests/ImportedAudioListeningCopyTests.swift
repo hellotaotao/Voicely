@@ -18,7 +18,7 @@ struct ImportedAudioListeningCopyTests {
             left[frame] = 0.5 * sin(2 * .pi * 440 * Float(frame) / 44_100)
             right[frame] = 0
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("stereo_\(UUID().uuidString).caf")
+        let url = TestTemporaryDirectory.fileURL(prefix: "stereo_", extension: "caf")
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url

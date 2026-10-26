@@ -10,16 +10,14 @@ enum SegmentedAudioTestSupport {
         let frames = AVAudioFrameCount((seconds * 16_000).rounded())
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
         buffer.frameLength = frames
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("seg_test_\(UUID().uuidString).caf")
+        let url = TestTemporaryDirectory.fileURL(prefix: "seg_test_", extension: "caf")
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url
     }
 
     static func makeStore() -> SegmentProgressStore {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("seg_\(UUID().uuidString)")
+        let root = TestTemporaryDirectory.directoryURL(prefix: "seg_")
         return SegmentProgressStore(rootDirectory: root)
     }
 

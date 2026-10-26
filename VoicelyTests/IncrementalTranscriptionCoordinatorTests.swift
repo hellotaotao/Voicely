@@ -440,8 +440,7 @@ struct IncrementalTranscriptionCoordinatorTests {
             cursor = end
         }
 
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_energy_\(UUID().uuidString).caf")
+        let url = TestTemporaryDirectory.fileURL(prefix: "test_energy_", extension: "caf")
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url
@@ -458,8 +457,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         let frameCount = AVAudioFrameCount(seconds * 16000)
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
         buffer.frameLength = frameCount
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_\(UUID().uuidString).caf")
+        let url = TestTemporaryDirectory.fileURL(prefix: "test_", extension: "caf")
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url
@@ -930,7 +928,7 @@ struct IncrementalTranscriptionCoordinatorTests {
 
     @Test func speechPresenceOfEmptyFileIsSilence() throws {
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_empty_\(UUID().uuidString).caf")
+        let fileURL = TestTemporaryDirectory.fileURL(prefix: "test_empty_", extension: "caf")
         do { _ = try AVAudioFile(forWriting: fileURL, settings: format.settings) }
         defer { try? FileManager.default.removeItem(at: fileURL) }
         #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.9)) == .silence)

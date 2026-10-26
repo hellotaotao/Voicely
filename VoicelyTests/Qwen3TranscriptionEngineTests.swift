@@ -14,8 +14,7 @@ import Testing
 /// changes which decoder AVAudioFile uses underneath.
 struct Qwen3AudioPCMTests {
     private func makeWAV(rate: Double, frames: AVAudioFrameCount) throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("qwen3pcm_\(UUID().uuidString).wav")
+        let url = TestTemporaryDirectory.fileURL(prefix: "qwen3pcm_", extension: "wav")
         let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
@@ -29,8 +28,7 @@ struct Qwen3AudioPCMTests {
     }
 
     private func makeM4A(rate: Double, frames: AVAudioFrameCount) throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("qwen3pcm_\(UUID().uuidString).m4a")
+        let url = TestTemporaryDirectory.fileURL(prefix: "qwen3pcm_", extension: "m4a")
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: rate,

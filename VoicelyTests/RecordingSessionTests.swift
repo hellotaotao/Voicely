@@ -95,8 +95,7 @@ struct RecordingSessionTests {
 
     private func makeSession() -> (RecordingSession, MockRecordingAudio, NoteCollector) {
         let audio = MockRecordingAudio()
-        audio.currentPCMFileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voicely_test_\(UUID().uuidString).caf")
+        audio.currentPCMFileURL = TestTemporaryDirectory.fileURL(prefix: "voicely_test_", extension: "caf")
         // No model manager set → isModelLoaded == false, so finalize takes the
         // "queue for later" branch and never kicks off real transcription work.
         let transcription = TranscriptionService()

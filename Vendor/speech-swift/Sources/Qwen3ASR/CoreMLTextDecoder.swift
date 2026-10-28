@@ -212,6 +212,17 @@ public class CoreMLTextDecoder {
         part2State = decoderPart2Model.makeState()
     }
 
+    /// Number of real positions written to the KV cache.
+    public var position: Int { currentPosition }
+
+    /// Forgets every position from `position` on. Attention only reaches
+    /// positions below the current one, and the next writes overwrite the
+    /// forgotten entries, so decoding resumes as if they were never written.
+    public func rewind(to position: Int) {
+        precondition(position >= 0 && position <= currentPosition, "Cannot rewind forward")
+        currentPosition = position
+    }
+
     // MARK: - Token Operations
 
     /// Look up the embedding vector for a single token id.

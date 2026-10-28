@@ -257,11 +257,12 @@ actor Qwen3ASRModelStore {
                 tally.withLock { $0 = ($0.count + 1, token) }
                 onToken?()
             }
-            let text = mlxModel.transcribe(audio: samples, sampleRate: 16_000, options: options)
+            let result = mlxModel.transcription(audio: samples, sampleRate: 16_000, options: options)
             let (count, last) = tally.withLock { $0 }
             return Qwen3SliceTranscript(
-                text: text, tokenCount: count,
-                reachedTokenLimit: count >= options.maxTokens && last != Int32(Qwen3ASRTokens.eosTokenId))
+                text: result.text, tokenCount: count,
+                reachedTokenLimit: count >= options.maxTokens && last != Int32(Qwen3ASRTokens.eosTokenId),
+                language: result.language)
         }
         guard let coreMLModel else { throw StoreError.modelMissing(modelDirectory) }
         // Each slice creates an MLState and several IOSurface-backed arrays;
@@ -275,11 +276,13 @@ actor Qwen3ASRModelStore {
     /// The package adds a no-repeat 3-gram block to audio over 15 s. On long
     /// slices it made single decodes run for minutes and garble their text,
     /// and the repetition penalty already covers what it guards against.
+    /// Without a hint each slice's language is read as well (vendor patch 4).
     nonisolated static func mlxOptions(languageHint: String?, maxTokens: Int = Qwen3ASRDefaults.maxTokens) -> Qwen3DecodingOptions {
         var options = Qwen3DecodingOptions(
             maxTokens: maxTokens, language: languageHint,
             repetitionPenalty: Qwen3ASRDefaults.repetitionPenalty)
         options.longInputThresholdSeconds = .infinity
+        options.emitLanguageTag = true
         return options
     }
 
@@ -390,6 +393,10 @@ struct Qwen3SliceTranscript: Sendable, Equatable {
     /// Decoding hit `Qwen3ASRDefaults.maxTokens` before end-of-turn, so the
     /// text stops short of the slice's end.
     var reachedTokenLimit: Bool
+    /// The language the model names for the slice when it decodes without a
+    /// hint, as written ("English", "Chinese", "None", …). Nil with a hint,
+    /// or when the model wrote no tag.
+    var language: String? = nil
 }
 
 final class Qwen3CoreMLModel {
@@ -423,7 +430,7 @@ final class Qwen3CoreMLModel {
         if let languageHint {
             suffix += tokenizer.encode("language \(languageHint)").map { Int32($0) }
         }
-        suffix.append(151704)   // <|asr_text|>
+        suffix.append(Int32(Qwen3ASRTokens.asrTextTokenId))
 
         var logits = try decoder.decoderPrefillTokens(prefix)
         var consumed = 0
@@ -432,6 +439,7 @@ final class Qwen3CoreMLModel {
             logits = try decoder.decoderPrefill(flatEmbeddings: embeddings, offset: consumed, realCount: count)
             consumed += count
         }
+        let suffixStart = decoder.position
         logits = try decoder.decoderPrefillTokens(suffix)
 
         var tokens: [Int32] = []
@@ -449,12 +457,31 @@ final class Qwen3CoreMLModel {
             next = Self.pickToken(logits, seen: seen, excluding: nil)
         }
 
+        // Without a hint the model would write "language X<asr_text>" where
+        // the marker goes. The tag is read once the transcript is done, by
+        // rewinding to the suffix and prefilling it without the marker; read
+        // first, it changed the transcript's tokens now and then.
+        var language: String?
+        if languageHint == nil {
+            try Task.checkCancellation()
+            decoder.rewind(to: suffixStart)
+            var tagLogits = try decoder.decoderPrefillTokens(Array(suffix.dropLast()))
+            language = try Qwen3Transcription.readLanguageTag(
+                pick: { Self.pickToken(tagLogits, seen: [], excluding: nil) },
+                advance: { token in
+                    try Task.checkCancellation()
+                    tagLogits = try decoder.decoderStep(embedding: try decoder.embed(tokenId: token))
+                },
+                decode: { tokens in tokenizer.decode(tokens: tokens.map { Int($0) }) })
+        }
+
         var text = tokenizer.decode(tokens: tokens.map { Int($0) })
         // Auto-detect prepends "language XX<asr_text>" to the transcript.
         if let marker = text.range(of: "<asr_text>") {
             text = String(text[marker.upperBound...]).trimmingCharacters(in: .whitespaces)
         }
-        return Qwen3SliceTranscript(text: text, tokenCount: tokens.count, reachedTokenLimit: tokens.last != endOfTurn)
+        return Qwen3SliceTranscript(
+            text: text, tokenCount: tokens.count, reachedTokenLimit: tokens.last != endOfTurn, language: language)
     }
 
     /// Greedy pick with the same repetition penalty the MLX backend applies.

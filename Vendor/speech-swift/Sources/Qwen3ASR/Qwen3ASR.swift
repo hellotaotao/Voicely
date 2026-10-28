@@ -57,6 +57,13 @@ public struct Qwen3DecodingOptions: Sendable {
     /// thread. Lets callers report progress inside a long decode.
     public var onToken: (@Sendable (Int32) -> Void)?
 
+    /// With no `language` hint, also read the language the model names for
+    /// the audio ("language English<asr_text>"). The tag is decoded on a
+    /// branch of the KV cache that ends before `<|asr_text|>`, after the
+    /// transcript has been decoded exactly as without this option, so the
+    /// tag never steers the text. Ignored when `language` is set.
+    public var emitLanguageTag: Bool = false
+
     public init(
         maxTokens: Int = 448,
         language: String? = nil,
@@ -99,6 +106,60 @@ public struct Qwen3DecodingOptions: Sendable {
     }
 }
 
+/// A decoded transcript and the language the model tagged it with.
+public struct Qwen3Transcription: Sendable, Equatable {
+    public var text: String
+    /// The name the model wrote in its "language X<asr_text>" prefix, exactly
+    /// as written ("English", "Chinese", "None", …). Nil when no tag was read.
+    public var language: String?
+
+    public init(text: String, language: String?) {
+        self.text = text
+        self.language = language
+    }
+
+    /// Splits the "language X<asr_text>" prefix off raw decoder output.
+    /// Without the marker the text is returned untouched.
+    public static func parse(_ rawText: String) -> Qwen3Transcription {
+        guard let marker = rawText.range(of: "<asr_text>") else {
+            return Qwen3Transcription(text: rawText, language: nil)
+        }
+        let text = String(rawText[marker.upperBound...]).trimmingCharacters(in: .whitespaces)
+        let head = rawText[..<marker.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        var language: String?
+        if head.hasPrefix("language ") {
+            let name = head.dropFirst("language ".count).trimmingCharacters(in: .whitespaces)
+            language = name.isEmpty ? nil : name
+        }
+        return Qwen3Transcription(text: text, language: language)
+    }
+
+    /// Longest tag read before giving up; "language English<asr_text>" is
+    /// 3 tokens.
+    public static let languageTagTokenLimit = 8
+
+    /// Reads the language tag one greedy token at a time: `pick` returns the
+    /// next token, `advance` feeds it back. Stops at `<asr_text>`; nil when
+    /// the model ends the turn or writes no marker within the limit.
+    public static func readLanguageTag(
+        pick: () throws -> Int32,
+        advance: (Int32) throws -> Void,
+        decode: ([Int32]) -> String
+    ) rethrows -> String? {
+        var tokens: [Int32] = []
+        for _ in 0..<languageTagTokenLimit {
+            let token = try pick()
+            if token == Int32(Qwen3ASRTokens.asrTextTokenId) {
+                return parse(decode(tokens) + "<asr_text>").language
+            }
+            if token == Int32(Qwen3ASRTokens.eosTokenId) { return nil }
+            tokens.append(token)
+            try advance(token)
+        }
+        return nil
+    }
+}
+
 /// Special token IDs for Qwen3-ASR
 public struct Qwen3ASRTokens: Sendable {
     public static let audioTokenId = 151676        // <|audio_pad|>
@@ -109,6 +170,7 @@ public struct Qwen3ASRTokens: Sendable {
     public static let imStartTokenId = 151644      // <|im_start|>
     public static let imEndTokenId = 151645        // <|im_end|>
     public static let timestampTokenId = 151705    // <|timestamp|>
+    public static let asrTextTokenId = 151704      // <asr_text>
 }
 
 /// Main Qwen3-ASR model for speech recognition.
@@ -183,6 +245,17 @@ public class Qwen3ASRModel {
         sampleRate: Int = 16000,
         options: Qwen3DecodingOptions
     ) -> String {
+        transcription(audio: audio, sampleRate: sampleRate, options: options).text
+    }
+
+    /// `transcribe(audio:sampleRate:options:)` plus the language the model
+    /// names for the audio, read when `options.emitLanguageTag` is set and no
+    /// language hint is given.
+    public func transcription(
+        audio: [Float],
+        sampleRate: Int = 16000,
+        options: Qwen3DecodingOptions
+    ) -> Qwen3Transcription {
         let durationSeconds = sampleRate > 0
             ? Double(audio.count) / Double(sampleRate)
             : 0.0
@@ -194,9 +267,9 @@ public class Qwen3ASRModel {
         audioEmbeds = audioEmbeds.expandedDimensions(axis: 0)
         guard let textDecoder = textDecoder else {
             let shape = audioEmbeds.shape
-            return "[Audio encoded: \(shape)] - Text decoder not loaded"
+            return Qwen3Transcription(text: "[Audio encoded: \(shape)] - Text decoder not loaded", language: nil)
         }
-        return generateText(
+        return generateTranscription(
             audioEmbeds: audioEmbeds,
             textDecoder: textDecoder,
             language: effective.language,
@@ -285,6 +358,20 @@ public class Qwen3ASRModel {
         context: String? = nil,
         decodingOptions: Qwen3DecodingOptions = Qwen3DecodingOptions()
     ) -> String {
+        generateTranscription(
+            audioEmbeds: audioEmbeds, textDecoder: textDecoder, language: language,
+            maxTokens: maxTokens, context: context, decodingOptions: decodingOptions
+        ).text
+    }
+
+    func generateTranscription(
+        audioEmbeds: MLXArray,
+        textDecoder: QuantizedTextModel,
+        language: String?,
+        maxTokens: Int,
+        context: String? = nil,
+        decodingOptions: Qwen3DecodingOptions = Qwen3DecodingOptions()
+    ) -> Qwen3Transcription {
         // Special token IDs
         let imStartId = 151644
         let imEndId = 151645
@@ -361,6 +448,8 @@ public class Qwen3ASRModel {
         let seqLen = hiddenStates.dim(1)
         let lastHidden = hiddenStates[0..., (seqLen-1)..<seqLen, 0...]
         let logits = textDecoder.embedTokens.asLinear(lastHidden)
+        // Kept for reading the language tag once the transcript is done.
+        let promptCache = decodingOptions.emitLanguageTag && language == nil && seqLen >= 2 ? cache : nil
 
         // Greedy fast path uses a double-buffered asyncEval decode loop that
         // overlaps the GPU forward pass for token N+1 with the host-side
@@ -387,17 +476,40 @@ public class Qwen3ASRModel {
             )
         }
 
+        // Without the marker the model would write its tag where the marker
+        // sits. The position before the marker gives the tag's first token
+        // and the prefill's cache minus the marker carries it on. Read before
+        // the transcript, it changed that transcript's tokens now and then;
+        // read after, the transcript decodes exactly as without the tag.
+        var detectedLanguage: String?
+        if let promptCache {
+            var tagLogits = textDecoder.embedTokens.asLinear(hiddenStates[0..., (seqLen-2)..<(seqLen-1), 0...])
+            var tagCache = promptCache.map { keys, values in
+                let kept = keys.dim(2) - 1
+                return (keys[0..., 0..., 0..<kept, 0...], values[0..., 0..., 0..<kept, 0...])
+            }
+            detectedLanguage = Qwen3Transcription.readLanguageTag(
+                pick: { argMax(tagLogits, axis: -1).squeezed().asType(.int32).item(Int32.self) },
+                advance: { token in
+                    let embeds = textDecoder.embedTokens(MLXArray([token]).expandedDimensions(axis: 0))
+                    let (hidden, nextCache) = textDecoder(inputsEmbeds: embeds, cache: tagCache)
+                    tagCache = nextCache
+                    tagLogits = textDecoder.embedTokens.asLinear(hidden[0..., (-1)..., .ellipsis])
+                },
+                decode: { tokens in self.tokenizer?.decode(tokens: tokens.map { Int($0) }) ?? "" }
+            )
+        }
+
         // Decode tokens to text
         if let tokenizer = tokenizer {
             let rawText = tokenizer.decode(tokens: generatedTokens.map { Int($0) })
             // Strip "language XX<asr_text>" prefix if present (auto-detection output)
-            if let range = rawText.range(of: "<asr_text>") {
-                return String(rawText[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-            }
-            return rawText
+            var result = Qwen3Transcription.parse(rawText)
+            result.language = result.language ?? detectedLanguage
+            return result
         } else {
             // Fallback: return token IDs
-            return generatedTokens.map { String($0) }.joined(separator: " ")
+            return Qwen3Transcription(text: generatedTokens.map { String($0) }.joined(separator: " "), language: detectedLanguage)
         }
     }
 

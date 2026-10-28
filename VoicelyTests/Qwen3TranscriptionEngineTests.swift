@@ -5,6 +5,7 @@
 
 import AVFoundation
 import Foundation
+import Qwen3ASR
 import Testing
 @testable import Voicely
 
@@ -143,6 +144,11 @@ struct Qwen3ASRDefaultsTests {
         #expect(options.longInputThresholdSeconds == .infinity)
         #expect(options.repetitionPenalty == Qwen3ASRDefaults.repetitionPenalty)
         #expect(options.language == "English")
+    }
+
+    /// Without a hint the model is also asked for each slice's language.
+    @Test func mlxReadsTheLanguageTag() {
+        #expect(Qwen3ASRModelStore.mlxOptions(languageHint: nil).emitLanguageTag)
     }
 
     @Test func chunkSizingStaysInsideFastPath() {
@@ -323,5 +329,58 @@ struct LanguageMigrationTests {
         defaults.set("chinese", forKey: Qwen3ASRDefaults.selectedLanguageKey)
         Qwen3ASRDefaults.migrateSelectedLanguage(in: defaults)
         #expect(defaults.string(forKey: Qwen3ASRDefaults.selectedLanguageKey) == "chinese")
+    }
+}
+
+struct Qwen3LanguageTagTests {
+    @Test func theTagIsSplitOffTheTranscript() {
+        let result = Qwen3Transcription.parse("language English<asr_text>Good morning.")
+        #expect(result == Qwen3Transcription(text: "Good morning.", language: "English"))
+    }
+
+    /// Silence and noise come back tagged None; the name is kept as written.
+    @Test func noneIsKeptAsWritten() {
+        #expect(Qwen3Transcription.parse("language None<asr_text>") == Qwen3Transcription(text: "", language: "None"))
+    }
+
+    /// With the marker in the prompt the output is plain text.
+    @Test func textWithoutTheMarkerIsUntouched() {
+        #expect(Qwen3Transcription.parse(" 你好。") == Qwen3Transcription(text: " 你好。", language: nil))
+    }
+
+    @Test func aMarkerWithoutATagGivesNoLanguage() {
+        #expect(Qwen3Transcription.parse("<asr_text> Hello") == Qwen3Transcription(text: "Hello", language: nil))
+    }
+
+    static let marker = Int32(Qwen3ASRTokens.asrTextTokenId)
+    static let endOfTurn = Int32(Qwen3ASRTokens.eosTokenId)
+
+    /// Plays `script` back as the model's picks, with each token decoding to
+    /// the matching word.
+    private func read(_ script: [Int32], words: [Int32: String] = [1: "language", 2: " Chinese"]) -> (language: String?, advanced: [Int32]) {
+        var index = 0
+        var advanced: [Int32] = []
+        let language = Qwen3Transcription.readLanguageTag(
+            pick: { defer { index += 1 }; return script[index] },
+            advance: { advanced.append($0) },
+            decode: { $0.map { words[$0] ?? "?" }.joined() })
+        return (language, advanced)
+    }
+
+    @Test func readsTheTagUpToTheMarker() {
+        let result = read([1, 2, Self.marker, 9])
+        #expect(result.language == "Chinese")
+        // The marker is not fed back; the transcript decodes from elsewhere.
+        #expect(result.advanced == [1, 2])
+    }
+
+    @Test func endOfTurnBeforeTheMarkerGivesNoLanguage() {
+        #expect(read([1, Self.endOfTurn]).language == nil)
+    }
+
+    @Test func outputWithoutAMarkerGivesNoLanguage() {
+        let result = read(Array(repeating: 1, count: 20))
+        #expect(result.language == nil)
+        #expect(result.advanced.count == Qwen3Transcription.languageTagTokenLimit)
     }
 }

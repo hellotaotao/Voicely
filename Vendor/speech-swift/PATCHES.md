@@ -21,4 +21,28 @@
      that reports no progress for about 30 s, so the app reports progress per
      token, and it logs whether a slice ended on end-of-turn or the token cap.
 
+4. `Sources/Qwen3ASR/Qwen3ASR.swift`, `Sources/Qwen3ASR/CoreMLTextDecoder.swift`
+   - Added `Qwen3DecodingOptions.emitLanguageTag` (default off),
+     `Qwen3Transcription` (`parse(_:)`, `readLanguageTag(...)`),
+     `Qwen3ASRTokens.asrTextTokenId`, and
+     `Qwen3ASRModel.transcription(audio:sampleRate:options:)`;
+     `transcribe(...)` and `generateText(...)` now return its `.text`.
+     `CoreMLTextDecoder` gained `position` and `rewind(to:)`.
+   - With the option on and no language hint, the prompt is prefilled and
+     the transcript decoded exactly as before (prompt ending in
+     `<|asr_text|>`). Afterwards the model's "language X<asr_text>" tag is
+     read greedily from the logits of the position before the marker,
+     continuing on the prefill's KV cache minus the marker. Reading the tag
+     before the transcript, even on a separate branch, changed a few
+     transcript tokens on both MLX and CoreML, so it runs last. On MLX the
+     extra work can still tip a near-tie token in a later slice (2 of 136
+     slices in the app's paired check, docs/stable-roadmap.md P-0q). With
+     the option off, or with a hint, nothing changes. `rewind(to:)` lets
+     the app do the same on CoreML, whose cache is stateful.
+   - Reason: the app routes pure-English recordings to another engine based
+     on the per-slice language the model reports. Letting the model write
+     the tag before the transcript changed the text of code-switched audio
+     (English written in Chinese after a "Chinese" tag), so the tag is read
+     on the side instead.
+
 Source files themselves are otherwise byte-identical to the upstream revision.

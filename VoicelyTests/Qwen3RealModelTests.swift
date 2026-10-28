@@ -45,6 +45,7 @@ struct Qwen3RealModelTests {
         let samples = try Qwen3AudioPCM.loadPCM16kMono(url: Qwen3RealModelInput.audioURL)
         let slice = Int(Qwen3SliceLimits.production.chunkSeconds) * 16_000
         var pieces: [String] = []
+        var languages: [String?] = []
         var audioSeconds = 0.0
         let decodeStart = ProcessInfo.processInfo.systemUptime
         // Background tasks see progress only through the token callback, so the
@@ -65,6 +66,9 @@ struct Qwen3RealModelTests {
             #expect(pass.tokenCount > 0)
             #expect(reported == pass.tokenCount)
             #expect(!pass.reachedTokenLimit)
+            // Without a hint every slice names its language, "None" included.
+            #expect(pass.language != nil)
+            languages.append(pass.language)
             pieces.append(pass.text)
             audioSeconds += Double(end - offset) / 16_000
             offset = end
@@ -75,11 +79,15 @@ struct Qwen3RealModelTests {
         QWEN-REAL backend=\(backend.rawValue) load=\(loadSeconds)s audio=\(audioSeconds)s \
         decode=\(decodeSeconds)s speed=\(audioSeconds / decodeSeconds)x \
         tokens=\(ticks.withLock { $0.count }) longestTokenGap=\(ticks.withLock { $0.longestGap })s
+        languages=\(languages.map { $0 ?? "-" })
         \(transcript)
         QWEN-REAL end
         """)
 
         #expect(pieces.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        let hinted = try await store.transcribe(
+            samples: Array(samples.prefix(slice)), languageHint: "English")
+        #expect(hinted.language == nil)
         if let expected = try? String(
             contentsOf: Qwen3RealModelInput.directory.appendingPathComponent("expected.txt"), encoding: .utf8) {
             let phrase = expected.trimmingCharacters(in: .whitespacesAndNewlines)

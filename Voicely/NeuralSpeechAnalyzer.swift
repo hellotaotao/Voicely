@@ -5,6 +5,7 @@
 
 import AVFoundation
 import Foundation
+import os
 
 enum NeuralSpeechAnalyzerError: Error {
     case audioConversionUnavailable
@@ -21,6 +22,9 @@ enum SpeechPresence: Equatable {
 }
 
 enum NeuralSpeechAnalyzer {
+    /// Logged in release builds too: whether the sound classifier runs on a
+    /// locked iPhone is only known from the field.
+    private static let gateLog = Logger(subsystem: "com.hellotaotao.Voicely", category: "SpeechGate")
     /// EverLog-style conservative VAD gate: only skip audio when neural VAD is confidently silent.
     /// Confirmed speech passes immediately; uncertain activity must persist briefly.
     private static let speechThreshold = 0.55
@@ -36,13 +40,39 @@ enum NeuralSpeechAnalyzer {
     private static let streamingChunkSeconds = 10.0
 
     /// A failed scan counts as speech: dropping audio is worse than decoding it.
-    static func safelySpeechPresence(at fileURL: URL) -> SpeechPresence {
+    static func safelySpeechPresence(
+        at fileURL: URL,
+        secondOpinion: SpeechSecondOpinion = SoundClassifierSpeechCheck()
+    ) -> SpeechPresence {
+        let presence: SpeechPresence
         do {
-            return try speechPresence(at: fileURL, detector: SileroNeuralVoiceActivityDetector())
+            presence = try speechPresence(at: fileURL, detector: SileroNeuralVoiceActivityDetector())
         } catch {
             debugLog("⚠️ [NeuralSpeechAnalyzer] Neural VAD preflight failed: \(error)")
             return .speech
         }
+        return reviewedPresence(presence, at: fileURL, secondOpinion: secondOpinion)
+    }
+
+    /// Silence is the one verdict that drops audio, and Silero can be deaf to
+    /// a whole voice, so a second judge reviews it. When that judge hears
+    /// speech the slice is decoded as uncertain, which still drops fragments.
+    /// A failed review keeps the silence: that is how the gate behaves without it.
+    static func reviewedPresence(
+        _ presence: SpeechPresence,
+        at fileURL: URL,
+        secondOpinion: SpeechSecondOpinion
+    ) -> SpeechPresence {
+        guard presence == .silence else { return presence }
+        do {
+            if try secondOpinion.containsSpeech(at: fileURL) {
+                gateLog.notice("VAD heard silence, sound classifier heard speech: decoding")
+                return .uncertain
+            }
+        } catch {
+            gateLog.error("Sound classifier review failed: \(String(describing: error), privacy: .public)")
+        }
+        return .silence
     }
 
     static func containsProbableSpeech(

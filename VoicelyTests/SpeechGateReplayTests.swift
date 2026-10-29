@@ -71,8 +71,9 @@ struct SpeechGateReplayTests {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("gate_\(UUID().uuidString).wav")
             defer { try? FileManager.default.removeItem(at: url) }
             try Self.write(samples, to: url)
-            let presence = try NeuralSpeechAnalyzer.speechPresence(
-                at: url, detector: SileroNeuralVoiceActivityDetector())
+            let presence = NeuralSpeechAnalyzer.reviewedPresence(
+                try NeuralSpeechAnalyzer.speechPresence(at: url, detector: SileroNeuralVoiceActivityDetector()),
+                at: url, secondOpinion: SoundClassifierSpeechCheck())
             var engineText: String?
             var kept: String?
             if presence != .silence {

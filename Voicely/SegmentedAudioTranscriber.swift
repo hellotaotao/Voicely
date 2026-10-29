@@ -30,6 +30,15 @@ final class SegmentedAudioTranscriber {
         }.value
     }
 
+    /// Cuts the last stretch of the file, whose regular cut would leave a short
+    /// tail, into two slices of similar length. Tests inject a value.
+    var nextRebalancedCutFrame: (URL, Int64, Int64) async -> Int64 = { url, start, end in
+        await Task.detached(priority: .utility) {
+            IncrementalTranscriptionCoordinator.rebalancedCutFrame(
+                fileURL: url, startFrame: start, endFrame: end)
+        }.value
+    }
+
     /// Keeps a listening copy of an imported file and returns its path. Runs once
     /// the transcript is in; tests replace it.
     var storeImportedAudio: (URL) async throws -> String = { source in
@@ -315,6 +324,14 @@ final class SegmentedAudioTranscriber {
             if !isLastBatch {
                 let cut = await nextCutFrame(sourceURL, start, targetFrame)
                 if cut > start { end = cut }
+                // Never leave a last slice too short to decode well on its own.
+                if IncrementalTranscriptionCoordinator.leavesShortTail(
+                    cutFrame: end, endFrame: info.totalFrames, sampleRate: info.sampleRate) {
+                    end = IncrementalTranscriptionCoordinator.fitsOnePass(
+                        from: start, to: info.totalFrames, sampleRate: info.sampleRate)
+                        ? info.totalFrames
+                        : await nextRebalancedCutFrame(sourceURL, start, info.totalFrames)
+                }
             }
 
             segmentIndex += 1

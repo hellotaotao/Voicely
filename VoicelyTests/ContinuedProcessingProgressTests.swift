@@ -277,6 +277,7 @@ struct ContinuedProcessingProgressTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let service = TranscriptionService()
         let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         let samples = Samples()
         coordinator.transcribeOverride = { @Sendable [weak coordinator] _ in
             await MainActor.run {

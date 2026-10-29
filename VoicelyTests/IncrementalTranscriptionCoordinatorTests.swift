@@ -315,6 +315,32 @@ struct IncrementalTranscriptionCoordinatorTests {
         try? FileManager.default.removeItem(at: pcmURL)
     }
 
+    @Test func voiceActivityCutUsesQuietestStretchWhenVADHearsNothing() throws {
+        // Loud audio with one 0.3 s gap at 10.0–10.3 s, which the VAD misses:
+        // it scores the whole 7 s window as quiet, as Silero does for some voices.
+        let pcmURL = try makeEnergyPatternCAF(segments: [
+            (seconds: 10.0, amplitude: 0.08),
+            (seconds: 0.3, amplitude: 0.0),
+            (seconds: 19.7, amplitude: 0.08)
+        ])
+        let fakeVAD = FakeNeuralVAD(frameProbabilities: Self.makeNeuralVADFrames(
+            seconds: 7,
+            quietRanges: [(0.0..<7.0, 0.05)]
+        ))
+
+        let cutFrame = IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(
+            fileURL: pcmURL,
+            startFrame: 0,
+            targetFrame: 480_000,
+            neuralVoiceActivityDetector: fakeVAD
+        )
+
+        // The gap's middle (10.15 s), not the quiet run's middle (10.5 s).
+        #expect(abs(cutFrame - 162_400) <= 160)
+
+        try? FileManager.default.removeItem(at: pcmURL)
+    }
+
     /// Records how much audio the detector was given.
     final class CapturingNeuralVAD: NeuralVoiceActivityDetecting {
         let frames: [NeuralVoiceActivityFrame]
@@ -538,6 +564,7 @@ struct IncrementalTranscriptionCoordinatorTests {
             transcriptionService: service,
             recordingFileURL: pcmURL
         )
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         let harness = SegmentTranscriptionHarness()
         coordinator.transcribeOverride = { @Sendable path in
             await harness.transcribe(path)
@@ -601,6 +628,7 @@ struct IncrementalTranscriptionCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         let recorder = SliceDurationRecorder()
         coordinator.transcribeOverride = { @Sendable path in await recorder.record(path) }
 
@@ -609,6 +637,98 @@ struct IncrementalTranscriptionCoordinatorTests {
         let durations = await recorder.durations
         #expect(durations == [14, 14, 8])
         #expect(!coordinator.requiresFullTranscription)
+    }
+
+    /// One live slice cut at `liveCutSeconds`, then stop at `stopSeconds`.
+    @MainActor private func stopAfterOneLiveSlice(
+        liveCutSeconds: Double,
+        stopSeconds: Double,
+        results: [String?],
+        rebalancedCutSeconds: Double? = nil
+    ) async throws -> (transcript: String, durations: [Double], calls: Int, coordinator: IncrementalTranscriptionCoordinator) {
+        let pcmURL = try makeSilentCAF(seconds: stopSeconds + 1)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + AVAudioFramePosition(liveCutSeconds * 16_000) }
+        coordinator.resolveRebalancedCut = { _, start, end in
+            rebalancedCutSeconds.map { start + AVAudioFramePosition($0 * 16_000) } ?? (start + end) / 2
+        }
+        let recorder = SliceDurationRecorder()
+        let script = ScriptedSliceResults(results)
+        coordinator.transcribeOverride = { @Sendable path in
+            _ = await recorder.record(path)
+            return await script.next()
+        }
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
+        let transcript = await coordinator.stop(currentFrame: AVAudioFramePosition(stopSeconds * 16_000))
+        return (transcript, await recorder.durations, await script.calls, coordinator)
+    }
+
+    @Test @MainActor func shortTailIsDecodedAgainWithTheSliceBeforeIt() async throws {
+        let run = try await stopAfterOneLiveSlice(
+            liveCutSeconds: 12, stopSeconds: 14.5, results: ["live", "live and tail"])
+        #expect(run.durations == [12, 14.5])
+        #expect(run.transcript == "live and tail")
+        #expect(run.coordinator.accumulatedSpans?.last?.end == 14.5)
+        #expect(run.coordinator.finalizationProgress == 1)
+    }
+
+    @Test @MainActor func shortTailTooLongForOnePassWithItsSliceIsCutNearTheMiddle() async throws {
+        // Fixture limits: 14 s slices, 15 s per pass. 14 s + 2.5 s is cut again.
+        let run = try await stopAfterOneLiveSlice(
+            liveCutSeconds: 14, stopSeconds: 16.5, results: ["live", "first half", "second half"],
+            rebalancedCutSeconds: 8)
+        #expect(run.durations == [14, 8, 8.5])
+        #expect(run.transcript == "first half\nsecond half")
+    }
+
+    @Test @MainActor func failedRedecodeKeepsTheLiveSliceAndDecodesTheTailAlone() async throws {
+        let run = try await stopAfterOneLiveSlice(
+            liveCutSeconds: 12, stopSeconds: 14.5, results: ["live", nil, "tail"])
+        #expect(run.durations == [12, 14.5, 2.5])
+        #expect(run.transcript == "live\ntail")
+        #expect(run.coordinator.unrecoveredSliceCount == 0)
+    }
+
+    @Test @MainActor func redecodeThatLosesTheLiveTextIsDiscarded() async throws {
+        let run = try await stopAfterOneLiveSlice(
+            liveCutSeconds: 12, stopSeconds: 14.5, results: ["live", "", "tail"])
+        #expect(run.transcript == "live\ntail")
+        #expect(run.calls == 3)
+    }
+
+    @Test @MainActor func tailOfFourSecondsOrMoreIsDecodedAlone() async throws {
+        let run = try await stopAfterOneLiveSlice(
+            liveCutSeconds: 12, stopSeconds: 16, results: ["live", "tail"])
+        #expect(run.durations == [12, 4])
+        #expect(run.transcript == "live\ntail")
+    }
+
+    @Test func rebalancedCutStaysNearTheMiddle() throws {
+        let url = try makeSilentCAF(seconds: 17)
+        defer { try? FileManager.default.removeItem(at: url) }
+        // 17 s: the cut lands near the middle, and neither side is a short tail.
+        let cut = IncrementalTranscriptionCoordinator.rebalancedCutFrame(
+            fileURL: url, startFrame: 0, endFrame: 17 * 16_000)
+        #expect(cut >= 4 * 16_000 && cut <= 13 * 16_000)
+    }
+
+    @Test @MainActor func finalFlushCutsTheBacklogWithoutLeavingAShortTail() async throws {
+        // 30 s at stop: the 14 s cuts would leave 2 s, so the last 16 s are
+        // cut near their middle instead.
+        let pcmURL = try makeSilentCAF(seconds: 31)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
+        coordinator.resolveRebalancedCut = { _, start, _ in start + 9 * 16_000 }
+        let recorder = SliceDurationRecorder()
+        coordinator.transcribeOverride = { @Sendable path in await recorder.record(path) }
+
+        _ = await coordinator.stop(currentFrame: 30 * 16_000)
+
+        #expect(await recorder.durations == [14, 9, 7])
     }
 
     @Test @MainActor func sliceTheEngineRejectedLiveIsMarkedAtStopWithoutDecodingAgain() async throws {
@@ -784,6 +904,7 @@ struct IncrementalTranscriptionCoordinatorTests {
             transcriptionService: service,
             recordingFileURL: pcmURL
         )
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         let harness = SegmentTranscriptionHarness()
         coordinator.transcribeOverride = { @Sendable path in
             await harness.transcribe(path)
@@ -886,6 +1007,57 @@ struct IncrementalTranscriptionCoordinatorTests {
         #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.82)) == .speech)
         #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.35)) == .uncertain)
         #expect(try NeuralSpeechAnalyzer.speechPresence(at: fileURL, detector: CountingNeuralVAD(speechProbability: 0.08)) == .silence)
+    }
+
+    struct FakeSecondOpinion: SpeechSecondOpinion {
+        enum Failure: Error { case unavailable }
+        let verdict: Bool?
+        func containsSpeech(at _: URL) throws -> Bool {
+            guard let verdict else { throw Failure.unavailable }
+            return verdict
+        }
+    }
+
+    final class CountingSecondOpinion: SpeechSecondOpinion {
+        private(set) var callCount = 0
+        func containsSpeech(at _: URL) throws -> Bool {
+            callCount += 1
+            return true
+        }
+    }
+
+    @Test func soundClassifierReviewsOnlySilence() throws {
+        let fileURL = try makeSilentCAF(seconds: 1)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        // A voice the VAD cannot hear is decoded as uncertain; a confirmed or
+        // failed review keeps the silence verdict.
+        #expect(NeuralSpeechAnalyzer.reviewedPresence(.silence, at: fileURL,
+            secondOpinion: FakeSecondOpinion(verdict: true)) == .uncertain)
+        #expect(NeuralSpeechAnalyzer.reviewedPresence(.silence, at: fileURL,
+            secondOpinion: FakeSecondOpinion(verdict: false)) == .silence)
+        #expect(NeuralSpeechAnalyzer.reviewedPresence(.silence, at: fileURL,
+            secondOpinion: FakeSecondOpinion(verdict: nil)) == .silence)
+
+        // Speech and uncertain slices are decoded anyway; no review runs.
+        let counter = CountingSecondOpinion()
+        #expect(NeuralSpeechAnalyzer.reviewedPresence(.speech, at: fileURL, secondOpinion: counter) == .speech)
+        #expect(NeuralSpeechAnalyzer.reviewedPresence(.uncertain, at: fileURL, secondOpinion: counter) == .uncertain)
+        #expect(counter.callCount == 0)
+    }
+
+    @Test func soundClassifierHearsNoSpeechInSilence() throws {
+        for seconds in [5.0, 0.8] {
+            let fileURL = try makeSilentCAF(seconds: seconds)
+            defer { try? FileManager.default.removeItem(at: fileURL) }
+            #expect(try SoundClassifierSpeechCheck().containsSpeech(at: fileURL) == false)
+        }
+    }
+
+    @Test func soundClassifierWindowFitsShortFiles() {
+        #expect(SoundClassifierSpeechCheck.windowSeconds(forFileSeconds: 29) == 1.5)
+        #expect(SoundClassifierSpeechCheck.windowSeconds(forFileSeconds: 0.8) == 0.8)
+        #expect(SoundClassifierSpeechCheck.windowSeconds(forFileSeconds: 0.2) == 0.5)
     }
 
     /// Returns one frame per call, scored by the call index and sample count.

@@ -17,6 +17,9 @@ struct IncrementalVoiceActivityCutConfiguration: Sendable {
     var minimumSilenceSeconds: Double = 0.35
     var minimumCutSeconds: Double = Double(IncrementalTranscriptionTiming.minimumCutSeconds)
     var speechProbabilityThreshold: Double = 0.30
+    /// Length of the quietest stretch to cut in when the VAD hears no speech
+    /// anywhere in the window.
+    var quietStretchSeconds: Double = 0.3
 
     static let `default` = IncrementalVoiceActivityCutConfiguration()
 }
@@ -80,8 +83,15 @@ final class IncrementalTranscriptionCoordinator {
         // frames are not counted twice. Without them the reported value only
         // moves once per slice, and iOS expires a continued processing task that
         // reports nothing for ~30 s.
-        let decodingFrames = decodingSlice.map {
-            AVAudioFramePosition(Double($0.end - $0.start) * $0.fraction)
+        // A short tail decoded again with the slice before it overlaps that
+        // settled slice; the bar moves on only once the decoder passes it.
+        let decodingFrames = decodingSlice.map { decoding -> AVAudioFramePosition in
+            let settledOverlap = slices.reduce(AVAudioFramePosition(0)) { total, slice in
+                slice.awaitsRetry ? total
+                    : total + max(0, min(slice.endFrame, decoding.end) - max(slice.startFrame, decoding.start))
+            }
+            let decoded = AVAudioFramePosition(Double(decoding.end - decoding.start) * decoding.fraction)
+            return max(0, decoded - settledOverlap)
         } ?? 0
         return min(1, max(0, Double(settledFrames + decodingFrames) / Double(finalFrame)))
     }
@@ -104,6 +114,12 @@ final class IncrementalTranscriptionCoordinator {
     var resolveVoiceActivityCut: (URL, AVAudioFramePosition, AVAudioFramePosition, Double) async -> AVAudioFramePosition = { url, start, end, seconds in
         await Task.detached {
             IncrementalTranscriptionCoordinator.voiceActivityAwareCutFrame(fileURL: url, startFrame: start, targetFrame: end, targetSegmentSeconds: seconds)
+        }.value
+    }
+
+    var resolveRebalancedCut: (URL, AVAudioFramePosition, AVAudioFramePosition) async -> AVAudioFramePosition = { url, start, end in
+        await Task.detached {
+            IncrementalTranscriptionCoordinator.rebalancedCutFrame(fileURL: url, startFrame: start, endFrame: end)
         }.value
     }
 
@@ -348,6 +364,12 @@ final class IncrementalTranscriptionCoordinator {
 
             lastSegmentEndFrame = endFrame
             inFlightSlice = (startFrame, endFrame)
+            if !useVoiceActivityCut, endFrame == requestedEndFrame,
+               await foldShortTailIntoLastSlice(tailStart: startFrame, end: endFrame, session: session) {
+                inFlightSlice = nil
+                transcriptCallback?(accumulatedTranscript)
+                return
+            }
             let result = await transcribeSlice(from: startFrame, to: endFrame, session: session)
             inFlightSlice = nil
             slices.append(LiveSlice(startFrame: startFrame, endFrame: endFrame, result: result))
@@ -355,6 +377,36 @@ final class IncrementalTranscriptionCoordinator {
                 transcriptCallback?(accumulatedTranscript)
             }
         }
+    }
+
+    /// Decodes a short final tail together with the slice before it, which was
+    /// decoded live without it, and replaces that slice with the result. Too
+    /// long for one pass, the two are cut again near their middle. Returns
+    /// false, changing nothing, when there is no such slice or the new decode
+    /// failed or lost the text the slice had; the tail is then decoded alone.
+    private func foldShortTailIntoLastSlice(
+        tailStart: AVAudioFramePosition,
+        end: AVAudioFramePosition,
+        session: TranscriptionTelemetrySession
+    ) async -> Bool {
+        guard Self.leavesShortTail(cutFrame: tailStart, endFrame: end, sampleRate: recordingSampleRate),
+              let previous = slices.last, previous.endFrame == tailStart else { return false }
+
+        var bounds = [previous.startFrame, end]
+        if !Self.fitsOnePass(from: previous.startFrame, to: end, sampleRate: recordingSampleRate) {
+            let cut = await resolveRebalancedCut(recordingFileURL, previous.startFrame, end)
+            bounds.insert(cut, at: 1)
+        }
+        var replacements: [LiveSlice] = []
+        for (start, sliceEnd) in zip(bounds, bounds.dropFirst()) {
+            let result = await transcribeSlice(from: start, to: sliceEnd, session: session)
+            if case .failed = result { return false }
+            replacements.append(LiveSlice(startFrame: start, endFrame: sliceEnd, result: result))
+        }
+        if previous.text != nil, replacements.allSatisfy({ $0.text == nil }) { return false }
+        slices.removeLast()
+        slices.append(contentsOf: replacements)
+        return true
     }
 
     /// Runs slice work on the active-work clock, then reports the run's
@@ -499,7 +551,20 @@ final class IncrementalTranscriptionCoordinator {
         useVoiceActivityCut: Bool
     ) async -> AVAudioFramePosition? {
         guard useVoiceActivityCut else {
-            return min(requestedEndFrame, startFrame + max(1, targetIntervalFrames))
+            // The recording has stopped, so the rest of it is known: cut at a
+            // pause, and never so late that a short tail is left behind.
+            guard requestedEndFrame - startFrame > targetIntervalFrames else { return requestedEndFrame }
+            let fixedCut = startFrame + max(1, targetIntervalFrames)
+            var cutFrame = await resolveVoiceActivityCut(fileURL, startFrame, requestedEndFrame, Double(targetIntervalSeconds))
+            if cutFrame <= startFrame + minimumCutFrames || cutFrame > fixedCut {
+                cutFrame = fixedCut
+            }
+            if Self.leavesShortTail(cutFrame: cutFrame, endFrame: requestedEndFrame, sampleRate: recordingSampleRate) {
+                cutFrame = Self.fitsOnePass(from: startFrame, to: requestedEndFrame, sampleRate: recordingSampleRate)
+                    ? requestedEndFrame
+                    : await resolveRebalancedCut(fileURL, startFrame, requestedEndFrame)
+            }
+            return cutFrame
         }
 
         let targetIntervalSeconds = self.targetIntervalSeconds
@@ -685,11 +750,23 @@ final class IncrementalTranscriptionCoordinator {
                 : try resampled(samples, from: sampleRate, to: vadSampleRate)
             let detector = try neuralVoiceActivityDetector ?? SileroNeuralVoiceActivityDetector()
             let vadFrames = try detector.speechProbabilities(in: vadSamples)
-            let candidate = bestNeuralSilenceCutCandidate(
-                in: vadFrames,
-                speechProbabilityThreshold: configuration.speechProbabilityThreshold,
-                minimumSilenceFrames: max(1, Int(configuration.minimumSilenceSeconds * vadSampleRate))
-            )
+            // Silero can be deaf to a whole voice: every frame quiet while
+            // someone talks. Its pause midpoint would then be a blind guess
+            // that can split a word, so cut in the quietest stretch of the
+            // waveform instead, a breath or a gap between words.
+            let vadHeardNothing = !vadFrames.isEmpty && vadFrames.allSatisfy {
+                $0.speechProbability <= configuration.speechProbabilityThreshold
+            }
+            let candidate = vadHeardNothing
+                ? quietestStretchCandidate(
+                    in: vadSamples,
+                    windowSamples: max(1, Int(configuration.quietStretchSeconds * vadSampleRate))
+                )
+                : bestNeuralSilenceCutCandidate(
+                    in: vadFrames,
+                    speechProbabilityThreshold: configuration.speechProbabilityThreshold,
+                    minimumSilenceFrames: max(1, Int(configuration.minimumSilenceSeconds * vadSampleRate))
+                )
 
             guard let candidate else {
                 return batchEndFrame
@@ -831,9 +908,98 @@ final class IncrementalTranscriptionCoordinator {
         return bestCandidate
     }
 
+    /// The middle of the lowest-energy `windowSamples` stretch, scanned in
+    /// 10 ms steps. Equal stretches: the later one wins, as with pauses.
+    nonisolated private static func quietestStretchCandidate(
+        in samples: [Float],
+        windowSamples: Int
+    ) -> VoiceActivityCutCandidate? {
+        guard !samples.isEmpty else { return nil }
+        guard samples.count > windowSamples else {
+            return VoiceActivityCutCandidate(localFrame: samples.count / 2, confidence: 0)
+        }
+
+        var energyPrefix = [Double](repeating: 0, count: samples.count + 1)
+        for (index, sample) in samples.enumerated() {
+            energyPrefix[index + 1] = energyPrefix[index] + Double(sample) * Double(sample)
+        }
+
+        let hop = SileroNeuralVoiceActivityDetector.sampleRate / 100
+        var bestStart = 0
+        var bestEnergy = Double.infinity
+        for start in stride(from: 0, through: samples.count - windowSamples, by: hop) {
+            let energy = energyPrefix[start + windowSamples] - energyPrefix[start]
+            if energy <= bestEnergy {
+                bestEnergy = energy
+                bestStart = start
+            }
+        }
+        return VoiceActivityCutCandidate(localFrame: bestStart + windowSamples / 2, confidence: 0)
+    }
+
     /// A slice's text as it joins the transcript, or nil when it holds only
     /// whitespace or punctuation.
     nonisolated static func finalizedSegmentText(_ text: String?) -> String? {
         LocalTranscriptFinalizer.finalizedText(text)
+    }
+
+    // MARK: Final slice
+
+    /// A last slice shorter than this is decoded together with the slice before
+    /// it. Alone it lacks context: on 115 real cut points in five English
+    /// recordings, decoding a 1 s tail with the slice before it made 18 fewer
+    /// errors per 100 tail words, a 2 s tail 8 fewer, a 3 s tail 4 fewer; at
+    /// 5 s the two were even and at 8 s identical.
+    nonisolated static let shortTailSeconds = 4.0
+    /// When a slice and its short tail together exceed one engine pass, the
+    /// stretch is cut again within this distance of its middle.
+    nonisolated static let rebalancedCutHalfWindowSeconds = 5.0
+
+    nonisolated static func leavesShortTail(
+        cutFrame: AVAudioFramePosition,
+        endFrame: AVAudioFramePosition,
+        sampleRate: Double
+    ) -> Bool {
+        Double(endFrame - cutFrame) / sampleRate < shortTailSeconds
+    }
+
+    nonisolated static func fitsOnePass(
+        from startFrame: AVAudioFramePosition,
+        to endFrame: AVAudioFramePosition,
+        sampleRate: Double
+    ) -> Bool {
+        Double(endFrame - startFrame) / sampleRate <= Qwen3ASRDefaults.singlePassSecondsLimit
+    }
+
+    /// Cuts the last stretch of the audio, a slice plus its short tail, into
+    /// two slices of similar length at the best pause near its middle, so
+    /// neither is a short tail again and both stay within one engine pass.
+    nonisolated static func rebalancedCutFrame(
+        fileURL: URL,
+        startFrame: AVAudioFramePosition,
+        endFrame: AVAudioFramePosition,
+        neuralVoiceActivityDetector: NeuralVoiceActivityDetecting? = nil
+    ) -> AVAudioFramePosition {
+        let sampleRate = Self.sampleRate(for: fileURL)
+        let halfSeconds = Double(endFrame - startFrame) / sampleRate / 2
+        // Neither side may exceed a slice or be a short tail itself.
+        let halfWindow = min(rebalancedCutHalfWindowSeconds,
+                             Qwen3ASRDefaults.chunkSeconds - halfSeconds,
+                             halfSeconds - shortTailSeconds)
+        var configuration = IncrementalVoiceActivityCutConfiguration.default
+        configuration.minimumCutSeconds = halfSeconds - halfWindow
+        let earliest = startFrame + AVAudioFramePosition((halfSeconds - halfWindow) * sampleRate)
+        let latest = startFrame + AVAudioFramePosition((halfSeconds + halfWindow) * sampleRate)
+        let cut = voiceActivityAwareCutFrame(
+            fileURL: fileURL,
+            startFrame: startFrame,
+            targetFrame: endFrame,
+            targetSegmentSeconds: halfSeconds + halfWindow,
+            configuration: configuration,
+            neuralVoiceActivityDetector: neuralVoiceActivityDetector
+        )
+        // A failed VAD returns the end of the audio; fall back to the middle.
+        guard cut >= earliest, cut <= latest else { return startFrame + (endFrame - startFrame) / 2 }
+        return cut
     }
 }

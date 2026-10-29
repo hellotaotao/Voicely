@@ -55,6 +55,34 @@ struct SegmentedAudioTranscriberTests {
         #expect(!service.transcriptionTelemetry.isActive)
     }
 
+    /// Fixture limits: 14 s batches, 15 s per pass.
+    @Test(arguments: [
+        // A 3 s tail fits one pass with the slice before it.
+        (27.0, 12.0, [12.0, 15.0]),
+        // 14 s + 3 s does not: the last 17 s are cut near their middle.
+        (31.0, 14.0, [14.0, 9.0, 8.0]),
+        // A 5 s tail stays a slice of its own.
+        (33.0, 14.0, [14.0, 14.0, 5.0]),
+    ])
+    @MainActor func importNeverEndsWithAShortTail(fileSeconds: Double, cutSeconds: Double, expected: [Double]) async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: fileSeconds)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let transcriber = SegmentedAudioTranscriber(
+            transcriptionService: TranscriptionService(), progressStore: SegmentedAudioTestSupport.makeStore())
+        transcriber.storeImportedAudio = SegmentedAudioTestSupport.noListeningCopy
+        transcriber.nextCutFrame = { _, start, _ in start + Int64(cutSeconds * 16_000) }
+        transcriber.nextRebalancedCutFrame = { _, start, _ in start + 9 * 16_000 }
+        var durations: [Double] = []
+        transcriber.transcribeSegmentOutcome = { segmentURL in
+            if let file = try? AVAudioFile(forReading: segmentURL) {
+                durations.append(Double(file.length) / file.processingFormat.sampleRate)
+            }
+            return .noSpeech
+        }
+        await transcriber.transcribe(note: VoiceNote(title: "Import", audioFilePath: ""), sourceURL: url)
+        #expect(durations == expected)
+    }
+
     @Test @MainActor func failedSegmentsAreNotCountedAsProcessed() async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 25)
         defer { try? FileManager.default.removeItem(at: url) }

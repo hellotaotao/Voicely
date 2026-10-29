@@ -105,6 +105,24 @@ struct RecordingSessionTests {
         return (session, audio, collector)
     }
 
+    @Test func languageChosenOnTheRecordingScreenAppliesToTheNextRecordingOnly() async throws {
+        let audio = MockRecordingAudio()
+        audio.currentPCMFileURL = TestTemporaryDirectory.fileURL(prefix: "voicely_test_", extension: "caf")
+        let transcription = TranscriptionService()
+        let session = RecordingSession(audioService: audio, transcriptionService: transcription)
+        let collector = NoteCollector()
+        session.onRecordingComplete = { collector.append($0) }
+        session.pendingLanguageKey = "english"
+
+        session.startRecording()
+        try await waitUntil { session.currentRecordingNote != nil }
+        let note = try #require(collector.notes.first)
+
+        #expect(transcription.languageHint(for: note.id) == "English")
+        #expect(session.pendingLanguageKey == nil)
+        transcription.setLanguageKey(nil, for: note.id)
+    }
+
     @Test func defensiveStopNoteHasLocalOriginAndIsImmediatelyEligible() async {
         let audio = MockRecordingAudio()
         audio.isRecording = true

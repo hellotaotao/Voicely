@@ -179,7 +179,7 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     private enum SliceResult {
-        case text(String)
+        case text(String, language: String?)
         case silent
         case failed(SliceFailure)
     }
@@ -190,6 +190,8 @@ final class IncrementalTranscriptionCoordinator {
         let endFrame: AVAudioFramePosition
         var text: String?
         var failure: SliceFailure?
+        /// The language Qwen3-ASR named for the slice, nil without one.
+        var language: String?
 
         /// The engine never got to judge this audio, so stop decodes it once more.
         var awaitsRetry: Bool {
@@ -209,14 +211,17 @@ final class IncrementalTranscriptionCoordinator {
 
         mutating func apply(_ result: SliceResult) {
             switch result {
-            case .text(let text):
+            case .text(let text, let language):
                 self.text = text
+                self.language = language
                 failure = nil
             case .silent:
                 text = nil
+                language = nil
                 failure = nil
             case .failed(let reason):
                 text = nil
+                language = nil
                 failure = reason
             }
         }
@@ -275,6 +280,61 @@ final class IncrementalTranscriptionCoordinator {
         settleRemainingFailures()
         finishTelemetry()
         return accumulatedTranscript
+    }
+
+    // MARK: English stretches
+
+    /// Transcribes one stretch of the recording with Parakeet. Tests replace it.
+    var transcribeEnglish: (URL, AVAudioFramePosition, AVAudioFramePosition, @escaping @Sendable (Double) -> Void) async throws -> [TimedWord] = { url, start, end, progress in
+        try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end, onProgress: progress)
+    }
+
+    /// Frees Parakeet once the recording is done with it. Tests replace it.
+    var releaseEnglishEngine: () async -> Void = {
+        await ParakeetEnglishEngine.shared.unload()
+    }
+
+    /// The slices as Qwen3-ASR left them, after `stop`.
+    var languageTaggedSlices: [LanguageTaggedSlice] {
+        slices.map {
+            LanguageTaggedSlice(start: Double($0.startFrame) / recordingSampleRate,
+                                end: Double($0.endFrame) / recordingSampleRate,
+                                text: $0.text, language: $0.language)
+        }
+    }
+
+    /// After `stop`, transcribes the English stretches again with Parakeet
+    /// (`EnglishStretchRouting`) and puts its text in their slices. Returns
+    /// Qwen3-ASR's version of the transcript when anything was replaced, nil
+    /// when nothing was, Parakeet failed, or the recording needs the regular
+    /// queue anyway. A stretch that fails keeps Qwen3-ASR's text.
+    func transcribeEnglishStretches(mode: EnglishStretchRouting.Mode) async -> AlternateTranscript? {
+        guard !requiresFullTranscription else { return nil }
+        let tagged = languageTaggedSlices
+        guard !EnglishStretchRouting.stretches(in: tagged, mode: mode).isEmpty else { return nil }
+        let qwenVersion = AlternateTranscript(engine: .qwen3, text: accumulatedTranscript, spans: accumulatedSpans)
+
+        let counter = transcriptionService.decodeWorkCounter
+        let transcribeEnglish = self.transcribeEnglish
+        let routed = await EnglishStretchRouting.transcribeStretches(
+            in: tagged, mode: mode, fileURL: recordingFileURL, sampleRate: recordingSampleRate
+        ) { url, start, end in
+            // Each step counts as decode work for the background task.
+            try await transcribeEnglish(url, start, end) { _ in counter.withLock { $0 &+= 1 } }
+        }
+        await releaseEnglishEngine()
+        guard !routed.replaced.isEmpty else { return nil }
+        var replacedStarts = Set<AVAudioFramePosition>()
+        for index in routed.replaced {
+            slices[index].text = routed.slices[index].text
+            slices[index].failure = nil
+            replacedStarts.insert(slices[index].startFrame)
+        }
+        // Parakeet transcribed the gaps it covered, so they are no longer unavailable.
+        unrecoveredSliceRanges.removeAll { replacedStarts.contains($0.startFrame) }
+        unrecoveredSliceCount = unrecoveredSliceRanges.count
+        transcriptCallback?(accumulatedTranscript)
+        return qwenVersion
     }
 
     /// Pause the timer while recording is paused.
@@ -455,7 +515,7 @@ final class IncrementalTranscriptionCoordinator {
         defer { decodingSlice = nil }
         if let override = transcribeOverride {
             if let text = await override(sliceURL.path) {
-                result = Self.finalizedSegmentText(text).map(SliceResult.text) ?? .silent
+                result = Self.finalizedSegmentText(text).map { SliceResult.text($0, language: nil) } ?? .silent
             } else {
                 result = .failed(.transcription(nil))
             }
@@ -466,7 +526,8 @@ final class IncrementalTranscriptionCoordinator {
                 telemetrySession: session)
             switch outcome {
             case .transcribed(let transcription):
-                result = Self.finalizedSegmentText(transcription.text).map(SliceResult.text) ?? .silent
+                result = Self.finalizedSegmentText(transcription.text)
+                    .map { SliceResult.text($0, language: transcription.language) } ?? .silent
             case .noSpeech:
                 result = .silent
             case .engineError(let diagnostic):

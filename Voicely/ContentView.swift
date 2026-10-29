@@ -1157,8 +1157,9 @@ struct VoiceNoteRow: View {
 // MARK: - Recording Controls
 
 struct RecordingControls: View {
-    /// A chosen language overrides auto-detect for every recording, which is
-    /// easy to forget, so the control shows it instead of the model name.
+    /// The default language from Settings. A chosen language overrides
+    /// auto-detect for every recording, which is easy to forget, so the
+    /// control shows the language the next recording will use.
     @AppStorage(Qwen3ASRDefaults.selectedLanguageKey) private var selectedLanguage = "auto"
     @ObservedObject var session: RecordingSession
     @ObservedObject var audioService: AudioRecordingService
@@ -1191,10 +1192,6 @@ struct RecordingControls: View {
 
     private var modelManager: ModelManager? {
         transcriptionService.modelManager
-    }
-
-    private var selectedModelDisplayName: String {
-        ModelManager.displayName(for: modelManager?.selectedModel ?? Qwen3Backend.current.modelIdentifier)
     }
 
     private var statusTint: Color {
@@ -1292,30 +1289,64 @@ struct RecordingControls: View {
             )
     }
 
-    private var forcedLanguageName: String? {
-        Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguage)
+    /// The language the next recording uses: its own choice, else the setting.
+    private var nextRecordingLanguageKey: String {
+        session.pendingLanguageKey ?? selectedLanguage
+    }
+
+    private var nextRecordingLanguageName: String? {
+        Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: nextRecordingLanguageKey)
+    }
+
+    private func languageLabel(for key: String) -> String {
+        key == "auto" ? "Auto Detect" : Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key) ?? key.capitalized
+    }
+
+    /// A choice equal to the setting is no choice of its own.
+    private var languageChoice: Binding<String> {
+        Binding(
+            get: { nextRecordingLanguageKey },
+            set: { session.pendingLanguageKey = $0 == selectedLanguage ? nil : $0 }
+        )
     }
 
     private var idleLayout: some View {
         HStack(spacing: 10) {
-            Button {
-                onManageModels()
+            Menu {
+                Picker("Language for This Recording", selection: languageChoice) {
+                    ForEach(LanguageConstants.availableLanguages.prefix(3), id: \.self) { key in
+                        Text(languageLabel(for: key)).tag(key)
+                    }
+                }
+                .pickerStyle(.inline)
+                Menu("Other Languages") {
+                    Picker("Other Languages", selection: languageChoice) {
+                        ForEach(LanguageConstants.availableLanguages.dropFirst(3), id: \.self) { key in
+                            Text(languageLabel(for: key)).tag(key)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+                Divider()
+                Button("Speech Settings…") {
+                    onManageModels()
+                }
             } label: {
                 HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(forcedLanguageName == nil ? statusTint : .orange)
+                        .fill(nextRecordingLanguageName == nil ? statusTint : .orange)
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(forcedLanguageName == nil ? "Model" : "Language set to")
+                        Text(session.pendingLanguageKey == nil ? "Language" : "This recording")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-                        Text(forcedLanguageName ?? selectedModelDisplayName)
+                        Text(languageLabel(for: nextRecordingLanguageKey))
                             .font(.footnote.weight(.medium))
-                            .foregroundStyle(forcedLanguageName == nil ? Color.primary : Color.orange)
+                            .foregroundStyle(nextRecordingLanguageName == nil ? Color.primary : Color.orange)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 6)
-                    Image(systemName: "chevron.right")
+                    Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -1330,11 +1361,11 @@ struct RecordingControls: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                 )
-                .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
             }
+            .menuStyle(.button)
             .buttonStyle(.plain)
-            .accessibilityLabel(forcedLanguageName.map { "Speech language set to \($0)" }
-                                ?? "Speech Model \(selectedModelDisplayName)")
+            .menuIndicator(.hidden)
+            .accessibilityLabel("Speech language for the next recording: \(languageLabel(for: nextRecordingLanguageKey))")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
 
             timerMenu(isRecording: false)
@@ -1877,6 +1908,9 @@ struct VoiceNoteDetailView: View {
                     systemImage: note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu",
                     variant: note.transcriptionModelDisplayName == nil ? .neutral : .info
                 )
+                if note.alternateTranscript?.engine == .qwen3 {
+                    PillBadge(text: "Parakeet for English", systemImage: "character.bubble", variant: .info)
+                }
                 if let computeLabel = note.transcriptionComputeBadgeLabel {
                     PillBadge(text: computeLabel, systemImage: "cpu", variant: .info)
                 }
@@ -2408,6 +2442,9 @@ struct VoiceNoteDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        if !isEditing, !isLiveUpdatingTranscript, let alternate = note.alternateTranscript {
+            alternateTranscriptRow(alternate)
+        }
         if isLiveUpdatingTranscript {
             HStack(spacing: 8) {
                 if isRecordingPaused {
@@ -2467,6 +2504,28 @@ struct VoiceNoteDetailView: View {
                 audioPlayer?.reportMetadataSaveFailure()
             }
         }
+    }
+
+    /// Names which engine wrote the English parts and switches to the other version.
+    private func alternateTranscriptRow(_ alternate: AlternateTranscript) -> some View {
+        let showsParakeet = alternate.engine == .qwen3
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "character.bubble")
+                .foregroundStyle(.secondary)
+            Text(showsParakeet
+                 ? "English parts transcribed by Parakeet."
+                 : "Showing Qwen3-ASR's transcript throughout.")
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button(showsParakeet ? "Show Qwen3-ASR Version" : "Use Parakeet for English") {
+                note.switchToAlternateTranscript()
+                try? note.modelContext?.save()
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("SwitchTranscriptVersionButton")
+        }
+        .font(.footnote)
+        .padding(.bottom, 8)
     }
 
     private func toggleEdit() {

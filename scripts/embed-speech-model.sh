@@ -1,8 +1,9 @@
 #!/bin/zsh
-# Xcode build phase: copies the speech model into the app's resources as
-# SpeechModel/. The Mac (Catalyst) app gets the MLX weights, the iPhone and
-# iPad app the CoreML models. The source folders come from
-# scripts/fetch-speech-models.sh.
+# Xcode build phase: copies the speech models into the app's resources.
+#   SpeechModel/         Qwen3-ASR: the MLX weights in the Mac (Catalyst) app,
+#                        the CoreML models in the iPhone and iPad app
+#   EnglishSpeechModel/  Parakeet TDT v2 (CoreML), the same on every platform
+# The source folders come from scripts/fetch-speech-models.sh.
 set -euo pipefail
 
 if [[ "${IS_MACCATALYST:-NO}" == "YES" ]]; then
@@ -10,25 +11,31 @@ if [[ "${IS_MACCATALYST:-NO}" == "YES" ]]; then
 else
     VARIANT=coreml
 fi
-SOURCE="$SRCROOT/Models/$VARIANT"
-DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/SpeechModel"
+RESOURCES="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
 
-if [[ ! -f "$SOURCE/vocab.json" || ! -f "$SOURCE/config.json" ]]; then
-    echo "error: The speech model is missing from $SOURCE. Run scripts/fetch-speech-models.sh once."
+if [[ ! -f "$SRCROOT/Models/$VARIANT/vocab.json" || ! -f "$SRCROOT/Models/$VARIANT/config.json"
+      || ! -f "$SRCROOT/Models/parakeet/parakeet_vocab.json" ]]; then
+    echo "error: A speech model is missing from $SRCROOT/Models. Run scripts/fetch-speech-models.sh once."
     exit 1
 fi
 
-# Skip the copy when the bundled model already matches the source.
-STAMP_FILE="$DERIVED_FILE_DIR/speech-model-$VARIANT.stamp"
-STAMP="$(cd "$SOURCE" && find . -type f -exec stat -f '%N %z %m' {} + | sort | shasum | cut -d' ' -f1)"
-if [[ -d "$DEST" && -f "$STAMP_FILE" && "$(cat "$STAMP_FILE")" == "$STAMP" ]]; then
-    exit 0
-fi
+# embed SOURCE_FOLDER DESTINATION_NAME
+embed() {
+    local source="$SRCROOT/Models/$1" dest="$RESOURCES/$2"
+    # Skip the copy when the bundled model already matches the source.
+    local stamp_file="$DERIVED_FILE_DIR/speech-model-$1.stamp"
+    local stamp="$(cd "$source" && find . -type f -exec stat -f '%N %z %m' {} + | sort | shasum | cut -d' ' -f1)"
+    if [[ -d "$dest" && -f "$stamp_file" && "$(cat "$stamp_file")" == "$stamp" ]]; then
+        return
+    fi
+    rm -rf "$dest"
+    mkdir -p "${dest:h}"
+    # APFS clone when the build folder shares the volume, a plain copy otherwise.
+    cp -cR "$source" "$dest" 2>/dev/null || cp -R "$source" "$dest"
+    mkdir -p "$DERIVED_FILE_DIR"
+    echo "$stamp" > "$stamp_file"
+    echo "Embedded the $1 speech model ($(du -sh "$dest" | cut -f1))"
+}
 
-rm -rf "$DEST"
-mkdir -p "${DEST:h}"
-# APFS clone when the build folder shares the volume, a plain copy otherwise.
-cp -cR "$SOURCE" "$DEST" 2>/dev/null || cp -R "$SOURCE" "$DEST"
-mkdir -p "$DERIVED_FILE_DIR"
-echo "$STAMP" > "$STAMP_FILE"
-echo "Embedded the $VARIANT speech model ($(du -sh "$DEST" | cut -f1))"
+embed "$VARIANT" SpeechModel
+embed parakeet EnglishSpeechModel

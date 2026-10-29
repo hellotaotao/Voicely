@@ -19,6 +19,9 @@ struct SegmentedTranscriptionProgress: Codable, Equatable {
     /// Where each slice of `accumulatedText` sits in the audio. Absent from
     /// checkpoints written before spans were recorded.
     var spans: [TranscriptSpan]? = nil
+    /// Each slice so far with its language tag, for the English stretches.
+    /// Absent from checkpoints written before tags were recorded.
+    var slices: [LanguageTaggedSlice]? = nil
 }
 
 struct RetainedTranscriptionAttempt: Codable, Equatable, Identifiable {

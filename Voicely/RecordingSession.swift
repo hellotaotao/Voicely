@@ -160,6 +160,11 @@ final class RecordingSession: ObservableObject {
 
     /// The stop the user picked before starting; applied when the next recording begins.
     @Published var pendingStopPlan: RecordingStopPlan?
+    /// Language for the next recording, keyed like the "selectedLanguage"
+    /// setting ("auto", "english", …); nil follows the setting. Applied when
+    /// the recording begins, then cleared.
+    @Published var pendingLanguageKey: String?
+
     /// The active recording's scheduled stop, or nil when it runs until stopped by hand.
     @Published private(set) var stopSchedule: RecordingStopSchedule?
 
@@ -301,6 +306,8 @@ final class RecordingSession: ObservableObject {
 
         let note = makeRecordingNote(filePath: filePath)
         transcriptionService.configureNewNote(note, shouldStartImmediately: true)
+        transcriptionService.setLanguageKey(pendingLanguageKey, for: note.id)
+        pendingLanguageKey = nil
         note.isTranscribing = true
         note.transcriptionProgress = 0.0
         currentRecordingNote = note
@@ -793,12 +800,16 @@ final class RecordingSession: ObservableObject {
                 }
                 return false
             }
-            let accumulatedTranscript: String
+            var accumulatedTranscript = ""
+            var qwenVersion: AlternateTranscript?
             if let coord = capturedCoordinator {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
-            } else {
-                accumulatedTranscript = ""
+                // Reads the raw recording, so it runs before that is cleaned up.
+                let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
+                qwenVersion = await coord.transcribeEnglishStretches(mode: mode)
+                if qwenVersion != nil { accumulatedTranscript = coord.accumulatedTranscript }
             }
+            transcriptionService.setLanguageKey(nil, for: note.id)
 
             if await assetTask.value {
                 await stopResult.cleanupTemporaryAudio()
@@ -814,7 +825,11 @@ final class RecordingSession: ObservableObject {
                 // Finalizing only trims whitespace the slices never carry, so the
                 // live spans fit unless it changed the text.
                 let spans = trimmedTranscript == accumulatedTranscript ? capturedCoordinator?.accumulatedSpans : nil
-                note.setTranscript(trimmedTranscript, spans: spans)
+                if let qwenVersion {
+                    note.setTranscript(trimmedTranscript, spans: spans, alternate: qwenVersion)
+                } else {
+                    note.setTranscript(trimmedTranscript, spans: spans)
+                }
                 note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
                 note.completeTranscription()

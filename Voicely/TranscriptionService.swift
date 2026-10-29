@@ -20,6 +20,9 @@ struct TranscriptionResult {
     let text: String
     let duration: TimeInterval
     let modelIdentifier: String?
+    /// The language Qwen3-ASR named for the audio when it decoded without a
+    /// hint ("English", "Chinese", "None", …), nil otherwise.
+    var language: String? = nil
 }
 
 /// What a single transcription attempt produced. `.text` carries the engine's raw
@@ -96,6 +99,30 @@ class TranscriptionService: ObservableObject {
     /// work while the audio position stands still, including inside one slice.
     nonisolated let decodeWorkCounter = OSAllocatedUnfairLock<UInt64>(initialState: 0)
     var decodeWorkCount: UInt64 { decodeWorkCounter.withLock { $0 } }
+
+    /// The language tag of the decode in progress. Decodes run one at a time,
+    /// so `transcribeAudioOutcome` reads it once the engine returns. A test's
+    /// `transcribeImpl` sets it to stand in for the engine.
+    var decodedLanguage: String?
+
+    /// Language choice for the decodes of one recording, keyed like the
+    /// "selectedLanguage" setting; nil follows the setting.
+    private var languageKeyByNoteID: [UUID: String] = [:]
+
+    func setLanguageKey(_ key: String?, for noteID: UUID) {
+        languageKeyByNoteID[noteID] = key
+    }
+
+    /// The language hint for a decode of `noteID`'s audio: the recording's own
+    /// choice, else the setting. Nil is auto-detect.
+    func languageHint(for noteID: UUID?) -> String? {
+        let key = noteID.flatMap { languageKeyByNoteID[$0] }
+            ?? UserDefaults.standard.string(forKey: Qwen3ASRDefaults.selectedLanguageKey)
+        return Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)
+    }
+
+    /// The note whose audio is being decoded, for its language choice.
+    private var decodingNoteID: UUID?
 
     var requiresBackgroundExecution: Bool = {
         #if targetEnvironment(macCatalyst)
@@ -673,7 +700,10 @@ class TranscriptionService: ObservableObject {
         let ownsTelemetry = telemetrySession == nil
         let session = telemetrySession ?? beginTelemetrySession()
         currentDecodeTelemetrySession = session
+        decodedLanguage = nil
+        decodingNoteID = session.noteID
         defer {
+            decodingNoteID = nil
             isTranscribing = false
             currentTranscriptionTask = nil
             if currentDecodeTelemetrySession?.id == session.id { currentDecodeTelemetrySession = nil }
@@ -731,7 +761,8 @@ class TranscriptionService: ObservableObject {
             return .transcribed(TranscriptionResult(
                 text: finalizedTranscript.text,
                 duration: elapsed,
-                modelIdentifier: modelIdentifier
+                modelIdentifier: modelIdentifier,
+                language: decodedLanguage
             ))
         case .noSpeech:
             progressCallback(1)
@@ -1408,8 +1439,7 @@ private extension TranscriptionService {
         guard !samples.isEmpty else { return .noSpeech }
         updateProgressOnMain(0.1)
 
-        let languageHint = Qwen3ASRDefaults.languageHint(
-            forSelectedLanguageKey: UserDefaults.standard.string(forKey: "selectedLanguage"))
+        let languageHint = self.languageHint(for: decodingNoteID)
         let pieces: [String]
         do {
             guard let decoded = try await decodePasses(
@@ -1528,6 +1558,8 @@ extension TranscriptionService {
                 return nil
             }
             pieces.append(pass.text)
+            // Callers pass one slice, so there is one pass and one tag.
+            if decodedLanguage == nil { decodedLanguage = pass.language }
             offset = end
             progress(Float(offset) / Float(samples.count))
         }

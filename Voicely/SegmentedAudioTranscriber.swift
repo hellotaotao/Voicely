@@ -45,6 +45,16 @@ final class SegmentedAudioTranscriber {
         try await ImportedAudioListeningCopy.store(from: source)
     }
 
+    /// Transcribes one stretch of the file with Parakeet. Tests replace it.
+    var transcribeEnglish: EnglishStretchRouting.Transcriber = { url, start, end in
+        try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end)
+    }
+
+    /// Frees Parakeet once a run is done with it. Tests replace it.
+    var releaseEnglishEngine: () async -> Void = {
+        await ParakeetEnglishEngine.shared.unload()
+    }
+
     /// When true, the segment loop stops at the next boundary, leaving the
     /// sidecar intact for later resume. Wired to background-time expiration.
     var shouldStopForBackground: () -> Bool = { false }
@@ -68,6 +78,12 @@ final class SegmentedAudioTranscriber {
         self.transcriptionService = transcriptionService
         self.progressStore = progressStore
         self.nowProvider = nowProvider
+        self.transcribeEnglish = { [counter = transcriptionService.decodeWorkCounter] url, start, end in
+            // Each step counts as decode work for the background task.
+            try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end) { _ in
+                counter.withLock { $0 &+= 1 }
+            }
+        }
         self.transcribeSegmentOutcome = { [weak self] url in
             await transcriptionService.transcribeAudioOutcome(
                 filePath: url.path,
@@ -158,7 +174,33 @@ final class SegmentedAudioTranscriber {
                 transcriptionService.recordProcessedAudio(start: 0, end: duration, session: session)
             default: break
             }
-            finalizeSinglePass(note: note, outcome: outcome, duration: duration, hadExistingTranscript: hadExistingTranscript)
+            if let routed = await transcribeEnglishStretches(
+                in: [LanguageTaggedSlice(start: 0, end: duration, text: nil, language: nil)],
+                of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
+                // Only an English choice sends a single pass to Parakeet.
+                switch outcome {
+                case .transcribed(let result) where routed.slices[0].text != nil:
+                    let english = EnglishStretchRouting.transcript(of: routed.slices)
+                    note.setTranscript(english.text, spans: english.spans,
+                                       alternate: AlternateTranscript(engine: .qwen3, text: result.text,
+                                                                      spans: TranscriptTimeline.singleSpan(for: result.text, duration: duration)))
+                    note.lastTranscriptionDuration = result.duration
+                    note.transcriptionModelIdentifier = result.modelIdentifier
+                    persistTelemetry(on: note)
+                    note.completeTranscription()
+                    note.transcriptionOutcome = .transcribed
+                    note.clearTransientTranscriptionFlags()
+                case .noSpeech where routed.slices[0].text != nil:
+                    let english = EnglishStretchRouting.transcript(of: routed.slices)
+                    finalizeSinglePass(note: note, outcome: .transcribed(TranscriptionResult(
+                        text: english.text, duration: 0, modelIdentifier: nil)),
+                        duration: duration, hadExistingTranscript: hadExistingTranscript)
+                default:
+                    finalizeSinglePass(note: note, outcome: outcome, duration: duration, hadExistingTranscript: hadExistingTranscript)
+                }
+            } else {
+                finalizeSinglePass(note: note, outcome: outcome, duration: duration, hadExistingTranscript: hadExistingTranscript)
+            }
             if note.transcriptionState != .completed { return }
         } else {
             await transcribeSegmented(note: note, sourceURL: sourceURL, info: info,
@@ -298,6 +340,8 @@ final class SegmentedAudioTranscriber {
         var accumulatedText = resumed?.accumulatedText ?? ""
         var pieces: [String] = accumulatedText.isEmpty ? [] : [accumulatedText]
         var spans = TranscriptSpanBuilder(resumedText: accumulatedText, resumedSpans: resumed?.spans)
+        // Unknown when resuming a checkpoint written before tags were kept.
+        var tagged: [LanguageTaggedSlice]? = start == 0 ? [] : resumed?.slices
         func seconds(_ frame: Int64) -> TimeInterval { Double(frame) / info.sampleRate }
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         var producedAnyText = !pieces.isEmpty
@@ -354,12 +398,13 @@ final class SegmentedAudioTranscriber {
                 let placeholder = Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate)
                 pieces.append(placeholder)
                 spans.append(placeholder, start: seconds(start), end: seconds(end))
+                tagged?.append(LanguageTaggedSlice(start: seconds(start), end: seconds(end), text: placeholder, language: nil))
                 start = end
                 accumulatedText = joinTranscriptPieces(pieces)
                 progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                          accumulatedText: accumulatedText,
                                          failedRanges: failedRanges, updatedAt: nowProvider(),
-                                         spans: spans.spans), for: noteID)
+                                         spans: spans.spans, slices: tagged), for: noteID)
                 transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
                 continue
             }
@@ -383,15 +428,19 @@ final class SegmentedAudioTranscriber {
             }
             switch outcome {
             case .transcribed(let result):
-                if let text = IncrementalTranscriptionCoordinator.finalizedSegmentText(result.text) {
+                let text = IncrementalTranscriptionCoordinator.finalizedSegmentText(result.text)
+                if let text {
                     pieces.append(text)
                     spans.append(text, start: seconds(start), end: seconds(end))
                 }
+                tagged?.append(LanguageTaggedSlice(start: seconds(start), end: seconds(end),
+                                                   text: text, language: text == nil ? nil : result.language))
                 producedAnyText = true
                 lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
                 accumulatedDuration += result.duration
             case .noSpeech:
-                break  // silence in this slice — contributes nothing, not an error
+                // Silence in this slice contributes nothing and is not an error.
+                tagged?.append(LanguageTaggedSlice(start: seconds(start), end: seconds(end), text: nil, language: nil))
             case .modelUnavailable, .audioUnavailable, .cancelled:
                 pause(note)
                 return
@@ -401,6 +450,7 @@ final class SegmentedAudioTranscriber {
                 let placeholder = Self.placeholder(forStart: start, end: end, sampleRate: info.sampleRate)
                 pieces.append(placeholder)
                 spans.append(placeholder, start: seconds(start), end: seconds(end))
+                tagged?.append(LanguageTaggedSlice(start: seconds(start), end: seconds(end), text: placeholder, language: nil))
             }
 
             switch outcome {
@@ -414,13 +464,26 @@ final class SegmentedAudioTranscriber {
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                      accumulatedText: accumulatedText,
                                      failedRanges: failedRanges, updatedAt: nowProvider(),
-                                     spans: spans.spans), for: noteID)
+                                     spans: spans.spans, slices: tagged), for: noteID)
             transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             reportProgress(Float(start) / Float(info.totalFrames), for: noteID)
         }
 
         guard ownsRun(note) else { return }
+
+        var qwenVersion: AlternateTranscript?
+        if let tagged, let routed = await transcribeEnglishStretches(
+            in: tagged, of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
+            guard ownsRun(note) else { return }
+            qwenVersion = AlternateTranscript(engine: .qwen3, text: accumulatedText, spans: spans.spans)
+            let english = EnglishStretchRouting.transcript(of: routed.slices)
+            accumulatedText = english.text
+            spans = TranscriptSpanBuilder(resumedText: english.text, resumedSpans: english.spans)
+            let replacedStarts = Set(routed.replaced.map { Int64((routed.slices[$0].start * info.sampleRate).rounded()) })
+            failedRanges.removeAll { replacedStarts.contains($0.startFrame) }
+            producedAnyText = producedAnyText || !english.text.isEmpty
+        }
 
         // Re-transcription that produced no new text: keep the previous transcript.
         // A partial run is not lost — it is archived as a retained attempt the
@@ -433,7 +496,11 @@ final class SegmentedAudioTranscriber {
             return
         }
 
-        note.setTranscript(accumulatedText, spans: spans.spans)
+        if let qwenVersion {
+            note.setTranscript(accumulatedText, spans: spans.spans, alternate: qwenVersion)
+        } else {
+            note.setTranscript(accumulatedText, spans: spans.spans)
+        }
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
         if producedAnyText {
@@ -451,6 +518,23 @@ final class SegmentedAudioTranscriber {
             note.transcriptionOutcome = .transcribed
         }
         note.clearTransientTranscriptionFlags()
+    }
+
+    /// Runs Parakeet on the English stretches of the slices, for the language
+    /// chosen for the note. Nil when nothing was replaced.
+    private func transcribeEnglishStretches(
+        in slices: [LanguageTaggedSlice],
+        of note: VoiceNote,
+        sourceURL: URL,
+        sampleRate: Double
+    ) async -> (slices: [LanguageTaggedSlice], replaced: [Int])? {
+        let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
+        guard !EnglishStretchRouting.stretches(in: slices, mode: mode).isEmpty else { return nil }
+        let transcribeEnglish = self.transcribeEnglish
+        let routed = await EnglishStretchRouting.transcribeStretches(
+            in: slices, mode: mode, fileURL: sourceURL, sampleRate: sampleRate, transcribe: transcribeEnglish)
+        await releaseEnglishEngine()
+        return routed.replaced.isEmpty ? nil : routed
     }
 
     /// Maps the decoder's progress through the active segment onto the file.

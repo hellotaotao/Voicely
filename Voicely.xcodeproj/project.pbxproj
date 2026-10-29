@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		AD5EEC110000000000000001 /* Qwen3ASR in Frameworks */ = {isa = PBXBuildFile; productRef = AD5EEC110000000000000002 /* Qwen3ASR */; };
 		AD5EEC110000000000000004 /* AudioCommon in Frameworks */ = {isa = PBXBuildFile; productRef = AD5EEC110000000000000005 /* AudioCommon */; };
+		AD5EEC11000000000000000A /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = AD5EEC11000000000000000B /* FluidAudio */; };
 		F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -111,6 +112,7 @@
 			files = (
 				AD5EEC110000000000000001 /* Qwen3ASR in Frameworks */,
 				AD5EEC110000000000000004 /* AudioCommon in Frameworks */,
+				AD5EEC11000000000000000A /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -186,6 +188,7 @@
 			packageProductDependencies = (
 				AD5EEC110000000000000002 /* Qwen3ASR */,
 				AD5EEC110000000000000005 /* AudioCommon */,
+				AD5EEC11000000000000000B /* FluidAudio */,
 			);
 			productName = Voicely;
 			productReference = 2B1821F62DEB579E00550CD1 /* Voicely.app */;
@@ -296,6 +299,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AD5EEC110000000000000003 /* XCLocalSwiftPackageReference "Vendor/speech-swift" */,
+				AD5EEC11000000000000000C /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2B1821F72DEB579E00550CD1 /* Products */;
@@ -806,6 +810,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		AD5EEC11000000000000000C /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio";
+			requirement = {
+				kind = exactVersion;
+				version = 0.17.7;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		AD5EEC110000000000000002 /* Qwen3ASR */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -814,6 +829,11 @@
 		AD5EEC110000000000000005 /* AudioCommon */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AudioCommon;
+		};
+		AD5EEC11000000000000000B /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD5EEC11000000000000000C /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

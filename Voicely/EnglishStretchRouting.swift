@@ -60,6 +60,17 @@ enum EnglishStretchRouting {
         }
     }
 
+    /// The slice a file decoded in one pass makes: all of it, with what
+    /// Qwen3-ASR wrote and named for it.
+    static func onePassSlice(_ outcome: TranscriptionOutcome, duration: TimeInterval) -> LanguageTaggedSlice {
+        var slice = LanguageTaggedSlice(start: 0, end: duration, text: nil, language: nil)
+        if case .transcribed(let result) = outcome {
+            slice.text = LocalTranscriptFinalizer.finalizedText(result.text)
+            slice.language = slice.text == nil ? nil : result.language
+        }
+        return slice
+    }
+
     /// Index ranges of the slices Parakeet transcribes again.
     static func stretches(
         in slices: [LanguageTaggedSlice],

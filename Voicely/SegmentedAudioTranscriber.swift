@@ -46,14 +46,10 @@ final class SegmentedAudioTranscriber {
     }
 
     /// Transcribes one stretch of the file with Parakeet. Tests replace it.
-    var transcribeEnglish: EnglishStretchRouting.Transcriber = { url, start, end in
-        try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end)
-    }
+    var transcribeEnglish: EnglishStretchRouting.Transcriber
 
     /// Frees Parakeet once a run is done with it. Tests replace it.
-    var releaseEnglishEngine: () async -> Void = {
-        await ParakeetEnglishEngine.shared.unload()
-    }
+    var releaseEnglishEngine: () async -> Void
 
     /// When true, the segment loop stops at the next boundary, leaving the
     /// sidecar intact for later resume. Wired to background-time expiration.
@@ -78,12 +74,8 @@ final class SegmentedAudioTranscriber {
         self.transcriptionService = transcriptionService
         self.progressStore = progressStore
         self.nowProvider = nowProvider
-        self.transcribeEnglish = { [counter = transcriptionService.decodeWorkCounter] url, start, end in
-            // Each step counts as decode work for the background task.
-            try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end) { _ in
-                counter.withLock { $0 &+= 1 }
-            }
-        }
+        self.transcribeEnglish = transcriptionService.transcribeEnglish
+        self.releaseEnglishEngine = transcriptionService.releaseEnglishEngine
         self.transcribeSegmentOutcome = { [weak self] url in
             await transcriptionService.transcribeAudioOutcome(
                 filePath: url.path,
@@ -175,9 +167,9 @@ final class SegmentedAudioTranscriber {
             default: break
             }
             if let routed = await transcribeEnglishStretches(
-                in: [LanguageTaggedSlice(start: 0, end: duration, text: nil, language: nil)],
+                in: [EnglishStretchRouting.onePassSlice(outcome, duration: duration)],
                 of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
-                // Only an English choice sends a single pass to Parakeet.
+                guard ownsRun(note) else { return }
                 switch outcome {
                 case .transcribed(let result) where routed.slices[0].text != nil:
                     let english = EnglishStretchRouting.transcript(of: routed.slices)
@@ -191,6 +183,7 @@ final class SegmentedAudioTranscriber {
                     note.transcriptionOutcome = .transcribed
                     note.clearTransientTranscriptionFlags()
                 case .noSpeech where routed.slices[0].text != nil:
+                    // Only an English choice sends a slice without speech to Parakeet.
                     let english = EnglishStretchRouting.transcript(of: routed.slices)
                     finalizeSinglePass(note: note, outcome: .transcribed(TranscriptionResult(
                         text: english.text, duration: 0, modelIdentifier: nil)),

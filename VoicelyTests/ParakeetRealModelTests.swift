@@ -78,4 +78,82 @@ struct ParakeetRealModelTests {
         #expect(kept.allSatisfy { $0.element.text == tagged[$0.offset].text })
         #expect(coordinator.accumulatedSpans?.count == coordinator.languageTaggedSlices.filter { $0.text != nil }.count)
     }
+
+    /// A short import end to end with both real models: Qwen3-ASR decodes it
+    /// in one pass, and the language it names sends the file to Parakeet.
+    @Test @MainActor func shortEnglishImportGoesToParakeet() async throws {
+        let clipURL = try Self.writeShortClip()
+        defer { try? FileManager.default.removeItem(at: clipURL) }
+        let modelManager = ModelManager()
+        await modelManager.loadModel()
+        try #require(modelManager.isModelLoaded(), "The speech model could not be loaded")
+        let service = TranscriptionService(modelManager: modelManager)
+        let transcriber = SegmentedAudioTranscriber(
+            transcriptionService: service, progressStore: SegmentedAudioTestSupport.makeStore())
+        transcriber.storeImportedAudio = { _ in "imported.m4a" }
+        let note = VoiceNote(title: "Import", audioFilePath: "")
+        service.setLanguageKey("auto", for: note.id)
+
+        await transcriber.transcribe(note: note, sourceURL: clipURL)
+
+        #expect(!service.shouldSegmentTranscription(audioDuration: note.duration))
+        print("🔍 Parakeet: " + note.transcription)
+        print("🔍 Qwen3-ASR: " + (note.alternateTranscript?.text ?? "-"))
+        #expect(note.transcriptionOutcome == .transcribed)
+        let alternate = try #require(note.alternateTranscript)
+        #expect(alternate.engine == .qwen3)
+        #expect(!alternate.text.isEmpty)
+        #expect(note.transcription != alternate.text)
+    }
+
+    /// Re-transcribing a short saved recording end to end with both real models.
+    @Test @MainActor func shortEnglishRetranscriptionGoesToParakeet() async throws {
+        let clipURL = try Self.writeShortClip()
+        defer { try? FileManager.default.removeItem(at: clipURL) }
+        let modelManager = ModelManager()
+        await modelManager.loadModel()
+        try #require(modelManager.isModelLoaded(), "The speech model could not be loaded")
+        let service = TranscriptionService(modelManager: modelManager)
+        service.deviceIDProvider = { "this-device" }
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        let note = VoiceNote(title: "Saved", audioFilePath: clipURL.path)
+        note.transcriptionOriginDeviceID = "this-device"
+        note.setTranscript("old text", spans: nil)
+        note.completeTranscription()
+        note.transcriptionOutcome = .transcribed
+        service.setLanguageKey("auto", for: note.id)
+
+        #expect(await service.requestTranscription(for: note, force: true))
+
+        #expect(!service.shouldSegmentTranscription(audioDuration: note.duration))
+        print("🔍 Parakeet: " + note.transcription)
+        print("🔍 Qwen3-ASR: " + (note.alternateTranscript?.text ?? "-"))
+        #expect(note.transcriptionOutcome == .transcribed)
+        let alternate = try #require(note.alternateTranscript)
+        #expect(alternate.engine == .qwen3)
+        #expect(!alternate.text.isEmpty)
+        #expect(note.transcription != alternate.text)
+    }
+
+    /// Writes a minute into the recording, short enough for one pass, to an
+    /// m4a file like the ones the app keeps.
+    static func writeShortClip() throws -> URL {
+        let file = try AVAudioFile(forReading: ParakeetRealModelInput.audioURL)
+        let sampleRate = file.processingFormat.sampleRate
+        let start = AVAudioFramePosition(60 * sampleRate)
+        let pcmURL = try ParakeetEnglishEngine.writeMono16k(
+            from: ParakeetRealModelInput.audioURL,
+            startFrame: start,
+            endFrame: start + AVAudioFramePosition((Qwen3ASRDefaults.singlePassSecondsLimit - 1) * sampleRate))
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let pcm = try AVAudioFile(forReading: pcmURL)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: pcm.processingFormat, frameCapacity: AVAudioFrameCount(pcm.length)))
+        try pcm.read(into: buffer)
+        let clipURL = FileManager.default.temporaryDirectory.appendingPathComponent("voicely_clip_\(UUID().uuidString).m4a")
+        let clip = try AVAudioFile(forWriting: clipURL, settings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+        ])
+        try clip.write(from: buffer)
+        return clipURL
+    }
 }

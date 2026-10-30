@@ -14,8 +14,18 @@ struct EnglishStretchRoutingTests {
 
     @Test func englishStretchesNeedThreeMinutesFromFirstToLastEnglishSlice() {
         // 3 English minutes count; 2 do not.
-        #expect(EnglishStretchRouting.stretches(in: Self.slices(["English", "English", "English"]), mode: .automatic) == [0...2])
-        #expect(EnglishStretchRouting.stretches(in: Self.slices(["English", "English"]), mode: .automatic).isEmpty)
+        #expect(EnglishStretchRouting.stretches(in: Self.slices(["English", "English", "English", "Chinese"]),
+                                                mode: .automatic) == [0...2])
+        #expect(EnglishStretchRouting.stretches(in: Self.slices(["English", "English", "Chinese"]), mode: .automatic).isEmpty)
+    }
+
+    @Test func englishOnlyRecordingsNeedNoMinimum() {
+        let short = Self.slices(["-", "English", "None"], seconds: 10)
+        #expect(EnglishStretchRouting.stretches(in: short, mode: .automatic) == [1...1])
+        // Han characters in Qwen3-ASR's text mean the slice mixed in Chinese.
+        var mixed = short
+        mixed[1].text = "可不可以帮我去做个化验？ Yeah, a patient had"
+        #expect(EnglishStretchRouting.stretches(in: mixed, mode: .automatic).isEmpty)
     }
 
     @Test func anyOtherLanguageEndsTheStretchAndEnglishAfterItStartsAgain() {
@@ -28,7 +38,7 @@ struct EnglishStretchRoutingTests {
         let tags = ["-", "None", "English", "-", "None", "English", "English", "-", "None"]
         #expect(EnglishStretchRouting.stretches(in: Self.slices(tags), mode: .automatic) == [2...6])
         // Untagged slices do not count towards the three minutes on their own.
-        #expect(EnglishStretchRouting.stretches(in: Self.slices(["English", "-", "-", "-", "-"]), mode: .automatic).isEmpty)
+        #expect(EnglishStretchRouting.stretches(in: Self.slices(["English", "-", "-", "-", "Chinese"]), mode: .automatic).isEmpty)
     }
 
     @Test func chosenLanguageDecidesAlone() {

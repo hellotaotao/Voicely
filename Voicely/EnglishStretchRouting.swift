@@ -34,6 +34,10 @@ struct TimedWord: Equatable, Sendable {
 /// - A stretch counts only when it runs at least `minimumStretchSeconds`
 ///   from its first English slice's start to its last one's end, so
 ///   recordings that switch back and forth keep Qwen3-ASR throughout.
+/// - A recording with no other language needs no minimum: its English goes
+///   to Parakeet however short it is. Han characters in Qwen3-ASR's text
+///   count as another language, since a slice that mixes Chinese into
+///   English is often tagged English.
 enum EnglishStretchRouting {
     static let minimumStretchSeconds: TimeInterval = 180
     static let englishTag = "English"
@@ -70,6 +74,7 @@ enum EnglishStretchRouting {
         case .automatic:
             break
         }
+        let minimumSeconds = isEnglishOnly(slices) ? 0 : minimumSeconds
         var result: [ClosedRange<Int>] = []
         var first: Int?
         var last: Int?
@@ -93,6 +98,18 @@ enum EnglishStretchRouting {
         }
         close()
         return result
+    }
+
+    /// True when no slice is tagged with another language and Qwen3-ASR's
+    /// text holds no Han characters.
+    static func isEnglishOnly(_ slices: [LanguageTaggedSlice]) -> Bool {
+        slices.allSatisfy { slice in
+            switch slice.language {
+            case englishTag?, nil, "None"?: break
+            default: return false
+            }
+            return !(slice.text?.unicodeScalars.contains { $0.properties.isIdeographic } ?? false)
+        }
     }
 
     /// Transcribes one stretch of a file with Parakeet: the file, its first

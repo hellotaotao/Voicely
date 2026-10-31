@@ -173,11 +173,9 @@ final class SegmentedAudioTranscriber {
                 switch outcome {
                 case .transcribed(let result) where routed.slices[0].text != nil:
                     let english = EnglishStretchRouting.transcript(of: routed.slices)
-                    note.setTranscript(english.text, spans: english.spans,
-                                       alternate: AlternateTranscript(engine: .qwen3, text: result.text,
-                                                                      spans: TranscriptTimeline.singleSpan(for: result.text, duration: duration)))
+                    note.setTranscript(english.text, spans: english.spans)
                     note.lastTranscriptionDuration = result.duration
-                    note.transcriptionModelIdentifier = result.modelIdentifier
+                    note.transcriptionModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: result.modelIdentifier)
                     persistTelemetry(on: note)
                     note.completeTranscription()
                     note.transcriptionOutcome = .transcribed
@@ -465,11 +463,10 @@ final class SegmentedAudioTranscriber {
 
         guard ownsRun(note) else { return }
 
-        var qwenVersion: AlternateTranscript?
         if let tagged, let routed = await transcribeEnglishStretches(
             in: tagged, of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
             guard ownsRun(note) else { return }
-            qwenVersion = AlternateTranscript(engine: .qwen3, text: accumulatedText, spans: spans.spans)
+            lastModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: lastModelIdentifier)
             let english = EnglishStretchRouting.transcript(of: routed.slices)
             accumulatedText = english.text
             spans = TranscriptSpanBuilder(resumedText: english.text, resumedSpans: english.spans)
@@ -489,11 +486,7 @@ final class SegmentedAudioTranscriber {
             return
         }
 
-        if let qwenVersion {
-            note.setTranscript(accumulatedText, spans: spans.spans, alternate: qwenVersion)
-        } else {
-            note.setTranscript(accumulatedText, spans: spans.spans)
-        }
+        note.setTranscript(accumulatedText, spans: spans.spans)
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
         if producedAnyText {

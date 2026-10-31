@@ -1269,15 +1269,14 @@ private extension TranscriptionService {
         switch outcome {
         case .transcribed(let result):
             recordProcessedAudio(start: 0, end: resolvedDuration, session: session)
-            let spans = TranscriptTimeline.singleSpan(for: result.text, duration: resolvedDuration)
             if let english {
-                note.setTranscript(english.text, spans: english.spans,
-                                   alternate: AlternateTranscript(engine: .qwen3, text: result.text, spans: spans))
+                note.setTranscript(english.text, spans: english.spans)
+                note.transcriptionModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: result.modelIdentifier)
             } else {
-                note.setTranscript(result.text, spans: spans)
+                note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(for: result.text, duration: resolvedDuration))
+                note.transcriptionModelIdentifier = result.modelIdentifier
             }
             note.lastTranscriptionDuration = result.duration
-            note.transcriptionModelIdentifier = result.modelIdentifier
             if let snapshot = telemetryState.snapshot(for: note.id) { note.replaceCumulativeTranscriptionTelemetry(snapshot) }
             note.completeTranscription()
             note.transcriptionOutcome = .transcribed

@@ -41,6 +41,13 @@ struct TimedWord: Equatable, Sendable {
 enum EnglishStretchRouting {
     static let minimumStretchSeconds: TimeInterval = 180
     static let englishTag = "English"
+    /// Added to a note's model identifier when Parakeet replaced part of its text.
+    static let parakeetModelSuffix = "+parakeet"
+
+    /// The model identifier of a note whose text Parakeet replaced in part.
+    static func modelIdentifier(afterParakeet identifier: String?) -> String? {
+        identifier.map { $0 + parakeetModelSuffix }
+    }
 
     /// How the language for a recording was chosen.
     enum Mode: Equatable, Sendable {
@@ -187,29 +194,4 @@ enum EnglishStretchRouting {
         }
         return buckets.map { $0.isEmpty ? nil : $0.joined(separator: " ") }
     }
-}
-
-/// A recording's transcript in the version the app is not showing, kept so the
-/// user can switch back. Stored on the note as JSON, together with a digest
-/// of the text shown next to it: once that text changes (an edit, a new
-/// transcription), the stored version no longer belongs to it.
-struct AlternateTranscript: Codable, Equatable, Sendable {
-    enum Engine: String, Codable, Sendable {
-        case qwen3
-        case parakeet
-
-        var displayName: String {
-            switch self {
-            case .qwen3: return "Qwen3-ASR"
-            case .parakeet: return "Parakeet"
-            }
-        }
-    }
-
-    /// Which version `text` is: `.qwen3` is Qwen3-ASR alone, `.parakeet` has
-    /// Parakeet's text in the English stretches.
-    var engine: Engine
-    var text: String
-    var spans: [TranscriptSpan]?
-    var shownTextDigest: String = ""
 }

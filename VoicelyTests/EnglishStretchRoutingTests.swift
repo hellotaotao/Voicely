@@ -91,24 +91,21 @@ struct EnglishStretchRoutingTests {
         #expect(routed.slices.map(\.text) == ["q0", "q1", "q2", "q3", "Parakeet.", nil, nil])
     }
 
-    @Test @MainActor func noteSwitchesBetweenVersionsUntilItsTextChanges() {
+    @Test @MainActor func noteRemembersParakeetInItsModelIdentifier() {
         let note = VoiceNote(title: "Meeting")
-        let qwenSpans = [TranscriptSpan(length: 4, start: 0, end: 30)]
-        note.setTranscript("Parakeet text", spans: nil,
-                           alternate: AlternateTranscript(engine: .qwen3, text: "qwen", spans: qwenSpans))
-        #expect(note.alternateTranscript?.engine == .qwen3)
+        note.setTranscript("Parakeet text", spans: nil)
+        note.transcriptionModelIdentifier = Qwen3Backend.coreML.modelIdentifier
+        let qwenName = note.transcriptionModelDisplayName
+        #expect(!note.usedParakeetForEnglish)
 
-        note.switchToAlternateTranscript()
-        #expect(note.transcription == "qwen")
-        #expect(note.transcriptSpans == qwenSpans)
-        #expect(note.alternateTranscript?.engine == .parakeet)
-        #expect(note.alternateTranscript?.text == "Parakeet text")
-
-        note.switchToAlternateTranscript()
-        #expect(note.transcription == "Parakeet text")
+        note.transcriptionModelIdentifier = EnglishStretchRouting.modelIdentifier(
+            afterParakeet: Qwen3Backend.coreML.modelIdentifier)
+        #expect(note.usedParakeetForEnglish)
+        #expect(note.transcriptionModelDisplayName == qwenName)
 
         note.applyEditedTranscript("Parakeet text, edited")
-        #expect(note.alternateTranscript == nil)
+        #expect(note.usedParakeetForEnglish)
+        #expect(EnglishStretchRouting.modelIdentifier(afterParakeet: nil) == nil)
     }
 }
 
@@ -153,27 +150,27 @@ struct EnglishStretchTranscriptionTests {
         for slice in 0..<(languages.count - 1) {
             await coordinator.transcribeSegment(upToFrame: Int64(slice * 14 + 15) * 16_000)
         }
-        let qwenTranscript = await coordinator.stop(currentFrame: Int64(languages.count * 14) * 16_000)
+        _ = await coordinator.stop(currentFrame: Int64(languages.count * 14) * 16_000)
         let qwenSpans = coordinator.accumulatedSpans
         let workBefore = service.decodeWorkCount
 
-        let qwenVersion = await coordinator.transcribeEnglishStretches(mode: .automatic)
+        let replaced = await coordinator.transcribeEnglishStretches(mode: .automatic)
 
         #expect(stretches.count == 1 && stretches[0] == (14 * 16_000, 14 * 14 * 16_000))
         #expect(service.decodeWorkCount > workBefore)
         #expect(released)
-        #expect(qwenVersion == AlternateTranscript(engine: .qwen3, text: qwenTranscript, spans: qwenSpans))
+        #expect(replaced)
         let expected = ["q0"] + (1...13).map { "en\($0)" } + ["q14", "q15", "q16"]
         #expect(coordinator.accumulatedTranscript == expected.joined(separator: "\n"))
         #expect(coordinator.accumulatedSpans?.map(\.start) == qwenSpans?.map(\.start))
 
         // Another language chosen: nothing goes to Parakeet.
         stretches = []
-        #expect(await coordinator.transcribeEnglishStretches(mode: .otherLanguage) == nil)
+        #expect(await coordinator.transcribeEnglishStretches(mode: .otherLanguage) == false)
         #expect(stretches.isEmpty)
     }
 
-    @Test @MainActor func savedAudioKeepsQwenVersionNextToParakeetText() async throws {
+    @Test @MainActor func savedAudioReplacesTheEnglishStretchAndMarksTheNote() async throws {
         let languages = Array(repeating: "English", count: 13) + ["Chinese"]
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: Double(languages.count * 14))
         defer { try? FileManager.default.removeItem(at: url) }
@@ -198,9 +195,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(note.transcription == ((0...12).map { "en\($0)" } + ["q13"]).joined(separator: "\n"))
         #expect(note.transcriptSpans?.count == languages.count)
         #expect(note.transcriptionOutcome == .transcribed)
-        let alternate = try #require(note.alternateTranscript)
-        #expect(alternate.engine == .qwen3)
-        #expect(alternate.text == (0..<languages.count).map { "q\($0)" }.joined(separator: "\n"))
+        #expect(note.transcriptionModelIdentifier == "m" + EnglishStretchRouting.parakeetModelSuffix)
     }
 
     /// Imports a 10 s file, which Qwen3-ASR decodes in one pass, in auto-detect.
@@ -240,9 +235,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(note.transcription == "parakeet")
         #expect(note.transcriptionOutcome == .transcribed)
         #expect(note.transcriptSpans?.count == 1)
-        let alternate = try #require(note.alternateTranscript)
-        #expect(alternate.engine == .qwen3)
-        #expect(alternate.text == "qwen")
+        #expect(note.usedParakeetForEnglish)
     }
 
     @Test(arguments: [("qwen", "Chinese"), ("qwen 你好", "English"), ("qwen", "None"), ("qwen", nil)] as [(String, String?)])
@@ -253,7 +246,7 @@ struct EnglishStretchTranscriptionTests {
 
         #expect(stretches.isEmpty)
         #expect(note.transcription == qwenText)
-        #expect(note.alternateTranscript == nil)
+        #expect(!note.usedParakeetForEnglish)
     }
 
     @Test @MainActor func shortImportKeepsQwenWhenParakeetHasNoText() async throws {
@@ -266,7 +259,7 @@ struct EnglishStretchTranscriptionTests {
         for note in [failed.note, empty.note] {
             #expect(note.transcription == "qwen")
             #expect(note.transcriptionOutcome == .transcribed)
-            #expect(note.alternateTranscript == nil)
+            #expect(!note.usedParakeetForEnglish)
         }
     }
 
@@ -317,9 +310,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(run.note.transcriptSpans?.count == 1)
-        let alternate = try #require(run.note.alternateTranscript)
-        #expect(alternate.engine == .qwen3)
-        #expect(alternate.text == "qwen")
+        #expect(run.note.usedParakeetForEnglish)
     }
 
     @Test(arguments: [("qwen", "Chinese"), ("qwen 你好", "English"), ("qwen", "None"), ("qwen", nil)] as [(String, String?)])
@@ -330,7 +321,7 @@ struct EnglishStretchTranscriptionTests {
 
         #expect(run.stretches.isEmpty)
         #expect(run.note.transcription == qwenText)
-        #expect(run.note.alternateTranscript == nil)
+        #expect(!run.note.usedParakeetForEnglish)
     }
 
     @Test @MainActor func shortRetranscriptionKeepsQwenWhenParakeetHasNoText() async throws {
@@ -344,7 +335,7 @@ struct EnglishStretchTranscriptionTests {
             #expect(run.released)
             #expect(run.note.transcription == "qwen")
             #expect(run.note.transcriptionOutcome == .transcribed)
-            #expect(run.note.alternateTranscript == nil)
+            #expect(!run.note.usedParakeetForEnglish)
         }
     }
 
@@ -355,7 +346,6 @@ struct EnglishStretchTranscriptionTests {
 
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
-        #expect(run.note.alternateTranscript == nil)
     }
 
     @Test @MainActor func shortRetranscriptionThatFailedNeverReachesParakeet() async throws {

@@ -1908,7 +1908,7 @@ struct VoiceNoteDetailView: View {
                     systemImage: note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu",
                     variant: note.transcriptionModelDisplayName == nil ? .neutral : .info
                 )
-                if note.alternateTranscript?.engine == .qwen3 {
+                if note.usedParakeetForEnglish {
                     PillBadge(text: "Parakeet for English", systemImage: "character.bubble", variant: .info)
                 }
                 if let computeLabel = note.transcriptionComputeBadgeLabel {
@@ -2442,9 +2442,6 @@ struct VoiceNoteDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        if !isEditing, !isLiveUpdatingTranscript, let alternate = note.alternateTranscript {
-            alternateTranscriptRow(alternate)
-        }
         if isLiveUpdatingTranscript {
             HStack(spacing: 8) {
                 if isRecordingPaused {
@@ -2504,28 +2501,6 @@ struct VoiceNoteDetailView: View {
                 audioPlayer?.reportMetadataSaveFailure()
             }
         }
-    }
-
-    /// Names which engine wrote the English parts and switches to the other version.
-    private func alternateTranscriptRow(_ alternate: AlternateTranscript) -> some View {
-        let showsParakeet = alternate.engine == .qwen3
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "character.bubble")
-                .foregroundStyle(.secondary)
-            Text(showsParakeet
-                 ? "English parts transcribed by Parakeet."
-                 : "Showing Qwen3-ASR's transcript throughout.")
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Button(showsParakeet ? "Show Qwen3-ASR Version" : "Use Parakeet for English") {
-                note.switchToAlternateTranscript()
-                try? note.modelContext?.save()
-            }
-            .buttonStyle(.borderless)
-            .accessibilityIdentifier("SwitchTranscriptVersionButton")
-        }
-        .font(.footnote)
-        .padding(.bottom, 8)
     }
 
     private func toggleEdit() {

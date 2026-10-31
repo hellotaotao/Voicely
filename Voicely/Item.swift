@@ -48,9 +48,6 @@ final class VoiceNote {
     /// JSON `StoredTranscriptTimeline` tying the transcript to the audio. Written only
     /// through `setTranscript(_:spans:)`; read through `transcriptSpans`.
     var transcriptSpansData: Data?
-    /// JSON `AlternateTranscript`: the other engine's version of the transcript.
-    /// Read through `alternateTranscript`.
-    var alternateTranscriptData: Data?
     var transcriptionModelIdentifier: String?
     var transcriptionLastErrorMessage: String?
     var isTranscribing: Bool = false
@@ -121,32 +118,6 @@ extension VoiceNote {
         }
     }
 
-    /// The other engine's version of the transcript, while the shown text is
-    /// still the one it was stored next to.
-    var alternateTranscript: AlternateTranscript? {
-        guard let alternateTranscriptData,
-              let alternate = try? JSONDecoder().decode(AlternateTranscript.self, from: alternateTranscriptData),
-              alternate.shownTextDigest == StoredTranscriptTimeline.digest(of: transcription)
-        else { return nil }
-        return alternate
-    }
-
-    /// Sets the transcript and keeps `alternate` as the version to switch to.
-    func setTranscript(_ text: String, spans: [TranscriptSpan]?, alternate: AlternateTranscript) {
-        setTranscript(text, spans: spans)
-        var alternate = alternate
-        alternate.shownTextDigest = StoredTranscriptTimeline.digest(of: text)
-        alternateTranscriptData = try? JSONEncoder().encode(alternate)
-    }
-
-    /// Shows the other engine's version, keeping the current one to switch back to.
-    func switchToAlternateTranscript() {
-        guard let alternate = alternateTranscript else { return }
-        let current = AlternateTranscript(engine: alternate.engine == .qwen3 ? .parakeet : .qwen3,
-                                          text: transcription, spans: transcriptSpans)
-        setTranscript(alternate.text, spans: alternate.spans, alternate: current)
-    }
-
     /// Saves text the user edited, carrying the timeline across the edit.
     func applyEditedTranscript(_ text: String) {
         guard text != transcription else { return }
@@ -182,6 +153,11 @@ extension VoiceNote {
             return nil
         }
         return ModelManager.displayName(for: transcriptionModelIdentifier)
+    }
+
+    /// True when Parakeet wrote the English parts of the transcript.
+    var usedParakeetForEnglish: Bool {
+        transcriptionModelIdentifier?.hasSuffix(EnglishStretchRouting.parakeetModelSuffix) == true
     }
 
     var averageTranscriptionSpeedLabel: String? {

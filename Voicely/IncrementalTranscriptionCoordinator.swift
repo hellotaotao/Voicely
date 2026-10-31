@@ -305,14 +305,13 @@ final class IncrementalTranscriptionCoordinator {
 
     /// After `stop`, transcribes the English stretches again with Parakeet
     /// (`EnglishStretchRouting`) and puts its text in their slices. Returns
-    /// Qwen3-ASR's version of the transcript when anything was replaced, nil
-    /// when nothing was, Parakeet failed, or the recording needs the regular
-    /// queue anyway. A stretch that fails keeps Qwen3-ASR's text.
-    func transcribeEnglishStretches(mode: EnglishStretchRouting.Mode) async -> AlternateTranscript? {
-        guard !requiresFullTranscription else { return nil }
+    /// true when anything was replaced, false when nothing was, Parakeet
+    /// failed, or the recording needs the regular queue anyway. A stretch that
+    /// fails keeps Qwen3-ASR's text.
+    func transcribeEnglishStretches(mode: EnglishStretchRouting.Mode) async -> Bool {
+        guard !requiresFullTranscription else { return false }
         let tagged = languageTaggedSlices
-        guard !EnglishStretchRouting.stretches(in: tagged, mode: mode).isEmpty else { return nil }
-        let qwenVersion = AlternateTranscript(engine: .qwen3, text: accumulatedTranscript, spans: accumulatedSpans)
+        guard !EnglishStretchRouting.stretches(in: tagged, mode: mode).isEmpty else { return false }
 
         let counter = transcriptionService.decodeWorkCounter
         let transcribeEnglish = self.transcribeEnglish
@@ -323,7 +322,7 @@ final class IncrementalTranscriptionCoordinator {
             try await transcribeEnglish(url, start, end) { _ in counter.withLock { $0 &+= 1 } }
         }
         await releaseEnglishEngine()
-        guard !routed.replaced.isEmpty else { return nil }
+        guard !routed.replaced.isEmpty else { return false }
         var replacedStarts = Set<AVAudioFramePosition>()
         for index in routed.replaced {
             slices[index].text = routed.slices[index].text
@@ -334,7 +333,7 @@ final class IncrementalTranscriptionCoordinator {
         unrecoveredSliceRanges.removeAll { replacedStarts.contains($0.startFrame) }
         unrecoveredSliceCount = unrecoveredSliceRanges.count
         transcriptCallback?(accumulatedTranscript)
-        return qwenVersion
+        return true
     }
 
     /// Pause the timer while recording is paused.

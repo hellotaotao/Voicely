@@ -801,13 +801,13 @@ final class RecordingSession: ObservableObject {
                 return false
             }
             var accumulatedTranscript = ""
-            var qwenVersion: AlternateTranscript?
+            var parakeetReplacedText = false
             if let coord = capturedCoordinator {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
                 // Reads the raw recording, so it runs before that is cleaned up.
                 let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
-                qwenVersion = await coord.transcribeEnglishStretches(mode: mode)
-                if qwenVersion != nil { accumulatedTranscript = coord.accumulatedTranscript }
+                parakeetReplacedText = await coord.transcribeEnglishStretches(mode: mode)
+                if parakeetReplacedText { accumulatedTranscript = coord.accumulatedTranscript }
             }
             transcriptionService.setLanguageKey(nil, for: note.id)
 
@@ -825,13 +825,12 @@ final class RecordingSession: ObservableObject {
                 // Finalizing only trims whitespace the slices never carry, so the
                 // live spans fit unless it changed the text.
                 let spans = trimmedTranscript == accumulatedTranscript ? capturedCoordinator?.accumulatedSpans : nil
-                if let qwenVersion {
-                    note.setTranscript(trimmedTranscript, spans: spans, alternate: qwenVersion)
-                } else {
-                    note.setTranscript(trimmedTranscript, spans: spans)
-                }
-                note.transcriptionModelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
+                note.setTranscript(trimmedTranscript, spans: spans)
+                let modelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
+                note.transcriptionModelIdentifier = parakeetReplacedText
+                    ? EnglishStretchRouting.modelIdentifier(afterParakeet: modelIdentifier)
+                    : modelIdentifier
                 note.completeTranscription()
                 if let unrecovered = capturedCoordinator?.unrecoveredSliceRanges, !unrecovered.isEmpty {
                     // Gaps are marked inline; re-transcribing is an explicit user choice.

@@ -64,13 +64,13 @@ struct ParakeetRealModelTests {
         print("🔍 tags: " + tagged.map { $0.language ?? "-" }.joined(separator: " "))
 
         let started = ProcessInfo.processInfo.systemUptime
-        let qwenVersion = await coordinator.transcribeEnglishStretches(mode: .automatic)
+        let replaced = await coordinator.transcribeEnglishStretches(mode: .automatic)
         print("🔍 Parakeet pass: \(ProcessInfo.processInfo.systemUptime - started) s")
         print("🔍 Parakeet tail: " + coordinator.accumulatedTranscript.suffix(300))
 
         let stretches = EnglishStretchRouting.stretches(in: tagged, mode: .automatic)
         try #require(!stretches.isEmpty, "No English stretch of three minutes in this recording")
-        #expect(qwenVersion?.text == qwenTranscript)
+        #expect(replaced)
         #expect(coordinator.accumulatedTranscript != qwenTranscript)
         // Slices outside the stretches keep Qwen3-ASR's text.
         let routedSlices = Set(stretches.flatMap { Array($0) })
@@ -98,12 +98,9 @@ struct ParakeetRealModelTests {
 
         #expect(!service.shouldSegmentTranscription(audioDuration: note.duration))
         print("🔍 Parakeet: " + note.transcription)
-        print("🔍 Qwen3-ASR: " + (note.alternateTranscript?.text ?? "-"))
         #expect(note.transcriptionOutcome == .transcribed)
-        let alternate = try #require(note.alternateTranscript)
-        #expect(alternate.engine == .qwen3)
-        #expect(!alternate.text.isEmpty)
-        #expect(note.transcription != alternate.text)
+        #expect(note.usedParakeetForEnglish)
+        #expect(!note.transcription.isEmpty)
     }
 
     /// Re-transcribing a short saved recording end to end with both real models.
@@ -127,12 +124,9 @@ struct ParakeetRealModelTests {
 
         #expect(!service.shouldSegmentTranscription(audioDuration: note.duration))
         print("🔍 Parakeet: " + note.transcription)
-        print("🔍 Qwen3-ASR: " + (note.alternateTranscript?.text ?? "-"))
         #expect(note.transcriptionOutcome == .transcribed)
-        let alternate = try #require(note.alternateTranscript)
-        #expect(alternate.engine == .qwen3)
-        #expect(!alternate.text.isEmpty)
-        #expect(note.transcription != alternate.text)
+        #expect(note.usedParakeetForEnglish)
+        #expect(!note.transcription.isEmpty)
     }
 
     /// Writes a minute into the recording, short enough for one pass, to an

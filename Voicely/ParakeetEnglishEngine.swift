@@ -80,9 +80,25 @@ actor ParakeetEnglishEngine {
         }
     }
 
+    /// Calls `beat` now and then every `interval` until cancelled. Detached,
+    /// since converting the audio holds this actor.
+    nonisolated static func preparationHeartbeat(
+        every interval: Duration = .seconds(5),
+        beat: @escaping @Sendable () -> Void
+    ) -> Task<Void, Never> {
+        Task.detached {
+            while !Task.isCancelled {
+                beat()
+                try? await Task.sleep(for: interval)
+            }
+        }
+    }
+
     /// Transcribes `[startFrame, endFrame)` of `fileURL` and returns its words,
     /// timed from the start of the file. `onProgress` is called as the model
-    /// works through the audio (0...1).
+    /// works through the audio (0...1), and with 0 every few seconds before
+    /// that: loading the model and converting the audio report nothing of
+    /// their own, and iOS ends a background task that goes quiet for long.
     func transcribe(
         fileURL: URL,
         startFrame: AVAudioFramePosition,
@@ -91,12 +107,15 @@ actor ParakeetEnglishEngine {
     ) async throws -> [TimedWord] {
         await acquire()
         defer { release() }
+        let preparing = Self.preparationHeartbeat { onProgress(0) }
+        defer { preparing.cancel() }
         let manager = try await loadedManager()
         let sampleRate = try Self.sampleRate(of: fileURL)
         let offset = Double(startFrame) / sampleRate
         let stretchURL = try Self.writeMono16k(from: fileURL, startFrame: startFrame, endFrame: endFrame)
         defer { try? FileManager.default.removeItem(at: stretchURL) }
         try Task.checkCancellation()
+        preparing.cancel()
 
         let progressStream = await manager.transcriptionProgressStream
         let progressTask = Task {

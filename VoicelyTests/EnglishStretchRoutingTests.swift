@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 import Testing
 @testable import Voicely
 
@@ -75,6 +76,25 @@ struct EnglishStretchRoutingTests {
     ])
     func otherLanguagesDoNotReadAsEnglish(text: String) {
         #expect(!EnglishStretchRouting.readsAsEnglish(text))
+    }
+
+    /// Keeps a background task alive while Parakeet loads and converts audio,
+    /// and stops when the model takes over reporting.
+    @Test func preparationHeartbeatBeatsUntilCancelled() async throws {
+        let beats = OSAllocatedUnfairLock(initialState: 0)
+        let heartbeat = ParakeetEnglishEngine.preparationHeartbeat(every: .milliseconds(1)) {
+            beats.withLock { $0 += 1 }
+        }
+        for _ in 0..<500 where beats.withLock({ $0 }) < 3 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        heartbeat.cancel()
+        await heartbeat.value
+
+        let stopped = beats.withLock { $0 }
+        #expect(stopped >= 3)
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(beats.withLock { $0 } == stopped)
     }
 
     @Test func aSliceWhoseTextIsNotEnglishEndsTheStretchEvenWhenTaggedEnglish() {

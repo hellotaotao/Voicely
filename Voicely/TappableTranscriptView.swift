@@ -6,6 +6,9 @@ import UIKit
 /// sentence being spoken is highlighted and scrolled into view. Scrolling by
 /// hand pauses the auto-scroll for a few seconds.
 ///
+/// The text is as tall as it needs to be and scrolls with the page around it,
+/// so a long transcript can fill the screen.
+///
 /// Backed by `UITextView`/TextKit because long recordings hold tens of
 /// thousands of characters: one attributed string with an in-place highlight
 /// stays cheap where thousands of SwiftUI views would not.
@@ -14,21 +17,23 @@ struct TappableTranscriptView: UIViewRepresentable {
     let spans: [TranscriptSpan]
     /// Nil before playback has started, so nothing is lit on arrival.
     var currentTime: TimeInterval?
+    /// False holds the page still, for as long as the waveform is being dragged.
+    var followsPlayback = true
     var onSeek: (TimeInterval) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onSeek: onSeek) }
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView(usingTextLayoutManager: false)
+        let textView = TranscriptTextView(usingTextLayoutManager: false)
         textView.isEditable = false
         textView.isSelectable = true          // long-press still selects and copies
-        textView.isScrollEnabled = true
-        textView.alwaysBounceVertical = true
+        textView.isScrollEnabled = false
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 4, left: 0, bottom: 12, right: 0)
         textView.textContainer.lineFragmentPadding = 0
-        textView.delegate = context.coordinator
         textView.accessibilityIdentifier = AccessibilityIdentifiers.Detail.transcriptionBody
+        textView.layer.insertSublayer(context.coordinator.highlightLayer, at: 0)
+        textView.onWidthChange = { [weak coordinator = context.coordinator] in coordinator?.redrawHighlight() }
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         tap.cancelsTouchesInView = false      // keep selection gestures working
@@ -40,35 +45,64 @@ struct TappableTranscriptView: UIViewRepresentable {
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.onSeek = onSeek
-        context.coordinator.apply(text: text, spans: spans, currentTime: currentTime)
+        context.coordinator.apply(text: text, spans: spans, currentTime: currentTime, followsPlayback: followsPlayback)
     }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0, width.isFinite else { return nil }
+        return CGSize(width: width, height: context.coordinator.height(for: width, in: uiView))
+    }
+
+    static func dismantleUIView(_ uiView: UITextView, coordinator: Coordinator) {
+        coordinator.stopWatchingPage()
+    }
+
+    final class Coordinator: NSObject {
         weak var textView: UITextView?
         var onSeek: (TimeInterval) -> Void
 
         private var builtText = ""
         private var builtSpans: [TranscriptSpan] = []
         private var units: [TranscriptUnit] = []
+        private var measured: (width: CGFloat, height: CGFloat)?
         private var highlightedIndex: Int?
         /// The tapped sentence stays lit while playback runs up to it from the
         /// seek point, which lands a little before it in the previous sentence.
         private var tappedIndex: Int?
         private var tapSeekTime: TimeInterval = 0
         private var autoScrollPausedUntil: Date = .distantPast
+        private var followsPlayback = true
+        private weak var page: UIScrollView?
+        /// The player card stays pinned over the top of the page.
+        private let pinnedPlayerHeight: CGFloat = 150
 
         private let highlightColor = UIColor(VoicelyTheme.accent).withAlphaComponent(0.22)
+        let highlightLayer = CAShapeLayer()
 
         init(onSeek: @escaping (TimeInterval) -> Void) { self.onSeek = onSeek }
 
         /// Rebuilds the text only when the transcript changes; otherwise only
         /// moves the highlight. Runs about ten times a second during playback.
-        func apply(text: String, spans: [TranscriptSpan], currentTime: TimeInterval?) {
+        func apply(text: String, spans: [TranscriptSpan], currentTime: TimeInterval?, followsPlayback: Bool) {
             guard let textView else { return }
             if text != builtText || spans != builtSpans {
                 rebuild(text: text, spans: spans, in: textView)
             }
+            let scrubbingEnded = followsPlayback && !self.followsPlayback
+            self.followsPlayback = followsPlayback
             updateHighlight(for: currentTime)
+            if scrubbingEnded, let highlightedIndex {
+                scrollToUnit(highlightedIndex, in: textView)
+            }
+        }
+
+        /// Playback updates the view about ten times a second, and measuring a
+        /// long transcript takes far longer than that allows.
+        func height(for width: CGFloat, in textView: UITextView) -> CGFloat {
+            if let measured, measured.width == width { return measured.height }
+            let fitted = textView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+            measured = (width, fitted.height)
+            return fitted.height
         }
 
         private func rebuild(text: String, spans: [TranscriptSpan], in textView: UITextView) {
@@ -79,11 +113,15 @@ struct TappableTranscriptView: UIViewRepresentable {
                 .foregroundColor: UIColor.label,
                 .paragraphStyle: paragraph
             ])
+            // New text leaves the caret at its end, and the page would scroll there.
+            textView.selectedRange = NSRange(location: 0, length: 0)
             builtText = text
             builtSpans = spans
+            measured = nil
             units = TranscriptTimeline.units(text: text, spans: spans)
             highlightedIndex = nil
             tappedIndex = nil
+            redrawHighlight()
         }
 
         private func updateHighlight(for time: TimeInterval?) {
@@ -94,30 +132,55 @@ struct TappableTranscriptView: UIViewRepresentable {
 
         private func setHighlight(_ index: Int?) {
             guard let textView, index != highlightedIndex else { return }
-            let storage = textView.textStorage
-            storage.beginEditing()
-            if let old = highlightedIndex, old < units.count {
-                storage.removeAttribute(.backgroundColor, range: units[old].range)
-            }
-            if let index, index < units.count {
-                storage.addAttribute(.backgroundColor, value: highlightColor, range: units[index].range)
-            }
-            storage.endEditing()
             highlightedIndex = index
+            redrawHighlight()
             if let index { scrollToUnit(index, in: textView) }
         }
 
+        /// Draws behind the text. A background attribute would lay the whole
+        /// transcript out again on every sentence, since all of it is on the page.
+        func redrawHighlight() {
+            guard let textView else { return }
+            let path = CGMutablePath()
+            if let highlightedIndex, highlightedIndex < units.count {
+                let layoutManager = textView.layoutManager
+                let glyphRange = layoutManager.glyphRange(forCharacterRange: units[highlightedIndex].range, actualCharacterRange: nil)
+                let inset = textView.textContainerInset
+                layoutManager.enumerateEnclosingRects(
+                    forGlyphRange: glyphRange,
+                    withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                    in: textView.textContainer
+                ) { rect, _ in
+                    path.addRect(rect.offsetBy(dx: inset.left, dy: inset.top))
+                }
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            highlightLayer.fillColor = highlightColor.resolvedColor(with: textView.traitCollection).cgColor
+            highlightLayer.path = path
+            CATransaction.commit()
+        }
+
         private func scrollToUnit(_ index: Int, in textView: UITextView) {
-            guard Date() >= autoScrollPausedUntil, textView.bounds.height > 0 else { return }
+            guard let page = watchedPage(of: textView), followsPlayback, Date() >= autoScrollPausedUntil,
+                  textView.bounds.height > 0, page.bounds.height > 0 else { return }
             let layoutManager = textView.layoutManager
             let glyphRange = layoutManager.glyphRange(forCharacterRange: units[index].range, actualCharacterRange: nil)
             var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textView.textContainer)
             rect.origin.y += textView.textContainerInset.top
-            let visible = CGRect(origin: textView.contentOffset, size: textView.bounds.size).insetBy(dx: 0, dy: 40)
-            guard !visible.contains(rect) else { return }
-            let target = rect.minY - textView.bounds.height / 3
-            let maxOffset = max(0, textView.contentSize.height - textView.bounds.height)
-            textView.setContentOffset(CGPoint(x: 0, y: min(max(0, target), maxOffset)), animated: true)
+            let target = textView.convert(rect, to: page)
+
+            let insets = page.adjustedContentInset
+            let coveredTop = insets.top + pinnedPlayerHeight
+            let visibleHeight = page.bounds.height - coveredTop - insets.bottom
+            let visible = CGRect(x: target.minX, y: page.contentOffset.y + coveredTop, width: target.width, height: visibleHeight)
+                .insetBy(dx: 0, dy: 40)
+            guard !visible.contains(target) else { return }
+
+            let lowest = -insets.top
+            let highest = max(lowest, page.contentSize.height - page.bounds.height + insets.bottom)
+            let offset = target.minY - coveredTop - visibleHeight / 3
+            page.setContentOffset(CGPoint(x: page.contentOffset.x, y: min(max(lowest, offset), highest)), animated: true)
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -143,16 +206,40 @@ struct TappableTranscriptView: UIViewRepresentable {
 
         // MARK: Scrolling by hand pauses auto-scroll
 
-        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            autoScrollPausedUntil = .distantFuture
+        private func watchedPage(of textView: UITextView) -> UIScrollView? {
+            if let page { return page }
+            var view = textView.superview
+            while let current = view, !(current is UIScrollView) { view = current.superview }
+            page = view as? UIScrollView
+            page?.panGestureRecognizer.addTarget(self, action: #selector(handlePagePan(_:)))
+            return page
         }
 
-        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-            if !decelerate { autoScrollPausedUntil = Date().addingTimeInterval(4) }
+        func stopWatchingPage() {
+            page?.panGestureRecognizer.removeTarget(self, action: #selector(handlePagePan(_:)))
+            page = nil
         }
 
-        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-            autoScrollPausedUntil = Date().addingTimeInterval(4)
+        @objc private func handlePagePan(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .began, .changed:
+                autoScrollPausedUntil = .distantFuture
+            default:
+                autoScrollPausedUntil = Date().addingTimeInterval(4)
+            }
         }
+    }
+}
+
+/// Lines rewrap when the width changes, which moves the highlight.
+private final class TranscriptTextView: UITextView {
+    var onWidthChange: (() -> Void)?
+    private var laidOutWidth: CGFloat = 0
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width != laidOutWidth else { return }
+        laidOutWidth = bounds.width
+        onWidthChange?()
     }
 }

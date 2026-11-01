@@ -40,6 +40,7 @@ enum AccessibilityIdentifiers {
         static let metadata = "NoteDetailMetadata"
         static let editButton = "NoteDetailEditButton"
         static let audioPlayerCard = "AudioPlayerCard"
+        static let pinnedPlayerCard = "PinnedPlayerCard"
         static let playButton = "PlayButton"
         static let playbackRateButton = "PlaybackRateButton"
         static let transcriptionCard = "TranscriptionCard"

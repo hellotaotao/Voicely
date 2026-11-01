@@ -39,6 +39,9 @@ struct WaveformBars: View {
     var inactiveTint: Color = .secondary
     var height: CGFloat = 52
     var onSeek: ((Double) -> Void)? = nil
+    var onScrubbingChanged: ((Bool) -> Void)? = nil
+
+    @GestureState private var isScrubbing = false
 
     private var bars: [CGFloat] {
         if let levels, !levels.isEmpty {
@@ -72,12 +75,14 @@ struct WaveformBars: View {
             )
             .gesture(
                 DragGesture(minimumDistance: 12)
+                    .updating($isScrubbing) { _, state, _ in state = true }
                     .onChanged { value in
                         applySeek(at: value.location.x, width: geo.size.width)
                     }
             )
         }
         .frame(height: height)
+        .onChange(of: isScrubbing) { _, scrubbing in onScrubbingChanged?(scrubbing) }
     }
 
     private func barColor(played: Bool, near: Bool) -> Color {

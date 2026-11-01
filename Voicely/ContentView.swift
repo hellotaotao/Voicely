@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
+    @State private var splitColumnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var isDropTargeted = false
 
     init() {
@@ -264,7 +265,7 @@ struct ContentView: View {
     }
 
     private var splitNavigationView: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $splitColumnVisibility) {
             noteLibraryList(
                 usesSplitNavigationSelection: true,
                 opensDetailInCompactStack: false
@@ -285,6 +286,17 @@ struct ContentView: View {
         } detail: {
             detailPane
         }
+        .onAppear(perform: hideWindowTitle)
+    }
+
+    /// The sidebar's title is for the iPad. The Mac would repeat it in the
+    /// window's title bar, above whichever note is open.
+    private func hideWindowTitle() {
+        #if targetEnvironment(macCatalyst)
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            scene.titlebar?.titleVisibility = .hidden
+        }
+        #endif
     }
 
     @ToolbarContentBuilder
@@ -616,7 +628,8 @@ struct ContentView: View {
             audioService: audioService,
             showingSettings: $showingSettings,
             isPreparingAudio: recordingSession.isPreparingAudio(note),
-            activeTranscriptionTitle: activeTranscriptionNote?.title
+            activeTranscriptionTitle: activeTranscriptionNote?.title,
+            sidebarIsHidden: splitColumnVisibility == .detailOnly
         )
             .environmentObject(transcriptionService)
     }
@@ -1544,6 +1557,7 @@ struct VoiceNoteDetailView: View {
     var isPreparingAudio = false
     /// Title of the note this device is transcribing, to explain a queue position.
     var activeTranscriptionTitle: String?
+    var sidebarIsHidden = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
@@ -1560,6 +1574,8 @@ struct VoiceNoteDetailView: View {
     @State private var transcriptionRequestError: String?
     @StateObject private var audioPlayer = AudioPlayerService()
     @State private var loadedAudioSelection: AudioPlaybackSelection?
+    @State private var isScrubbingWaveform = false
+    @State private var playerCardReachedTop = false
 
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -1653,6 +1669,10 @@ struct VoiceNoteDetailView: View {
         )
     }
 
+    private static let detailPageSpace = "NoteDetailPage"
+    private static let playerCardPadding: CGFloat = 16
+    private static let pinnedPlayerInset: CGFloat = 8
+
     private var usesCompactDetailLayout: Bool {
         UIDevice.current.userInterfaceIdiom == .phone && horizontalSizeClass == .compact
     }
@@ -1735,9 +1755,16 @@ struct VoiceNoteDetailView: View {
             .frame(maxWidth: detailContentMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .coordinateSpace(name: Self.detailPageSpace)
+        .overlay(alignment: .top) {
+            if playerCardReachedTop, shouldShowAudioPlayerCard {
+                pinnedPlayerCard
+            }
+        }
         .background(VoicelyTheme.groupedBackground)
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.screen)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(hidesNavigationBar ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
             if usesCompactDetailLayout {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -1928,66 +1955,109 @@ struct VoiceNoteDetailView: View {
     }
 
     private var audioPlayerCard: some View {
-        SurfaceCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 14) {
-                WaveformBars(
-                    seed: waveformSeed,
-                    progress: waveformProgress,
-                    levels: audioPlayer.waveformLevels,
-                    activeTint: VoicelyTheme.accent,
-                    inactiveTint: .secondary,
-                    height: usesCompactDetailLayout ? 54 : 56,
-                    onSeek: { ratio in
-                        let target = ratio * max(audioPlayer.duration, 0)
-                        audioPlayer.seek(to: target)
-                    }
-                )
+        SurfaceCard(padding: Self.playerCardPadding) {
+            playerContent
+        }
+        .onGeometryChange(for: Bool.self) { proxy in
+            proxy.frame(in: .named(Self.detailPageSpace)).minY <= Self.pinnedPlayerInset - Self.playerCardPadding
+        } action: { reachedTop in
+            playerCardReachedTop = reachedTop
+        }
+        .accessibilityHidden(playerCardReachedTop)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.audioPlayerCard)
+    }
 
-                ZStack {
-                    HStack {
-                        Text(formatTime(audioPlayer.currentTime))
+    /// With the sidebar open the Mac's navigation bar over the note is empty, so
+    /// the page takes its place. Otherwise it holds buttons and stays.
+    private var hidesNavigationBar: Bool {
+        ProcessInfo.processInfo.isMacCatalystApp && !sidebarIsHidden
+    }
+
+    /// Takes over from the card at the moment its content reaches
+    /// `pinnedPlayerInset`, in the same place, so the card appears to stick there.
+    private var pinnedPlayerCard: some View {
+        let shape = UnevenRoundedRectangle(
+            bottomLeadingRadius: VoicelyTheme.cornerLarge,
+            bottomTrailingRadius: VoicelyTheme.cornerLarge,
+            style: .continuous
+        )
+        return playerContent
+            .padding(.horizontal, Self.playerCardPadding)
+            .padding(.bottom, 12)
+            .padding(.top, Self.pinnedPlayerInset)
+            .background {
+                // Reaches under the navigation bar, where the page would show through.
+                shape
+                    .fill(VoicelyTheme.surface)
+                    .overlay(shape.stroke(VoicelyTheme.subtleBorder, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+                    .ignoresSafeArea(edges: .top)
+            }
+            .padding(.horizontal, usesCompactDetailLayout ? 16 : 20)
+            .frame(maxWidth: detailContentMaxWidth)
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Detail.pinnedPlayerCard)
+    }
+
+    private var playerContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            WaveformBars(
+                seed: waveformSeed,
+                progress: waveformProgress,
+                levels: audioPlayer.waveformLevels,
+                activeTint: VoicelyTheme.accent,
+                inactiveTint: .secondary,
+                height: usesCompactDetailLayout ? 54 : 56,
+                onSeek: { ratio in
+                    let target = ratio * max(audioPlayer.duration, 0)
+                    audioPlayer.seek(to: target)
+                },
+                onScrubbingChanged: { isScrubbingWaveform = $0 }
+            )
+
+            ZStack {
+                HStack {
+                    Text(formatTime(audioPlayer.currentTime))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 44, alignment: .leading)
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: 8) {
+                        Text(AudioDurationMetadata.known(audioPlayer.duration).map(formatTime) ?? "—")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.tertiary)
-                            .frame(width: 44, alignment: .leading)
-
-                        Spacer(minLength: 0)
-
-                        HStack(spacing: 8) {
-                            Text(AudioDurationMetadata.known(audioPlayer.duration).map(formatTime) ?? "—")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                            playbackRateButton
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
+                        playbackRateButton
                     }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
 
-                    HStack(spacing: 18) {
-                        transportButton(systemImage: "gobackward.15") {
-                            audioPlayer.seekBackward(seconds: 15)
-                        }
-                        playButton
-                        transportButton(systemImage: "goforward.15") {
-                            audioPlayer.seekForward(seconds: 15)
-                        }
+                HStack(spacing: 18) {
+                    transportButton(systemImage: "gobackward.15") {
+                        audioPlayer.seekBackward(seconds: 15)
+                    }
+                    playButton
+                    transportButton(systemImage: "goforward.15") {
+                        audioPlayer.seekForward(seconds: 15)
                     }
                 }
-                .frame(height: 48)
+            }
+            .frame(height: 48)
 
-                if audioPlayer.isPreparingAudio {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text(audioPlayer.playbackStatusMessage ?? "Preparing audio…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                } else if let msg = audioPlayer.playbackStatusMessage {
-                    Text(msg)
+            if audioPlayer.isPreparingAudio {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(audioPlayer.playbackStatusMessage ?? "Preparing audio…")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            } else if let msg = audioPlayer.playbackStatusMessage {
+                Text(msg)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
-        .accessibilityIdentifier(AccessibilityIdentifiers.Detail.audioPlayerCard)
     }
 
     private var waveformSeed: Int {
@@ -2475,14 +2545,12 @@ struct VoiceNoteDetailView: View {
                 text: note.transcription,
                 spans: spans,
                 currentTime: audioPlayer.isPlaying || audioPlayer.currentTime > 0 ? audioPlayer.currentTime : nil,
+                followsPlayback: !isScrubbingWaveform,
                 onSeek: { time in
                     audioPlayer.seek(to: time)
                     audioPlayer.play()
                 }
             )
-            // Fill most of the window rather than a fixed box. The text scrolls
-            // inside it, which keeps the playing sentence in view.
-            .containerRelativeFrame(.vertical) { height, _ in max(320, height - 420) }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             SavedTranscriptText(text: note.transcription)

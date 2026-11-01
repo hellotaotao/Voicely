@@ -311,12 +311,13 @@ final class IncrementalTranscriptionCoordinator {
     func transcribeEnglishStretches(mode: EnglishStretchRouting.Mode) async -> Bool {
         guard !requiresFullTranscription else { return false }
         let tagged = languageTaggedSlices
-        guard !EnglishStretchRouting.stretches(in: tagged, mode: mode).isEmpty else { return false }
+        let stretches = await EnglishStretchRouting.stretchesInBackground(in: tagged, mode: mode)
+        guard !stretches.isEmpty else { return false }
 
         let counter = transcriptionService.decodeWorkCounter
         let transcribeEnglish = self.transcribeEnglish
         let routed = await EnglishStretchRouting.transcribeStretches(
-            in: tagged, mode: mode, fileURL: recordingFileURL, sampleRate: recordingSampleRate
+            stretches, in: tagged, fileURL: recordingFileURL, sampleRate: recordingSampleRate
         ) { url, start, end in
             // Each step counts as decode work for the background task.
             try await transcribeEnglish(url, start, end) { _ in counter.withLock { $0 &+= 1 } }

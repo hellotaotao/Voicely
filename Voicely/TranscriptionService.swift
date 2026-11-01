@@ -1247,7 +1247,8 @@ private extension TranscriptionService {
         var english = await parakeetTranscript(after: outcome, noteID: noteID, fileURL: url)
         if case .noSpeech = outcome, let text = english?.text {
             // Only an English choice sends a note without speech to Parakeet.
-            outcome = .transcribed(TranscriptionResult(text: text, duration: 0, modelIdentifier: nil))
+            outcome = .transcribed(TranscriptionResult(
+                text: text, duration: 0, modelIdentifier: EnglishStretchRouting.modelIdentifier(afterParakeet: nil)))
             english = nil
         }
 
@@ -1342,9 +1343,10 @@ private extension TranscriptionService {
         let duration = Double(info.totalFrames) / info.sampleRate
         let slices = [EnglishStretchRouting.onePassSlice(outcome, duration: duration)]
         let mode = EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID))
-        guard !EnglishStretchRouting.stretches(in: slices, mode: mode).isEmpty else { return nil }
+        let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
+        guard !stretches.isEmpty else { return nil }
         let routed = await EnglishStretchRouting.transcribeStretches(
-            in: slices, mode: mode, fileURL: fileURL, sampleRate: info.sampleRate, transcribe: transcribeEnglish)
+            stretches, in: slices, fileURL: fileURL, sampleRate: info.sampleRate, transcribe: transcribeEnglish)
         await releaseEnglishEngine()
         guard routed.slices[0].text != nil, !routed.replaced.isEmpty else { return nil }
         return EnglishStretchRouting.transcript(of: routed.slices)

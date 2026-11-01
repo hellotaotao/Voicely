@@ -5,7 +5,8 @@ import os
 
 /// Parakeet TDT v2 (FluidAudio, CoreML on CPU + Neural Engine): transcribes
 /// the English stretches of a recording again after Qwen3-ASR has run, see
-/// `EnglishStretchRouting`. It ships inside the app like Qwen3-ASR, is loaded
+/// `EnglishStretchRouting`, and files imported with English chosen, which
+/// skip Qwen3-ASR. It ships inside the app like Qwen3-ASR, is loaded
 /// only while it works and unloaded afterwards, and runs on every platform
 /// the same way, so the phone can use it while locked.
 actor ParakeetEnglishEngine {
@@ -56,6 +57,28 @@ actor ParakeetEnglishEngine {
     // MARK: Transcription
 
     private var manager: AsrManager?
+    /// Whether a call holds the engine, and the calls waiting for it.
+    private var isBusy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    /// Calls run one at a time, such as a recording that stops during an
+    /// English import: this actor lets them interleave at every await, and
+    /// `AsrManager` has one progress stream, which crashes when two tasks read it.
+    private func acquire() async {
+        guard isBusy else {
+            isBusy = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    private func release() {
+        if waiting.isEmpty {
+            isBusy = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
 
     /// Transcribes `[startFrame, endFrame)` of `fileURL` and returns its words,
     /// timed from the start of the file. `onProgress` is called as the model
@@ -66,6 +89,8 @@ actor ParakeetEnglishEngine {
         endFrame: AVAudioFramePosition,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> [TimedWord] {
+        await acquire()
+        defer { release() }
         let manager = try await loadedManager()
         let sampleRate = try Self.sampleRate(of: fileURL)
         let offset = Double(startFrame) / sampleRate
@@ -92,6 +117,8 @@ actor ParakeetEnglishEngine {
 
     /// Frees the model's memory. The next transcription loads it again.
     func unload() async {
+        await acquire()
+        defer { release() }
         await manager?.cleanup()
         manager = nil
     }

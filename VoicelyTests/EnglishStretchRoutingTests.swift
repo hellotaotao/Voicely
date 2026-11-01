@@ -51,6 +51,56 @@ struct EnglishStretchRoutingTests {
         #expect(EnglishStretchRouting.Mode(languageHint: "Chinese") == .otherLanguage)
     }
 
+    @Test(arguments: [
+        "So I think we should move the launch to next week and see how the numbers look.",
+        "Um, so the, uh, the thing I wanted to say is, um, that it mostly works now.",
+        // Too short for the recognizer to judge: it reads these as Danish and Spanish.
+        "Bye.",
+        "No no no.",
+        // Words Qwen3-ASR's own failure placeholder uses must not end a stretch.
+        "[12:30–12:59 transcription unavailable]",
+    ])
+    func englishReadsAsEnglish(text: String) {
+        #expect(EnglishStretchRouting.readsAsEnglish(text))
+    }
+
+    @Test(arguments: [
+        "We should ship it 下周 and see how it goes.",
+        "We should ship it すぐに and see how it goes.",
+        "We should ship it 다음주 and see how it goes.",
+        "We should ship it завтра and see how it goes.",
+        "The meeting starts at noon. Je ne sais pas si nous pouvons terminer ce travail avant la fin de la semaine.",
+        "The meeting starts at noon. No sé si podemos terminar este trabajo antes del final de la semana que viene.",
+        "The meeting starts at noon. Ich weiß nicht, ob wir diese Arbeit bis zum Ende der Woche schaffen können.",
+    ])
+    func otherLanguagesDoNotReadAsEnglish(text: String) {
+        #expect(!EnglishStretchRouting.readsAsEnglish(text))
+    }
+
+    @Test func aSliceWhoseTextIsNotEnglishEndsTheStretchEvenWhenTaggedEnglish() {
+        var slices = Self.slices(["English", "English", "English", "English", "English", "English", "English"])
+        slices[3].text = "Nous devons absolument terminer ce travail avant la fin de la semaine prochaine."
+        #expect(EnglishStretchRouting.stretches(in: slices, mode: .automatic) == [0...2, 4...6])
+    }
+
+    @Test func aSliceWithoutATagEndsTheStretchWhenItsTextIsNotEnglish() {
+        var slices = Self.slices(["English", "English", "English", "None", "English"])
+        slices[3].text = "嗯哼，嗯哼。"
+        #expect(EnglishStretchRouting.stretches(in: slices, mode: .automatic) == [0...2])
+    }
+
+    @Test func aShortRecordingWithForeignTextStaysWithQwenThroughout() {
+        var slices = Self.slices(["English", "English"], seconds: 10)
+        slices[1].text = "No sé si podemos terminar este trabajo antes del final de la semana que viene."
+        #expect(EnglishStretchRouting.stretches(in: slices, mode: .automatic).isEmpty)
+    }
+
+    @Test func parakeetIsMarkedOnceOnTheModelIdentifier() {
+        let marked = EnglishStretchRouting.modelIdentifier(afterParakeet: "model")
+        #expect(marked == "model+parakeet")
+        #expect(EnglishStretchRouting.modelIdentifier(afterParakeet: marked) == marked)
+    }
+
     @Test func wordsGoToTheSliceTheirMiddleFallsIn() {
         let slices = Self.slices(["English", "-", "English"], seconds: 10)
         let words = [
@@ -80,7 +130,8 @@ struct EnglishStretchRoutingTests {
         let slices = Self.slices(["English", "English", "English", "Chinese", "English", "English", "English"])
         var calls = 0
         let routed = await EnglishStretchRouting.transcribeStretches(
-            in: slices, mode: .automatic, fileURL: URL(fileURLWithPath: "/dev/null"), sampleRate: 16_000
+            EnglishStretchRouting.stretches(in: slices, mode: .automatic),
+            in: slices, fileURL: URL(fileURLWithPath: "/dev/null"), sampleRate: 16_000
         ) { _, start, end in
             calls += 1
             if calls == 1 { throw Failure() }
@@ -105,7 +156,10 @@ struct EnglishStretchRoutingTests {
 
         note.applyEditedTranscript("Parakeet text, edited")
         #expect(note.usedParakeetForEnglish)
-        #expect(EnglishStretchRouting.modelIdentifier(afterParakeet: nil) == nil)
+
+        note.transcriptionModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: nil)
+        #expect(note.usedParakeetForEnglish)
+        #expect(note.transcriptionModelDisplayName == qwenName)
     }
 }
 
@@ -346,6 +400,113 @@ struct EnglishStretchTranscriptionTests {
 
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
+        #expect(run.note.usedParakeetForEnglish)
+        #expect(run.note.transcriptionModelDisplayName != nil)
+    }
+
+    /// A file imported with English chosen, cut into 14 s slices when it does
+    /// not fit one pass. Returns the note and the stretches Parakeet was given.
+    @MainActor
+    private static func importWithEnglishChosen(
+        seconds: Double,
+        qwen: TranscriptionOutcome = .noSpeech,
+        savedFrame: Int64? = nil,
+        parakeet: @escaping () throws -> [TimedWord]
+    ) async throws -> (note: VoiceNote, service: TranscriptionService, stretches: [(Int64, Int64)], qwenCalls: Int, released: Bool) {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: seconds)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let service = TranscriptionService()
+        let store = SegmentedAudioTestSupport.makeStore()
+        let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
+        transcriber.nextCutFrame = { _, start, _ in start + 14 * 16_000 }
+        var qwenCalls = 0
+        transcriber.transcribeSegmentOutcome = { _ in
+            qwenCalls += 1
+            return qwen
+        }
+        var stretches: [(Int64, Int64)] = []
+        transcriber.transcribeEnglish = { _, start, end in
+            stretches.append((start, end))
+            return try parakeet()
+        }
+        var released = false
+        transcriber.releaseEnglishEngine = { released = true }
+        let note = VoiceNote(title: "Import", audioFilePath: "")
+        service.setLanguageKey("english", for: note.id)
+        if let savedFrame {
+            store.save(.init(lastFrame: savedFrame, totalFrames: Int64(seconds * 16_000), accumulatedText: "saved",
+                             failedRanges: [], updatedAt: Date()), for: note.id)
+        }
+
+        await transcriber.transcribe(note: note, sourceURL: url)
+        return (note, service, stretches, qwenCalls, released)
+    }
+
+    private static let wordsAt4And20And40 = [
+        TimedWord(text: "one", start: 4, end: 5),
+        TimedWord(text: "two", start: 20, end: 21),
+        TimedWord(text: "three", start: 40, end: 41),
+    ]
+
+    /// 10 s is transcribed in one pass, 42 s in slices.
+    @Test(arguments: [(10.0, "one two three"), (42.0, "one\ntwo\nthree")])
+    @MainActor func englishChoiceTranscribesAnImportInOneGoWithoutQwen(seconds: Double, expected: String) async throws {
+        let run = try await Self.importWithEnglishChosen(seconds: seconds) { Self.wordsAt4And20And40 }
+
+        #expect(run.qwenCalls == 0)
+        #expect(run.stretches.count == 1 && run.stretches[0] == (0, Int64(seconds * 16_000)))
+        #expect(run.note.transcription == expected)
+        #expect(run.note.transcriptionOutcome == .transcribed)
+        #expect(run.note.usedParakeetForEnglish)
+        #expect(run.note.transcriptionModelDisplayName != nil)
+        #expect(run.released)
+        // The choice was for this run: a later Re-transcribe follows the setting.
+        #expect(run.service.languageHint(for: run.note.id) == nil)
+    }
+
+    @Test @MainActor func aSliceParakeetHeardNothingInHasNoSpeech() async throws {
+        let run = try await Self.importWithEnglishChosen(seconds: 42) { [TimedWord(text: "one", start: 4, end: 5)] }
+
+        #expect(run.qwenCalls == 0)
+        #expect(run.note.transcription == "one")
+        #expect(run.note.transcriptionOutcome == .transcribed)
+    }
+
+    @Test @MainActor func englishChoiceResumesAParakeetRunFromTheSavedFrame() async throws {
+        let run = try await Self.importWithEnglishChosen(seconds: 42, savedFrame: 14 * 16_000) {
+            Array(Self.wordsAt4And20And40.dropFirst())
+        }
+
+        #expect(run.stretches.count == 1 && run.stretches[0] == (14 * 16_000, 42 * 16_000))
+        #expect(run.note.transcription == "saved\ntwo\nthree")
+    }
+
+    private struct ParakeetFailed: Error {}
+
+    /// Parakeet failing or hearing nothing leaves the file to Qwen3-ASR, once.
+    @Test(arguments: [(10.0, true), (10.0, false), (42.0, true), (42.0, false)])
+    @MainActor func qwenTakesAFileParakeetFailsOnOrHearsNothingIn(seconds: Double, fails: Bool) async throws {
+        let run = try await Self.importWithEnglishChosen(
+            seconds: seconds, qwen: .transcribed(TranscriptionResult(text: "qwen", duration: 1, modelIdentifier: "model"))
+        ) {
+            if fails { throw ParakeetFailed() }
+            return []
+        }
+
+        #expect(run.stretches.count == 1)
+        #expect(run.note.transcription.split(separator: "\n").allSatisfy { $0 == "qwen" })
+        #expect(!run.note.transcription.isEmpty)
+        #expect(run.note.transcriptionOutcome == .transcribed)
+        #expect(!run.note.usedParakeetForEnglish)
+        #expect(run.released)
+    }
+
+    @Test @MainActor func englishChoiceFindsNoSpeechWhenNeitherEngineHearsAny() async throws {
+        let run = try await Self.importWithEnglishChosen(seconds: 42) { [] }
+
+        #expect(run.note.transcription.isEmpty)
+        #expect(run.note.transcriptionOutcome == .noSpeech)
+        #expect(!run.note.usedParakeetForEnglish)
     }
 
     @Test @MainActor func shortRetranscriptionThatFailedNeverReachesParakeet() async throws {

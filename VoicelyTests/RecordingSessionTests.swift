@@ -123,6 +123,14 @@ struct RecordingSessionTests {
         transcription.setLanguageKey(nil, for: note.id)
     }
 
+    @Test func languageChosenOnTheRecordingScreenCanGoToAnImportOnce() {
+        let session = RecordingSession(audioService: MockRecordingAudio(), transcriptionService: TranscriptionService())
+        session.pendingLanguageKey = "english"
+
+        #expect(session.takePendingLanguageKey() == "english")
+        #expect(session.takePendingLanguageKey() == nil)
+    }
+
     @Test func defensiveStopNoteHasLocalOriginAndIsImmediatelyEligible() async {
         let audio = MockRecordingAudio()
         audio.isRecording = true

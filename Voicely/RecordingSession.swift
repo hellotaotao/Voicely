@@ -165,6 +165,13 @@ final class RecordingSession: ObservableObject {
     /// the recording begins, then cleared.
     @Published var pendingLanguageKey: String?
 
+    /// Hands the language chosen on the recording screen to what comes next
+    /// instead of a recording: the choice applies once.
+    func takePendingLanguageKey() -> String? {
+        defer { pendingLanguageKey = nil }
+        return pendingLanguageKey
+    }
+
     /// The active recording's scheduled stop, or nil when it runs until stopped by hand.
     @Published private(set) var stopSchedule: RecordingStopSchedule?
 

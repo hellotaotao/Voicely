@@ -36,6 +36,21 @@ struct ParakeetRealModelTests {
         #expect(words.last.map { $0.end <= 60 + audioSeconds + 1 } == true)
     }
 
+    /// Two callers at once, such as a recording that stops during an English
+    /// import, take turns: reading the model's progress stream together crashes.
+    @Test func callersTakeTurnsOnTheEngine() async throws {
+        let file = try AVAudioFile(forReading: ParakeetRealModelInput.audioURL)
+        let end = min(file.length, AVAudioFramePosition(30 * file.processingFormat.sampleRate))
+        async let first = ParakeetEnglishEngine.shared.transcribe(
+            fileURL: ParakeetRealModelInput.audioURL, startFrame: 0, endFrame: end)
+        async let second = ParakeetEnglishEngine.shared.transcribe(
+            fileURL: ParakeetRealModelInput.audioURL, startFrame: 0, endFrame: end)
+        let results = try await [first, second]
+        await ParakeetEnglishEngine.shared.unload()
+
+        #expect(results[0] == results[1])
+    }
+
     /// A live recording end to end with both real models: Qwen3-ASR decodes
     /// it slice by slice as it is "recorded", then the English stretch goes
     /// to Parakeet.

@@ -749,8 +749,9 @@ struct ContentView: View {
             return
         }
 
+        let languageKey = recordingSession.takePendingLanguageKey()
         Task { @MainActor in
-            await importIncomingAudio(from: url)
+            await importIncomingAudio(from: url, languageKey: languageKey)
         }
     }
 
@@ -763,7 +764,9 @@ struct ContentView: View {
         }
     }
 
-    private func importIncomingAudio(from url: URL) async {
+    /// `languageKey` is the choice made on the recording screen for this
+    /// import; nil follows the setting.
+    private func importIncomingAudio(from url: URL, languageKey: String?) async {
         transcriptionService.setModelManager(modelManager)
         guard CloudStorageManager.isSupportedImportedAudioURL(url) else {
             inboundAudioImportError = "Unsupported audio file type."
@@ -804,6 +807,7 @@ struct ContentView: View {
                 _ = await transcriptionService.loadSpeechModel()
             }
             guard transcriptionService.isEngineAvailable() else { return }
+            transcriptionService.setLanguageKey(languageKey, for: note.id)
             await runImportTranscription { await $0.transcribe(note: note, sourceURL: workingCopy) }
         } catch {
             if let unpublishedWorkingCopy {
@@ -828,6 +832,7 @@ struct ContentView: View {
             $0.hasItemConformingToTypeIdentifier(UTType.audio.identifier)
         }
         guard !audioProviders.isEmpty else { return false }
+        let languageKey = recordingSession.takePendingLanguageKey()
         for provider in audioProviders {
             provider.loadFileRepresentation(forTypeIdentifier: UTType.audio.identifier) { tempURL, _ in
                 guard let tempURL else { return }
@@ -842,7 +847,7 @@ struct ContentView: View {
                     return
                 }
                 Task { @MainActor in
-                    await importIncomingAudio(from: stableURL)
+                    await importIncomingAudio(from: stableURL, languageKey: languageKey)
                     try? FileManager.default.removeItem(at: stableURL)
                 }
             }
@@ -1313,7 +1318,7 @@ struct RecordingControls: View {
     private var idleLayout: some View {
         HStack(spacing: 10) {
             Menu {
-                Picker("Language for This Recording", selection: languageChoice) {
+                Picker("Language for the Next Recording or Import", selection: languageChoice) {
                     ForEach(LanguageConstants.availableLanguages.prefix(3), id: \.self) { key in
                         Text(languageLabel(for: key)).tag(key)
                     }
@@ -1337,7 +1342,7 @@ struct RecordingControls: View {
                         .fill(nextRecordingLanguageName == nil ? statusTint : .orange)
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(session.pendingLanguageKey == nil ? "Language" : "This recording")
+                        Text(session.pendingLanguageKey == nil ? "Language" : "Next only")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                         Text(languageLabel(for: nextRecordingLanguageKey))
@@ -1909,7 +1914,7 @@ struct VoiceNoteDetailView: View {
                     variant: note.transcriptionModelDisplayName == nil ? .neutral : .info
                 )
                 if note.usedParakeetForEnglish {
-                    PillBadge(text: "Parakeet for English", systemImage: "character.bubble", variant: .info)
+                    PillBadge(text: "Parakeet", systemImage: "character.bubble", variant: .info)
                 }
                 if let computeLabel = note.transcriptionComputeBadgeLabel {
                     PillBadge(text: computeLabel, systemImage: "cpu", variant: .info)

@@ -51,6 +51,19 @@ final class SegmentedAudioTranscriber {
     /// Frees Parakeet once a run is done with it. Tests replace it.
     var releaseEnglishEngine: () async -> Void
 
+    /// Set for a note the user chose English for, which saves the Qwen3-ASR
+    /// pass: Parakeet transcribes the file in one go, as it does a long English
+    /// stretch, and each slice takes its words. Qwen3-ASR takes over only when
+    /// Parakeet fails or hears nothing in the whole file.
+    private var parakeetFirst = false
+    private var parakeetRan = false
+    /// The words of Parakeet's run no slice has taken yet.
+    private var parakeetWords: ArraySlice<TimedWord>?
+    /// How long Parakeet's run took, until a slice has counted it.
+    private var parakeetSeconds: TimeInterval = 0
+    /// Whether any slice of this run took Parakeet's words.
+    private var parakeetWroteText = false
+
     /// When true, the segment loop stops at the next boundary, leaving the
     /// sidecar intact for later resume. Wired to background-time expiration.
     var shouldStopForBackground: () -> Bool = { false }
@@ -85,6 +98,16 @@ final class SegmentedAudioTranscriber {
     }
 
     func transcribe(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession? = nil) async {
+        parakeetFirst = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id)) == .english
+        await run(note: note, sourceURL: sourceURL, telemetrySession: suppliedSession)
+        if parakeetFirst { await releaseEnglishEngine() }
+        // A paused import keeps its choice for when it resumes.
+        if transcriptionService.isDiscarded(noteID: note.id) || note.transcriptionState == .completed {
+            transcriptionService.setLanguageKey(nil, for: note.id)
+        }
+    }
+
+    private func run(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession?) async {
         guard !transcriptionService.isLocalRecording(noteID: note.id),
               !transcriptionService.isDiscarded(noteID: note.id),
               !transcriptionService.isUserPaused(note),
@@ -154,7 +177,7 @@ final class SegmentedAudioTranscriber {
         defer { transcriptionService.endExternalTranscription(noteID: note.id) }
 
         if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
-            let outcome = await transcribeSegmentOutcome(sourceURL)
+            let outcome = await sliceOutcome(sourceURL, of: sourceURL, from: 0, to: info.totalFrames, info: info)
             if transcriptionService.isDiscarded(noteID: note.id) { return }
             guard ownsRun(note) else { return }
             if transcriptionService.isRunCancelled(noteID: note.id) || transcriptionService.isUserPaused(note) || Task.isCancelled {
@@ -170,8 +193,7 @@ final class SegmentedAudioTranscriber {
                 in: [EnglishStretchRouting.onePassSlice(outcome, duration: duration)],
                 of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
                 guard ownsRun(note) else { return }
-                switch outcome {
-                case .transcribed(let result) where routed.slices[0].text != nil:
+                if case .transcribed(let result) = outcome, routed.slices[0].text != nil {
                     let english = EnglishStretchRouting.transcript(of: routed.slices)
                     note.setTranscript(english.text, spans: english.spans)
                     note.lastTranscriptionDuration = result.duration
@@ -180,13 +202,7 @@ final class SegmentedAudioTranscriber {
                     note.completeTranscription()
                     note.transcriptionOutcome = .transcribed
                     note.clearTransientTranscriptionFlags()
-                case .noSpeech where routed.slices[0].text != nil:
-                    // Only an English choice sends a slice without speech to Parakeet.
-                    let english = EnglishStretchRouting.transcript(of: routed.slices)
-                    finalizeSinglePass(note: note, outcome: .transcribed(TranscriptionResult(
-                        text: english.text, duration: 0, modelIdentifier: nil)),
-                        duration: duration, hadExistingTranscript: hadExistingTranscript)
-                default:
+                } else {
                     finalizeSinglePass(note: note, outcome: outcome, duration: duration, hadExistingTranscript: hadExistingTranscript)
                 }
             } else {
@@ -401,7 +417,7 @@ final class SegmentedAudioTranscriber {
             }
 
             activeSegment = (noteID, start, end, info.totalFrames)
-            var outcome = await transcribeSegmentOutcome(segmentURL)
+            var outcome = await sliceOutcome(segmentURL, of: sourceURL, from: start, to: end, info: info)
             // Only an aborted decode is worth repeating; rejected output is not.
             if case .engineError(let diagnostic) = outcome, TranscriptionService.isEngineFailure(diagnostic),
                !transcriptionService.isRunCancelled(noteID: noteID), !transcriptionService.isUserPaused(note), !Task.isCancelled {
@@ -463,7 +479,9 @@ final class SegmentedAudioTranscriber {
 
         guard ownsRun(note) else { return }
 
-        if let tagged, let routed = await transcribeEnglishStretches(
+        if parakeetWroteText {
+            lastModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: lastModelIdentifier)
+        } else if let tagged, let routed = await transcribeEnglishStretches(
             in: tagged, of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
             guard ownsRun(note) else { return }
             lastModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: lastModelIdentifier)
@@ -506,19 +524,56 @@ final class SegmentedAudioTranscriber {
         note.clearTransientTranscriptionFlags()
     }
 
-    /// Runs Parakeet on the English stretches of the slices, for the language
-    /// chosen for the note. Nil when nothing was replaced.
+    /// The result for the slice `[start, end)` of the file, which `sliceURL`
+    /// holds: its share of Parakeet's words for an English choice, else
+    /// Qwen3-ASR's. A slice Parakeet heard nothing in has no speech.
+    private func sliceOutcome(
+        _ sliceURL: URL, of sourceURL: URL, from start: Int64, to end: Int64, info: AudioInfo
+    ) async -> TranscriptionOutcome {
+        guard parakeetFirst else { return await transcribeSegmentOutcome(sliceURL) }
+        if !parakeetRan { await runParakeet(on: sourceURL, from: start, to: info.totalFrames) }
+        guard let words = parakeetWords else { return await transcribeSegmentOutcome(sliceURL) }
+
+        let boundary = end < info.totalFrames ? Double(end) / info.sampleRate : .infinity
+        let sliceWords = words.prefix { ($0.start + $0.end) / 2 < boundary }
+        parakeetWords = words.dropFirst(sliceWords.count)
+        guard let text = LocalTranscriptFinalizer.finalizedText(sliceWords.map(\.text).joined(separator: " ")) else {
+            return .noSpeech
+        }
+        parakeetWroteText = true
+        defer { parakeetSeconds = 0 }
+        return .transcribed(TranscriptionResult(
+            text: text, duration: parakeetSeconds,
+            modelIdentifier: EnglishStretchRouting.modelIdentifier(afterParakeet: nil)))
+    }
+
+    private func runParakeet(on sourceURL: URL, from start: Int64, to end: Int64) async {
+        parakeetRan = true
+        let started = nowProvider()
+        do {
+            let words = try await transcribeEnglish(sourceURL, start, end)
+            if !words.isEmpty { parakeetWords = words.sorted { $0.start < $1.start }[...] }
+            parakeetSeconds = nowProvider().timeIntervalSince(started)
+        } catch {
+            debugLog("⚠️ [SegmentedAudioTranscriber] Parakeet failed on frames \(start)–\(end): \(error)")
+        }
+    }
+
+    /// Runs Parakeet on the English stretches of the slices Qwen3-ASR wrote,
+    /// for the language chosen for the note. Nil when nothing was replaced.
     private func transcribeEnglishStretches(
         in slices: [LanguageTaggedSlice],
         of note: VoiceNote,
         sourceURL: URL,
         sampleRate: Double
     ) async -> (slices: [LanguageTaggedSlice], replaced: [Int])? {
+        guard !parakeetFirst else { return nil }
         let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
-        guard !EnglishStretchRouting.stretches(in: slices, mode: mode).isEmpty else { return nil }
+        let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
+        guard !stretches.isEmpty else { return nil }
         let transcribeEnglish = self.transcribeEnglish
         let routed = await EnglishStretchRouting.transcribeStretches(
-            in: slices, mode: mode, fileURL: sourceURL, sampleRate: sampleRate, transcribe: transcribeEnglish)
+            stretches, in: slices, fileURL: sourceURL, sampleRate: sampleRate, transcribe: transcribeEnglish)
         await releaseEnglishEngine()
         return routed.replaced.isEmpty ? nil : routed
     }

@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 /// One slice of a transcribed recording as Qwen3-ASR left it: where it sits,
 /// its text, and the language the model named for it.
@@ -25,8 +26,9 @@ struct TimedWord: Equatable, Sendable {
 /// Parakeet TDT v2 is more accurate than Qwen3-ASR on English and only knows
 /// English, so it takes over long English stretches and nothing else:
 /// - Reading the slices in order, consecutive English slices form a stretch.
-///   A slice tagged with any other language ends it; English after that
-///   starts a new one.
+///   A slice tagged with any other language, or whose text does not read as
+///   English (`readsAsEnglish`), ends it and stays with Qwen3-ASR; English
+///   after that starts a new one.
 /// - Slices tagged "None" or without a tag (silence, gated slices, failures)
 ///   neither end a stretch nor start one. Between two English slices they go
 ///   to Parakeet with the stretch; before its first or after its last English
@@ -35,18 +37,32 @@ struct TimedWord: Equatable, Sendable {
 ///   from its first English slice's start to its last one's end, so
 ///   recordings that switch back and forth keep Qwen3-ASR throughout.
 /// - A recording with no other language needs no minimum: its English goes
-///   to Parakeet however short it is. Han characters in Qwen3-ASR's text
-///   count as another language, since a slice that mixes Chinese into
-///   English is often tagged English.
+///   to Parakeet however short it is.
+///
+/// The tag and the text both count because each catches what the other
+/// misses: a slice that mixes another language into English is often tagged
+/// English, and Qwen3-ASR sometimes writes foreign speech as English while
+/// still naming the language.
 enum EnglishStretchRouting {
     static let minimumStretchSeconds: TimeInterval = 180
     static let englishTag = "English"
+    /// The language recognizer is unreliable on shorter sentences: it reads
+    /// "Bye." as Danish.
+    static let minimumCheckedSentenceWords = 5
+    /// A sentence the recognizer gives to another language still counts as
+    /// English when it rates English at least this high.
+    static let englishConfidenceToKeepSentence = 0.5
+    /// Spoken fillers, which the recognizer reads as words of other languages:
+    /// "um" as Portuguese.
+    private static let fillerPattern = #"\b(um+|uh+|er+m?|ah+|hm+|mm+)\b[,.]?\s*"#
     /// Added to a note's model identifier when Parakeet replaced part of its text.
     static let parakeetModelSuffix = "+parakeet"
 
     /// The model identifier of a note whose text Parakeet replaced in part.
-    static func modelIdentifier(afterParakeet identifier: String?) -> String? {
-        identifier.map { $0 + parakeetModelSuffix }
+    /// Qwen3-ASR names no model when it hears no speech: `nil` means this device's.
+    static func modelIdentifier(afterParakeet identifier: String?) -> String {
+        let identifier = identifier ?? Qwen3Backend.current.modelIdentifier
+        return identifier.hasSuffix(parakeetModelSuffix) ? identifier : identifier + parakeetModelSuffix
     }
 
     /// How the language for a recording was chosen.
@@ -92,7 +108,8 @@ enum EnglishStretchRouting {
         case .automatic:
             break
         }
-        let minimumSeconds = isEnglishOnly(slices) ? 0 : minimumSeconds
+        let mayBeEnglish = slices.map(Self.mayBeEnglish)
+        let minimumSeconds = mayBeEnglish.allSatisfy { $0 } ? 0 : minimumSeconds
         var result: [ClosedRange<Int>] = []
         var first: Int?
         var last: Int?
@@ -104,49 +121,86 @@ enum EnglishStretchRouting {
             last = nil
         }
         for (index, slice) in slices.enumerated() {
-            switch slice.language {
-            case englishTag?:
+            if !mayBeEnglish[index] {
+                close()
+            } else if slice.language == englishTag {
                 if first == nil { first = index }
                 last = index
-            case nil, "None"?:
-                continue
-            default:
-                close()
             }
         }
         close()
         return result
     }
 
-    /// True when no slice is tagged with another language and Qwen3-ASR's
-    /// text holds no Han characters.
-    static func isEnglishOnly(_ slices: [LanguageTaggedSlice]) -> Bool {
-        slices.allSatisfy { slice in
-            switch slice.language {
-            case englishTag?, nil, "None"?: break
-            default: return false
-            }
-            return !(slice.text?.unicodeScalars.contains { $0.properties.isIdeographic } ?? false)
+    /// `stretches(in:mode:)` off the main actor: the text check takes a few
+    /// milliseconds a slice, which adds up on a long recording.
+    static func stretchesInBackground(in slices: [LanguageTaggedSlice], mode: Mode) async -> [ClosedRange<Int>] {
+        await Task.detached(priority: .utility) { stretches(in: slices, mode: mode) }.value
+    }
+
+    /// False when the slice's tag or its text points to another language.
+    private static func mayBeEnglish(_ slice: LanguageTaggedSlice) -> Bool {
+        switch slice.language {
+        case englishTag?, nil, "None"?: return slice.text.map(readsAsEnglish) ?? true
+        default: return false
         }
+    }
+
+    /// False when the text shows another language: a letter outside the Latin
+    /// alphabet, or a sentence the system's language recognizer gives to
+    /// another language. The recognizer has to be asked sentence by sentence:
+    /// asked about a whole slice, it names the language most of it is in and
+    /// answers English even for half English, half Chinese. It cannot see a
+    /// few foreign words inside an English sentence.
+    static func readsAsEnglish(_ text: String) -> Bool {
+        guard !hasNonLatinLetters(text) else { return false }
+        let text = text.replacingOccurrences(
+            of: fillerPattern, with: "", options: [.regularExpression, .caseInsensitive])
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = text
+        return !tokenizer.tokens(for: text.startIndex..<text.endIndex).contains {
+            isInAnotherLanguage(text[$0].trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
+    private static func hasNonLatinLetters(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            !scalar.isASCII && scalar.properties.isAlphabetic
+                && !(scalar.properties.name?.hasPrefix("LATIN") ?? false)
+        }
+    }
+
+    private static func isInAnotherLanguage(_ sentence: String) -> Bool {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = sentence
+        guard tokenizer.tokens(for: sentence.startIndex..<sentence.endIndex).count >= minimumCheckedSentenceWords else {
+            return false
+        }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sentence)
+        guard let language = recognizer.dominantLanguage, language != .english, language != .undetermined else {
+            return false
+        }
+        return (recognizer.languageHypotheses(withMaximum: 30)[.english] ?? 0) < englishConfidenceToKeepSentence
     }
 
     /// Transcribes one stretch of a file with Parakeet: the file, its first
     /// and end frame. Returns the words timed from the start of the file.
     typealias Transcriber = (URL, Int64, Int64) async throws -> [TimedWord]
 
-    /// Transcribes the stretches `stretches(in:mode:)` picks with Parakeet and
-    /// puts its words in their slices. Returns the slices and the indices it
-    /// replaced; a stretch that fails keeps Qwen3-ASR's text.
+    /// Transcribes the stretches of `slices` with Parakeet and puts its words
+    /// in their slices. Returns the slices and the indices it replaced; a
+    /// stretch that fails keeps Qwen3-ASR's text.
     static func transcribeStretches(
+        _ stretches: [ClosedRange<Int>],
         in slices: [LanguageTaggedSlice],
-        mode: Mode,
         fileURL: URL,
         sampleRate: Double,
         transcribe: Transcriber
     ) async -> (slices: [LanguageTaggedSlice], replaced: [Int]) {
         var result = slices
         var replaced: [Int] = []
-        for stretch in stretches(in: slices, mode: mode) {
+        for stretch in stretches {
             if Task.isCancelled { break }
             let start = Int64((slices[stretch.lowerBound].start * sampleRate).rounded())
             let end = Int64((slices[stretch.upperBound].end * sampleRate).rounded())

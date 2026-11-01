@@ -1553,7 +1553,7 @@ private extension TranscriptionService {
 extension TranscriptionService {
     /// Loose backstop, not a normal-speech quality gate: legitimate repeated
     /// terminology can exceed ratios of 2.0 and 2.4.
-    static let repetitionCompressionLimit: Float = 8.0
+    nonisolated static let repetitionCompressionLimit: Float = 8.0
 
     /// Marks a diagnostic for a decode the engine aborted, as opposed to output
     /// it produced and we rejected. Only the former is worth another attempt.

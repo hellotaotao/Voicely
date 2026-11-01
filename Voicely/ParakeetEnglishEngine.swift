@@ -5,10 +5,11 @@ import os
 
 /// Parakeet TDT v2 (FluidAudio, CoreML on CPU + Neural Engine): transcribes
 /// the English stretches of a recording again after Qwen3-ASR has run, see
-/// `EnglishStretchRouting`, and files imported with English chosen, which
-/// skip Qwen3-ASR. It ships inside the app like Qwen3-ASR, is loaded
-/// only while it works and unloaded afterwards, and runs on every platform
-/// the same way, so the phone can use it while locked.
+/// `EnglishStretchRouting`, and recordings and files with English chosen,
+/// which skip Qwen3-ASR. It ships inside the app like Qwen3-ASR, is loaded
+/// only while it works, or while a recording with English chosen goes on, and
+/// unloaded afterwards, and runs on every platform the same way, so the phone
+/// can use it while locked.
 actor ParakeetEnglishEngine {
     static let shared = ParakeetEnglishEngine()
 
@@ -58,26 +59,33 @@ actor ParakeetEnglishEngine {
 
     private var manager: AsrManager?
     /// Whether a call holds the engine, and the calls waiting for it.
-    private var isBusy = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var turns = ParakeetTurns<CheckedContinuation<Void, Never>>()
+    /// Recordings that keep the model loaded between their calls.
+    private var holds = 0
 
     /// Calls run one at a time, such as a recording that stops during an
     /// English import: this actor lets them interleave at every await, and
     /// `AsrManager` has one progress stream, which crashes when two tasks read it.
-    private func acquire() async {
-        guard isBusy else {
-            isBusy = true
-            return
-        }
-        await withCheckedContinuation { waiting.append($0) }
+    /// A call `ahead` goes before every call still waiting.
+    private func acquire(ahead: Bool = false) async {
+        guard !turns.takeIfFree() else { return }
+        await withCheckedContinuation { turns.wait($0, ahead: ahead) }
     }
 
     private func release() {
-        if waiting.isEmpty {
-            isBusy = false
-        } else {
-            waiting.removeFirst().resume()
-        }
+        turns.handOver()?.resume()
+    }
+
+    /// Keeps the model loaded between calls until `endHold`, for a recording
+    /// that transcribes with Parakeet as it goes.
+    func hold() {
+        holds += 1
+    }
+
+    /// Lets the model go once no recording holds it.
+    func endHold() async {
+        holds = max(0, holds - 1)
+        await unload()
     }
 
     /// Calls `beat` now and then every `interval` until cancelled. Detached,
@@ -99,13 +107,15 @@ actor ParakeetEnglishEngine {
     /// works through the audio (0...1), and with 0 every few seconds before
     /// that: loading the model and converting the audio report nothing of
     /// their own, and iOS ends a background task that goes quiet for long.
+    /// A live slice of a recording goes `ahead` of calls already waiting.
     func transcribe(
         fileURL: URL,
         startFrame: AVAudioFramePosition,
         endFrame: AVAudioFramePosition,
+        ahead: Bool = false,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> [TimedWord] {
-        await acquire()
+        await acquire(ahead: ahead)
         defer { release() }
         let preparing = Self.preparationHeartbeat { onProgress(0) }
         defer { preparing.cancel() }
@@ -134,10 +144,13 @@ actor ParakeetEnglishEngine {
         }
     }
 
-    /// Frees the model's memory. The next transcription loads it again.
+    /// Frees the model's memory unless a recording holds it. The next
+    /// transcription loads it again.
     func unload() async {
+        guard holds == 0 else { return }
         await acquire()
         defer { release() }
+        guard holds == 0 else { return }
         await manager?.cleanup()
         manager = nil
     }
@@ -214,5 +227,36 @@ actor ParakeetEnglishEngine {
             throw error
         }
         return outputURL
+    }
+}
+
+/// The order calls take Parakeet in: one at a time, first come first served,
+/// except that calls marked `ahead` go before every call still waiting.
+struct ParakeetTurns<Waiter> {
+    private(set) var isBusy = false
+    private var ahead: [Waiter] = []
+    private var behind: [Waiter] = []
+
+    /// Takes the engine when it is free; false when the caller has to wait.
+    mutating func takeIfFree() -> Bool {
+        guard !isBusy else { return false }
+        isBusy = true
+        return true
+    }
+
+    mutating func wait(_ waiter: Waiter, ahead isAhead: Bool) {
+        if isAhead {
+            ahead.append(waiter)
+        } else {
+            behind.append(waiter)
+        }
+    }
+
+    /// The waiter the engine goes to next, or nil, freeing it, when no one waits.
+    mutating func handOver() -> Waiter? {
+        if !ahead.isEmpty { return ahead.removeFirst() }
+        if !behind.isEmpty { return behind.removeFirst() }
+        isBusy = false
+        return nil
     }
 }

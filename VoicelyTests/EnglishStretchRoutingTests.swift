@@ -571,3 +571,170 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.note.transcriptionOutcome == .failed)
     }
 }
+
+/// A recording with English chosen runs on Parakeet alone.
+@Suite(.serialized)
+struct EnglishRecordingTests {
+    private struct ParakeetDown: Error {}
+
+    @Test @MainActor func liveSlicesGoToParakeetAndNeverToQwen() async throws {
+        let pcmURL = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 3 * 14)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let service = TranscriptionService()
+        service.setModelManager(EnglishStretchTranscriptionTests.LoadedModelManager(backend: .coreML))
+        var qwenCalls = 0
+        service.transcribeImpl = { _, _ in
+            qwenCalls += 1
+            return "qwen"
+        }
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        coordinator.transcribesWithParakeet = true
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
+        var failSecondSlice = true
+        coordinator.transcribeEnglishSlice = { _, start, _, progress in
+            progress(0.5)
+            let slice = start / (14 * 16_000)
+            if slice == 1, failSecondSlice {
+                failSecondSlice = false
+                throw ParakeetDown()
+            }
+            return [TimedWord(text: "live\(slice)", start: 1, end: 2)]
+        }
+        var stretches: [(Int64, Int64)] = []
+        coordinator.transcribeEnglish = { _, start, end, _ in
+            stretches.append((start, end))
+            return EnglishStretchTranscriptionTests.words(for: 0...2, start: start, end: end)
+        }
+        coordinator.releaseEnglishEngine = {}
+        let workBefore = service.decodeWorkCount
+
+        for slice in 0..<2 {
+            await coordinator.transcribeSegment(upToFrame: Int64(slice * 14 + 15) * 16_000)
+        }
+        // The second slice failed live.
+        #expect(coordinator.accumulatedTranscript == "live0")
+        #expect(service.decodeWorkCount > workBefore)
+
+        // Stop retries it, then Parakeet transcribes the whole recording again.
+        _ = await coordinator.stop(currentFrame: 3 * 14 * 16_000)
+        #expect(coordinator.accumulatedTranscript == "live0\nlive1\nlive2")
+        #expect(await coordinator.transcribeEnglishStretches(mode: .english))
+        #expect(stretches.count == 1 && stretches[0] == (0, 3 * 14 * 16_000))
+        #expect(coordinator.accumulatedTranscript == "en0\nen1\nen2")
+        #expect(qwenCalls == 0)
+    }
+
+    @Test @MainActor func qwenIsUnloadedUntilTheRecordingEnds() async throws {
+        let service = TranscriptionService()
+        var loads = 0
+        let manager = ModelManager(backend: .coreML, loader: { _ in loads += 1 })
+        service.setModelManager(manager)
+        #expect(await service.loadSpeechModel())
+        var holds: [Bool] = []
+        service.keepEnglishEngineLoaded = { holds.append($0) }
+        var qwenCalls = 0
+        service.transcribeImpl = { _, _ in
+            qwenCalls += 1
+            return "qwen"
+        }
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 2)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let recording = UUID()
+
+        service.beginEnglishRecording(noteID: recording)
+        await service.waitForEngineSwitch()
+
+        #expect(!manager.isModelLoaded())
+        #expect(holds == [true])
+        #expect(service.isReadyToTranscribe())
+        #expect(await service.loadSpeechModel() == false)
+        let outcome = await service.transcribeAudioOutcome(filePath: url.path)
+        if case .modelUnavailable = outcome {} else { Issue.record("Qwen3-ASR decoded during the recording: \(outcome)") }
+        #expect(qwenCalls == 0)
+
+        service.endEnglishRecording(noteID: recording)
+        await service.waitForEngineSwitch()
+
+        #expect(manager.isModelLoaded())
+        #expect(loads == 2)
+        #expect(holds == [true, false])
+    }
+
+    @Test @MainActor func anotherRecordingBringsQwenBackWhileOneWithEnglishSettles() async {
+        let service = TranscriptionService()
+        let manager = ModelManager(backend: .coreML, loader: { _ in })
+        service.setModelManager(manager)
+        service.keepEnglishEngineLoaded = { _ in }
+        _ = await service.loadSpeechModel()
+        let settling = UUID()
+        service.beginEnglishRecording(noteID: settling)
+        await service.waitForEngineSwitch()
+
+        service.endEnglishRecordings()
+        await service.waitForEngineSwitch()
+
+        #expect(!service.isRecordingEnglish)
+        #expect(manager.isModelLoaded())
+        // The settling recording ending later changes nothing.
+        service.endEnglishRecording(noteID: settling)
+        await service.waitForEngineSwitch()
+        #expect(manager.isModelLoaded())
+    }
+
+    @Test @MainActor func queueRunsOnlyParakeetNotesDuringTheRecording() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let service = TranscriptionService()
+        let manager = ModelManager(backend: .coreML, loader: { _ in })
+        service.setModelManager(manager)
+        _ = await service.loadSpeechModel()
+        service.deviceIDProvider = { "this-device" }
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        service.audioDurationProvider = { _ in 10 }
+        service.keepEnglishEngineLoaded = { _ in }
+        service.releaseEnglishEngine = {}
+        var qwenCalls = 0
+        service.transcribeImpl = { _, _ in
+            qwenCalls += 1
+            return "qwen"
+        }
+        service.transcribeEnglish = { _, _, _ in [TimedWord(text: "parakeet", start: 4, end: 5)] }
+        let other = VoiceNote(title: "Chinese", audioFilePath: url.path)
+        let english = VoiceNote(title: "English", audioFilePath: url.path)
+        for note in [other, english] {
+            note.transcriptionOriginDeviceID = "this-device"
+            note.queueTranscription(at: Date())
+        }
+        service.setLanguageKey("chinese", for: other.id)
+        service.setLanguageKey("english", for: english.id)
+
+        service.beginEnglishRecording(noteID: UUID())
+        await service.waitForEngineSwitch()
+        try #require(!manager.isModelLoaded())
+        await service.processPendingTranscriptions(notes: [other, english])
+
+        #expect(english.transcription == "parakeet")
+        #expect(english.transcriptionState == .completed)
+        #expect(other.transcriptionState == .queued)
+        #expect(qwenCalls == 0)
+    }
+
+    @Test func liveSlicesGoAheadOfWorkAlreadyWaiting() {
+        var turns = ParakeetTurns<String>()
+        let first = turns.takeIfFree()
+        let second = turns.takeIfFree()
+        #expect(first && !second)
+        turns.wait("import", ahead: false)
+        turns.wait("slice 1", ahead: true)
+        turns.wait("stretch", ahead: false)
+        turns.wait("slice 2", ahead: true)
+
+        var order: [String] = []
+        while let next = turns.handOver() {
+            order.append(next)
+            #expect(turns.isBusy)
+        }
+        #expect(order == ["slice 1", "slice 2", "import", "stretch"])
+        #expect(!turns.isBusy)
+    }
+}

@@ -121,6 +121,86 @@ class TranscriptionService: ObservableObject {
         return Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)
     }
 
+    /// English is chosen for `noteID`'s audio, so Parakeet transcribes it and
+    /// Qwen3-ASR only steps in when Parakeet fails.
+    func transcribesWithParakeet(_ noteID: UUID?) -> Bool {
+        EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID)) == .english
+    }
+
+    // MARK: Recordings with English chosen
+
+    /// Recordings with English chosen, from their start until their text is
+    /// settled. They run on Parakeet alone: while any goes on, Qwen3-ASR is
+    /// unloaded and work that needs it waits, and Parakeet stays loaded.
+    private var englishRecordingNoteIDs = Set<UUID>()
+    var isRecordingEnglish: Bool { !englishRecordingNoteIDs.isEmpty }
+    /// Loads and unloads in the order recordings start and end.
+    private var engineSwitch: Task<Void, Never>?
+
+    /// Keeps Parakeet loaded (true) or lets it go (false). Tests replace it.
+    var keepEnglishEngineLoaded: (Bool) async -> Void = { keep in
+        if keep {
+            await ParakeetEnglishEngine.shared.hold()
+        } else {
+            await ParakeetEnglishEngine.shared.endHold()
+        }
+    }
+
+    func beginEnglishRecording(noteID: UUID) {
+        let isFirst = englishRecordingNoteIDs.isEmpty
+        englishRecordingNoteIDs.insert(noteID)
+        guard isFirst else { return }
+        switchEngines { [weak self] in
+            guard let self else { return }
+            await self.keepEnglishEngineLoaded(true)
+            // A Qwen3-ASR decode already running finishes first; no new one starts.
+            while self.isTranscribing {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard self.isRecordingEnglish else { return }
+            await self.modelManager?.unloadModel()
+            self.updateEngineStatus()
+        }
+    }
+
+    func endEnglishRecording(noteID: UUID) {
+        guard englishRecordingNoteIDs.remove(noteID) != nil, englishRecordingNoteIDs.isEmpty else { return }
+        switchEngines { [weak self] in
+            guard let self else { return }
+            await self.keepEnglishEngineLoaded(false)
+            // Loading posts modelLoadedNotification, which resumes the work that waited.
+            guard !self.isRecordingEnglish else { return }
+            _ = await self.loadSpeechModel()
+        }
+    }
+
+    /// A recording that needs Qwen3-ASR starts: recordings with English chosen
+    /// that are still settling their text no longer keep it unloaded.
+    func endEnglishRecordings() {
+        for noteID in englishRecordingNoteIDs {
+            endEnglishRecording(noteID: noteID)
+        }
+    }
+
+    /// Waits for the loads and unloads recordings started so far.
+    func waitForEngineSwitch() async {
+        await engineSwitch?.value
+    }
+
+    private func switchEngines(_ work: @escaping @MainActor () async -> Void) {
+        let previous = engineSwitch
+        engineSwitch = Task { @MainActor in
+            await previous?.value
+            await work()
+        }
+    }
+
+    /// Whether work can start: Qwen3-ASR is loaded, or a recording with English
+    /// chosen keeps it unloaded and Parakeet takes what it can meanwhile.
+    func isReadyToTranscribe() -> Bool {
+        isEngineAvailable() || isRecordingEnglish
+    }
+
     /// The note whose audio is being decoded, for its language choice.
     private var decodingNoteID: UUID?
 
@@ -224,6 +304,8 @@ class TranscriptionService: ObservableObject {
             print("ModelManager not available")
             return false
         }
+        // Loaded again once the recording with English chosen ends.
+        guard !isRecordingEnglish else { return false }
 
         loadingProgress = 0.1
         await modelManager.loadModel()
@@ -289,7 +371,7 @@ class TranscriptionService: ObservableObject {
     func processPendingTranscriptions(notes: [VoiceNote]) async {
         updateEngineStatus()
 
-        guard isEngineLoaded else {
+        guard isEngineLoaded || isRecordingEnglish else {
             return
         }
 
@@ -311,6 +393,9 @@ class TranscriptionService: ObservableObject {
             needsReprocessing = false
 
             while let note = dequeueNextPendingTranscription() {
+                // During a recording with English chosen only Parakeet's notes
+                // run; the rest come back when Qwen3-ASR is loaded again.
+                if isRecordingEnglish, !transcribesWithParakeet(note.id) { continue }
                 nextUpNoteID = note.id
                 publishQueueOrder()
                 while isTranscribing || activeNoteID != nil {
@@ -362,7 +447,7 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
 
         let workingCopy = segmentProgressStore.existingWorkingCopyURL(for: note.id)
-        guard isEngineLoaded, !note.audioFilePath.isEmpty || workingCopy != nil,
+        guard isEngineLoaded || isRecordingEnglish, !note.audioFilePath.isEmpty || workingCopy != nil,
               !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
             return false
         }
@@ -699,6 +784,9 @@ class TranscriptionService: ObservableObject {
         }
 
         if pausedForEngine, let telemetrySession { resumeTelemetryWork(telemetrySession) }
+        // Qwen3-ASR waits out a recording with English chosen; the queue and
+        // imports pick this work up once it is loaded again.
+        if isRecordingEnglish { return .modelUnavailable }
         lastCancellationHandled = false
         if telemetrySession?.isCancelled == true { return .cancelled }
         if cancelRequested {

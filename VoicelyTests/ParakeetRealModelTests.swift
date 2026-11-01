@@ -94,6 +94,54 @@ struct ParakeetRealModelTests {
         #expect(coordinator.accumulatedSpans?.count == coordinator.languageTaggedSlices.filter { $0.text != nil }.count)
     }
 
+    /// A live recording with English chosen end to end: Parakeet decodes it
+    /// slice by slice as it is "recorded" and whole again at stop, and
+    /// Qwen3-ASR is never loaded.
+    @Test @MainActor func englishRecordingRunsOnParakeetAlone() async throws {
+        let file = try AVAudioFile(forReading: ParakeetRealModelInput.audioURL)
+        let pcmURL = try ParakeetEnglishEngine.writeMono16k(
+            from: ParakeetRealModelInput.audioURL, startFrame: 0, endFrame: file.length)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let modelManager = ModelManager()
+        let service = TranscriptionService(modelManager: modelManager)
+        let noteID = UUID()
+        service.setLanguageKey("english", for: noteID)
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        coordinator.transcribesWithParakeet = true
+        coordinator.configureTelemetry(noteID: noteID)
+        await ParakeetEnglishEngine.shared.hold()
+
+        let totalFrames = try AVAudioFile(forReading: pcmURL).length
+        let liveStarted = ProcessInfo.processInfo.systemUptime
+        var frame: AVAudioFramePosition = 0
+        while frame < totalFrames {
+            frame = min(totalFrames, frame + 16_000)
+            await coordinator.transcribeSegment(upToFrame: frame)
+        }
+        let live = await coordinator.stop(currentFrame: totalFrames)
+        let liveSeconds = ProcessInfo.processInfo.systemUptime - liveStarted
+        let sliceCount = coordinator.languageTaggedSlices.count
+
+        let wholeStarted = ProcessInfo.processInfo.systemUptime
+        let replaced = await coordinator.transcribeEnglishStretches(mode: .english)
+        let wholeSeconds = ProcessInfo.processInfo.systemUptime - wholeStarted
+        let whole = coordinator.accumulatedTranscript
+        await ParakeetEnglishEngine.shared.endHold()
+
+        let liveWords = live.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" })
+        let wholeWords = whole.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" })
+        let audioSeconds = Double(totalFrames) / 16_000
+        print("🔍 English recording: \(audioSeconds) s of audio, \(sliceCount) slices")
+        print("🔍 live: \(liveWords.count) words in \(liveSeconds) s (slicing included); whole at stop: \(wholeWords.count) words in \(wholeSeconds) s")
+        print("🔍 live head: " + live.prefix(300))
+        print("🔍 whole head: " + whole.prefix(300))
+        #expect(!modelManager.isModelLoaded())
+        #expect(replaced)
+        #expect(liveWords.count > Int(audioSeconds))
+        #expect(wholeWords.count > Int(audioSeconds))
+        #expect(coordinator.unrecoveredSliceCount == 0)
+    }
+
     /// A short import end to end with both real models: Qwen3-ASR decodes it
     /// in one pass, and the language it names sends the file to Parakeet.
     @Test @MainActor func shortEnglishImportGoesToParakeet() async throws {

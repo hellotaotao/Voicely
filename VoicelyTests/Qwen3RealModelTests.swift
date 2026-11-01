@@ -104,6 +104,34 @@ struct Qwen3RealModelTests {
         await store.unloadModel()
     }
 
+    /// A recording with English chosen unloads the bundled model and loads it
+    /// again when it ends; the reloaded model transcribes as before.
+    @Test @MainActor func modelUnloadedForAnEnglishRecordingLoadsAgain() async throws {
+        let manager = ModelManager()
+        await manager.loadModel()
+        try #require(manager.isModelLoaded(), "The bundled speech model could not be loaded")
+        let samples = try Qwen3AudioPCM.loadPCM16kMono(url: Qwen3RealModelInput.audioURL)
+        let slice = Array(samples.prefix(20 * 16_000))
+        let before = try await Qwen3ASRModelStore.shared.transcribe(samples: slice, languageHint: nil)
+        let loadedFootprint = Self.physicalFootprint()
+
+        await manager.unloadModel()
+        #expect(!manager.isModelLoaded())
+        let unloadedFootprint = Self.physicalFootprint()
+        await manager.loadModel()
+        #expect(manager.isModelLoaded())
+        let after = try await Qwen3ASRModelStore.shared.transcribe(samples: slice, languageHint: nil)
+
+        print("QWEN-REAL reload footprintMB loaded=\(loadedFootprint / 1_048_576) unloaded=\(unloadedFootprint / 1_048_576) reloaded=\(Self.physicalFootprint() / 1_048_576)")
+        print("QWEN-REAL reload before=\(before.text) after=\(after.text)")
+        #expect(after.text == before.text)
+        #expect(unloadedFootprint < loadedFootprint)
+        if manager.backend == .mlx {
+            #expect(Memory.cacheLimit == Qwen3ASRDefaults.mlxCacheLimitBytes)
+        }
+        await manager.unloadModel()
+    }
+
     /// A CoreML slice runs as one synchronous call; cancelling it must stop
     /// between tokens instead of after the whole slice.
     @Test func cancellingStopsACoreMLSliceBetweenTokens() async throws {

@@ -109,6 +109,7 @@ struct RecordingSessionTests {
         let audio = MockRecordingAudio()
         audio.currentPCMFileURL = TestTemporaryDirectory.fileURL(prefix: "voicely_test_", extension: "caf")
         let transcription = TranscriptionService()
+        transcription.keepEnglishEngineLoaded = { _ in }
         let session = RecordingSession(audioService: audio, transcriptionService: transcription)
         let collector = NoteCollector()
         session.onRecordingComplete = { collector.append($0) }
@@ -121,6 +122,63 @@ struct RecordingSessionTests {
         #expect(transcription.languageHint(for: note.id) == "English")
         #expect(session.pendingLanguageKey == nil)
         transcription.setLanguageKey(nil, for: note.id)
+    }
+
+    @Test func recordingWithEnglishChosenRunsOnParakeetUntilItsTextIsSettled() async throws {
+        let audio = MockRecordingAudio()
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        audio.currentPCMFileURL = pcmURL
+        let transcription = TranscriptionService()
+        var holds: [Bool] = []
+        transcription.keepEnglishEngineLoaded = { holds.append($0) }
+        let session = RecordingSession(audioService: audio, transcriptionService: transcription)
+        let collector = NoteCollector()
+        session.onRecordingComplete = { collector.append($0) }
+        var coordinator: IncrementalTranscriptionCoordinator?
+        session.coordinatorFactory = { url in
+            let created = IncrementalTranscriptionCoordinator(transcriptionService: transcription, recordingFileURL: url)
+            created.transcribeEnglishSlice = { _, _, _, _ in [TimedWord(text: "live", start: 1, end: 2)] }
+            created.transcribeEnglish = { _, _, _, _ in [TimedWord(text: "settled", start: 1, end: 2)] }
+            created.releaseEnglishEngine = {}
+            coordinator = created
+            return created
+        }
+        session.pendingLanguageKey = "english"
+
+        session.startRecording()
+        try await waitUntil { session.currentRecordingNote != nil }
+        let note = try #require(collector.notes.first)
+        #expect(transcription.isRecordingEnglish)
+        #expect(coordinator?.transcribesWithParakeet == true)
+        audio.recordingDuration = 5
+        audio.currentFramePosition = 5 * 16_000
+        session.stopRecording()
+        try await waitUntil { !session.isRecording(note) }
+        await transcription.waitForEngineSwitch()
+
+        #expect(!transcription.isRecordingEnglish)
+        #expect(holds == [true, false])
+        #expect(note.transcription == "settled")
+        #expect(note.usedParakeetForEnglish)
+    }
+
+    @Test func recordingThatNeedsQwenEndsTheHoldOfOneWithEnglishStillSettling() async throws {
+        let audio = MockRecordingAudio()
+        audio.currentPCMFileURL = TestTemporaryDirectory.fileURL(prefix: "voicely_test_", extension: "caf")
+        let transcription = TranscriptionService()
+        let session = RecordingSession(audioService: audio, transcriptionService: transcription)
+        let collector = NoteCollector()
+        session.onRecordingComplete = { collector.append($0) }
+        transcription.keepEnglishEngineLoaded = { _ in }
+        transcription.beginEnglishRecording(noteID: UUID())
+        session.pendingLanguageKey = "japanese"
+
+        session.startRecording()
+        try await waitUntil { session.currentRecordingNote != nil }
+        _ = try #require(collector.notes.first)
+
+        #expect(!transcription.isRecordingEnglish)
     }
 
     /// A recording whose live text cannot stand goes back through the queue,

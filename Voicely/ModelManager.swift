@@ -108,6 +108,18 @@ class ModelManager: ObservableObject {
         await task.value
     }
 
+    /// Frees the model's memory, after any load in progress; `loadModel`
+    /// brings it back.
+    func unloadModel() async {
+        await activeLoad?.value
+        guard modelState == .loaded else { return }
+        if injectedLoader == nil {
+            await store.unloadModel()
+        }
+        modelState = .unloaded
+        loadingProgressValue = 0
+    }
+
     func currentModelIdentifier() -> String? {
         isModelLoaded() ? selectedModel : nil
     }

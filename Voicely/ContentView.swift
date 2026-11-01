@@ -724,7 +724,7 @@ struct ContentView: View {
 
         consumePendingStartRecordingQuickActionIfNeeded()
 
-        if !transcriptionService.isEngineAvailable() {
+        if !transcriptionService.isReadyToTranscribe() {
             Task {
                 let didLoadModel = await transcriptionService.loadSpeechModel()
                 if didLoadModel {
@@ -739,7 +739,7 @@ struct ContentView: View {
     private func processQueuedTranscriptionsIfReady() async {
         transcriptionService.setModelManager(modelManager)
 
-        guard transcriptionService.isEngineAvailable() else {
+        guard transcriptionService.isReadyToTranscribe() else {
             return
         }
 
@@ -816,10 +816,10 @@ struct ContentView: View {
             try modelContext.save()
             selectedNoteID = note.id
 
-            if !transcriptionService.isEngineAvailable() {
+            if !transcriptionService.isReadyToTranscribe() {
                 _ = await transcriptionService.loadSpeechModel()
             }
-            guard transcriptionService.isEngineAvailable() else { return }
+            guard transcriptionService.isReadyToTranscribe() else { return }
             transcriptionService.setLanguageKey(languageKey, for: note.id)
             await runImportTranscription { await $0.transcribe(note: note, sourceURL: workingCopy) }
         } catch {
@@ -902,10 +902,10 @@ struct ContentView: View {
         }
         guard !transcriptionService.segmentProgressStore.listPendingNoteIDs().isEmpty else { return }
         Task { @MainActor in
-            if !transcriptionService.isEngineAvailable() {
+            if !transcriptionService.isReadyToTranscribe() {
                 _ = await transcriptionService.loadSpeechModel()
             }
-            guard transcriptionService.isEngineAvailable() else { return }
+            guard transcriptionService.isReadyToTranscribe() else { return }
             await runImportTranscription { await $0.resumePending(notes: voiceNotes) }
         }
     }

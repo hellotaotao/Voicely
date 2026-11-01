@@ -294,6 +294,16 @@ final class IncrementalTranscriptionCoordinator {
         await ParakeetEnglishEngine.shared.unload()
     }
 
+    /// The recording has English chosen: Parakeet transcribes its live slices,
+    /// and Qwen3-ASR is not used at all.
+    var transcribesWithParakeet = false
+
+    /// Transcribes one live slice with Parakeet, ahead of work already waiting
+    /// for it, such as an English import. Tests replace it.
+    var transcribeEnglishSlice: (URL, AVAudioFramePosition, AVAudioFramePosition, @escaping @Sendable (Double) -> Void) async throws -> [TimedWord] = { url, start, end, progress in
+        try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end, ahead: true, onProgress: progress)
+    }
+
     /// The slices as Qwen3-ASR left them, after `stop`.
     var languageTaggedSlices: [LanguageTaggedSlice] {
         slices.map {
@@ -492,6 +502,9 @@ final class IncrementalTranscriptionCoordinator {
         session: TranscriptionTelemetrySession
     ) async -> SliceResult {
         segmentIndex += 1
+        if transcribesWithParakeet, transcribeOverride == nil {
+            return await parakeetSliceResult(from: startFrame, to: endFrame, session: session)
+        }
         let index = segmentIndex
         let fileURL = recordingFileURL
         let extracted = await Task.detached {
@@ -547,6 +560,36 @@ final class IncrementalTranscriptionCoordinator {
                 end: Double(endFrame) / recordingSampleRate, session: session)
         }
         return result
+    }
+
+    /// A live slice of a recording with English chosen, transcribed by Parakeet.
+    /// A failure is retried at stop, and Parakeet transcribes the whole recording
+    /// again then anyway.
+    private func parakeetSliceResult(
+        from startFrame: AVAudioFramePosition,
+        to endFrame: AVAudioFramePosition,
+        session: TranscriptionTelemetrySession
+    ) async -> SliceResult {
+        decodingSlice = (startFrame, endFrame, 0)
+        defer { decodingSlice = nil }
+        let counter = transcriptionService.decodeWorkCounter
+        let words: [TimedWord]
+        do {
+            words = try await transcribeEnglishSlice(recordingFileURL, startFrame, endFrame) { [weak self] fraction in
+                // Each step counts as decode work for the background task.
+                counter.withLock { $0 &+= 1 }
+                Task { @MainActor in self?.reportSliceProgress(Float(fraction)) }
+            }
+        } catch {
+            return .failed(.engine(error.localizedDescription))
+        }
+        if !Task.isCancelled {
+            transcriptionService.recordProcessedAudio(
+                start: Double(startFrame) / recordingSampleRate,
+                end: Double(endFrame) / recordingSampleRate, session: session)
+        }
+        return Self.finalizedSegmentText(words.map(\.text).joined(separator: " "))
+            .map { SliceResult.text($0, language: nil) } ?? .silent
     }
 
     /// Records how far the decoder has reached through the slice it is decoding.

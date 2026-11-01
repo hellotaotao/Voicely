@@ -287,7 +287,10 @@ final class RecordingSession: ObservableObject {
     func startRecordingFromQuickAction() {
         guard !audioService.isRecording, !isStartingRecording else { return }
 
-        if !isModelLoaded && !isModelLoading {
+        // A recording with English chosen runs on Parakeet alone.
+        let key = pendingLanguageKey ?? UserDefaults.standard.string(forKey: Qwen3ASRDefaults.selectedLanguageKey)
+        let needsQwen = EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)) != .english
+        if needsQwen && !isModelLoaded && !isModelLoading {
             Task {
                 _ = await transcriptionService.loadSpeechModel()
             }
@@ -315,6 +318,14 @@ final class RecordingSession: ObservableObject {
         transcriptionService.configureNewNote(note, shouldStartImmediately: true)
         transcriptionService.setLanguageKey(pendingLanguageKey, for: note.id)
         pendingLanguageKey = nil
+        // With English chosen Parakeet transcribes the recording and Qwen3-ASR
+        // is unloaded until it ends; any other recording needs Qwen3-ASR back.
+        let transcribesWithParakeet = transcriptionService.transcribesWithParakeet(note.id)
+        if transcribesWithParakeet {
+            transcriptionService.beginEnglishRecording(noteID: note.id)
+        } else {
+            transcriptionService.endEnglishRecordings()
+        }
         note.isTranscribing = true
         note.transcriptionProgress = 0.0
         currentRecordingNote = note
@@ -326,6 +337,7 @@ final class RecordingSession: ObservableObject {
         RecordingLiveActivityController.shared.start(recordingID: note.id, title: note.title)
 
         let coord = coordinatorFactory(pcmURL)
+        coord.transcribesWithParakeet = transcribesWithParakeet
         coord.configureTelemetry(noteID: note.id)
         coord.telemetryCallback = { [weak note] snapshot in
             note?.replaceCumulativeTranscriptionTelemetry(snapshot)
@@ -339,8 +351,11 @@ final class RecordingSession: ObservableObject {
 
             note.setTranscript(finalizedTranscript.text, spans: nil)
             note.isTranscribing = true
-            note.transcriptionModelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
+            let modelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
                 ?? self.transcriptionService.modelManager?.selectedModel
+            note.transcriptionModelIdentifier = transcribesWithParakeet
+                ? EnglishStretchRouting.modelIdentifier(afterParakeet: modelIdentifier)
+                : modelIdentifier
             note.transcriptionLastErrorMessage = nil
         }
         coordinator = coord
@@ -751,6 +766,7 @@ final class RecordingSession: ObservableObject {
                 recordingNote.markTranscriptionFailure("Recording could not be finalized. Please check the saved audio before retrying.")
                 recordingNote.clearTransientTranscriptionFlags()
                 transcriptionService.endLocalRecording(noteID: recordingNote.id)
+                transcriptionService.endEnglishRecording(noteID: recordingNote.id)
             }
             return
         }
@@ -793,6 +809,8 @@ final class RecordingSession: ObservableObject {
                 backgroundTask.end()
                 finalizingNoteIDs.remove(note.id)
                 transcriptionService.endLocalRecording(noteID: note.id)
+                // Its text is settled, so Qwen3-ASR comes back for the work that waited.
+                transcriptionService.endEnglishRecording(noteID: note.id)
             }
             let assetTask = Task { @MainActor in
                 defer { preparingAudioNoteIDs.remove(note.id) }

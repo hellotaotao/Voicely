@@ -123,6 +123,44 @@ struct RecordingSessionTests {
         transcription.setLanguageKey(nil, for: note.id)
     }
 
+    /// A recording whose live text cannot stand goes back through the queue,
+    /// which decodes it again in the language chosen for it.
+    @Test(arguments: [true, false])
+    func recordingSentBackToTheQueueKeepsItsLanguageChoice(queued: Bool) async throws {
+        let audio = MockRecordingAudio()
+        let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 5)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        audio.currentPCMFileURL = pcmURL
+        let transcription = TranscriptionService()
+        let session = RecordingSession(audioService: audio, transcriptionService: transcription)
+        let collector = NoteCollector()
+        session.onRecordingComplete = { collector.append($0) }
+        session.coordinatorFactory = { url in
+            let coordinator = IncrementalTranscriptionCoordinator(
+                transcriptionService: TranscriptionService(), recordingFileURL: url)
+            // An empty live transcript sends the recording to the queue.
+            coordinator.transcribeOverride = { @Sendable _ in queued ? "" : "Live words." }
+            return coordinator
+        }
+        session.pendingLanguageKey = "japanese"
+        session.startRecording()
+        try await waitUntil { session.currentRecordingNote != nil }
+        let note = try #require(collector.notes.first)
+        audio.recordingDuration = 5
+        audio.currentFramePosition = 5 * 16_000
+        session.stopRecording()
+        try await waitUntil { !session.isRecording(note) }
+
+        if queued {
+            #expect(note.transcriptionState == .queued)
+            #expect(transcription.languageHint(for: note.id) == "Japanese")
+            transcription.setLanguageKey(nil, for: note.id)
+        } else {
+            #expect(note.transcriptionState == .completed)
+            #expect(transcription.languageHint(for: note.id) == transcription.languageHint(for: nil))
+        }
+    }
+
     @Test func languageChosenOnTheRecordingScreenCanGoToAnImportOnce() {
         let session = RecordingSession(audioService: MockRecordingAudio(), transcriptionService: TranscriptionService())
         session.pendingLanguageKey = "english"

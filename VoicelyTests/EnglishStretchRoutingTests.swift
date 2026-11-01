@@ -344,7 +344,7 @@ struct EnglishStretchTranscriptionTests {
         language: String? = nil,
         languageKey: String = "auto",
         parakeet: @escaping EnglishStretchRouting.Transcriber
-    ) async throws -> (note: VoiceNote, stretches: [(Int64, Int64)], released: Bool) {
+    ) async throws -> (note: VoiceNote, service: TranscriptionService, stretches: [(Int64, Int64)], qwenCalls: Int, released: Bool) {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
         defer { try? FileManager.default.removeItem(at: url) }
         let service = TranscriptionService()
@@ -352,7 +352,9 @@ struct EnglishStretchTranscriptionTests {
         service.deviceIDProvider = { "this-device" }
         service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
         service.audioDurationProvider = { _ in 10 }
+        var qwenCalls = 0
         service.transcribeImpl = { [unowned service] _, _ in
+            qwenCalls += 1
             service.decodedLanguage = language
             return qwen
         }
@@ -371,7 +373,7 @@ struct EnglishStretchTranscriptionTests {
         service.setLanguageKey(languageKey, for: note.id)
 
         #expect(await service.requestTranscription(for: note, force: true))
-        return (note, stretches, released)
+        return (note, service, stretches, qwenCalls, released)
     }
 
     @Test @MainActor func shortEnglishRetranscriptionGoesToParakeet() async throws {
@@ -529,12 +531,42 @@ struct EnglishStretchTranscriptionTests {
         #expect(!run.note.usedParakeetForEnglish)
     }
 
-    @Test @MainActor func shortRetranscriptionThatFailedNeverReachesParakeet() async throws {
-        let run = try await Self.retranscribeShortNote(qwen: .engineError("rejected"), languageKey: "english") { _, _, _ in
+    @Test @MainActor func englishChoiceGivesAShortRetranscriptionToParakeetWithoutQwen() async throws {
+        let run = try await Self.retranscribeShortNote(qwen: "qwen", languageKey: "english") { _, _, _ in
             [TimedWord(text: "parakeet", start: 4, end: 5)]
         }
 
-        #expect(run.stretches.isEmpty)
+        #expect(run.qwenCalls == 0)
+        #expect(run.stretches.count == 1 && run.stretches[0] == (0, 10 * 16_000))
+        #expect(run.released)
+        #expect(run.note.transcription == "parakeet")
+        #expect(run.note.transcriptionOutcome == .transcribed)
+        #expect(run.note.transcriptSpans?.count == 1)
+        #expect(run.note.usedParakeetForEnglish)
+        // Done, so the note's own choice is gone and the setting applies again.
+        #expect(run.service.languageHint(for: run.note.id) == run.service.languageHint(for: nil))
+    }
+
+    /// Parakeet failing or hearing nothing leaves a short English note to Qwen3-ASR, once.
+    @Test(arguments: [true, false])
+    @MainActor func qwenTakesAShortEnglishNoteParakeetFailsOnOrHearsNothingIn(fails: Bool) async throws {
+        let run = try await Self.retranscribeShortNote(qwen: "qwen", languageKey: "english") { _, _, _ in
+            if fails { throw ParakeetFailed() }
+            return []
+        }
+
+        #expect(run.stretches.count == 1)
+        #expect(run.qwenCalls == 1)
+        #expect(run.note.transcription == "qwen")
+        #expect(run.note.transcriptionOutcome == .transcribed)
+        #expect(!run.note.usedParakeetForEnglish)
+    }
+
+    @Test @MainActor func shortEnglishNoteKeepsItsTextWhenBothEnginesFail() async throws {
+        let run = try await Self.retranscribeShortNote(qwen: .engineError("rejected"), languageKey: "english") { _, _, _ in
+            throw ParakeetFailed()
+        }
+
         #expect(run.note.transcription == "old text")
         #expect(run.note.transcriptionOutcome == .failed)
     }

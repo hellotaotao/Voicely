@@ -1229,6 +1229,13 @@ private extension TranscriptionService {
 
         let noteID = note.id
         let hadExistingTranscript = LocalTranscriptFinalizer.finalizeTranscript(note.transcription) != nil
+        // A note done here forgets its language choice, as SegmentedAudioTranscriber's do;
+        // a requeued one keeps it for its next run.
+        defer {
+            if discardedNoteIDs.contains(noteID) || note.transcriptionState == .completed {
+                setLanguageKey(nil, for: noteID)
+            }
+        }
 
         let onProgress: (Float) -> Void = { [weak self] value in
             // This callback already runs on the main actor. Enqueueing another
@@ -1236,20 +1243,29 @@ private extension TranscriptionService {
             self?.reportExternalProgress(value, for: noteID)
         }
 
-        var outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
-
-        // An aborted decode is often transient — retry once before giving up.
-        // Output the engine produced and we rejected would only come back the same.
-        if case .engineError(let diagnostic) = outcome, Self.isEngineFailure(diagnostic), !wasTranscriptionCancelled() {
-            outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
-        }
-
-        var english = await parakeetTranscript(after: outcome, noteID: noteID, fileURL: url)
-        if case .noSpeech = outcome, let text = english?.text {
-            // Only an English choice sends a note without speech to Parakeet.
+        let mode = EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID))
+        var outcome: TranscriptionOutcome
+        var english: (text: String, spans: [TranscriptSpan]?)?
+        let parakeetStarted = nowProvider()
+        // An English choice goes to Parakeet first, as a longer file does; Qwen3-ASR
+        // takes the note only when Parakeet fails or hears nothing.
+        if mode == .english, let parakeet = await parakeetTranscript(after: nil, mode: mode, fileURL: url) {
+            english = parakeet
             outcome = .transcribed(TranscriptionResult(
-                text: text, duration: 0, modelIdentifier: EnglishStretchRouting.modelIdentifier(afterParakeet: nil)))
-            english = nil
+                text: parakeet.text, duration: nowProvider().timeIntervalSince(parakeetStarted),
+                modelIdentifier: EnglishStretchRouting.modelIdentifier(afterParakeet: nil)))
+        } else {
+            outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
+
+            // An aborted decode is often transient — retry once before giving up.
+            // Output the engine produced and we rejected would only come back the same.
+            if case .engineError(let diagnostic) = outcome, Self.isEngineFailure(diagnostic), !wasTranscriptionCancelled() {
+                outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
+            }
+
+            if mode != .english {
+                english = await parakeetTranscript(after: outcome, mode: mode, fileURL: url)
+            }
         }
 
         stopLeaseHeartbeat()
@@ -1329,20 +1345,21 @@ private extension TranscriptionService {
     }
 
     /// Runs Parakeet on a note decoded in one pass, for the language chosen
-    /// for it. Nil when the note stays with Qwen3-ASR.
+    /// for it: after Qwen3-ASR's `outcome`, or on the whole file before
+    /// Qwen3-ASR runs when `outcome` is nil. Nil when the note stays with Qwen3-ASR.
     private func parakeetTranscript(
-        after outcome: TranscriptionOutcome,
-        noteID: UUID,
+        after outcome: TranscriptionOutcome?,
+        mode: EnglishStretchRouting.Mode,
         fileURL: URL
     ) async -> (text: String, spans: [TranscriptSpan]?)? {
         switch outcome {
-        case .transcribed, .noSpeech: break
+        case nil, .transcribed?, .noSpeech?: break
         default: return nil
         }
         guard let info = SegmentedAudioTranscriber.readAudioInfo(fileURL) else { return nil }
         let duration = Double(info.totalFrames) / info.sampleRate
-        let slices = [EnglishStretchRouting.onePassSlice(outcome, duration: duration)]
-        let mode = EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID))
+        let slices = [outcome.map { EnglishStretchRouting.onePassSlice($0, duration: duration) }
+            ?? LanguageTaggedSlice(start: 0, end: duration, text: nil, language: nil)]
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
         guard !stretches.isEmpty else { return nil }
         let routed = await EnglishStretchRouting.transcribeStretches(

@@ -816,19 +816,24 @@ final class RecordingSession: ObservableObject {
                 parakeetReplacedText = await coord.transcribeEnglishStretches(mode: mode)
                 if parakeetReplacedText { accumulatedTranscript = coord.accumulatedTranscript }
             }
-            transcriptionService.setLanguageKey(nil, for: note.id)
 
             if await assetTask.value {
                 await stopResult.cleanupTemporaryAudio()
             }
 
             // Taken over or finished on another device meanwhile: keep the audio, leave the text to it.
-            guard !transcriptionService.wasTakenOverElsewhere(note) else { return }
+            guard !transcriptionService.wasTakenOverElsewhere(note) else {
+                transcriptionService.setLanguageKey(nil, for: note.id)
+                return
+            }
 
             let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(accumulatedTranscript)
             let trimmedTranscript = finalizedTranscript?.text ?? ""
 
             if !trimmedTranscript.isEmpty, capturedCoordinator?.requiresFullTranscription == false {
+                // Done here, so the recording's language choice goes; a recording sent
+                // to the queue below keeps it, and the queue forgets it when done.
+                transcriptionService.setLanguageKey(nil, for: note.id)
                 // Finalizing only trims whitespace the slices never carry, so the
                 // live spans fit unless it changed the text.
                 let spans = trimmedTranscript == accumulatedTranscript ? capturedCoordinator?.accumulatedSpans : nil

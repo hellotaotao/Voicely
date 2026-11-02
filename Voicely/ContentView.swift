@@ -17,6 +17,7 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \VoiceNote.timestamp, order: .reverse) private var voiceNotes: [VoiceNote]
+    @Query private var folderRecords: [NoteFolder]
     @StateObject private var audioService: AudioRecordingService
     @StateObject private var modelManager: ModelManager
     @StateObject private var transcriptionService: TranscriptionService
@@ -35,6 +36,9 @@ struct ContentView: View {
     @State private var compactNavigationPath: [UUID] = []
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var isDropTargeted = false
+    @State private var folderFilter: NoteFolderFilter = .all
+    @State private var searchText = ""
+    @State private var editingFolderSlot: FolderEditRequest?
 
     init() {
         let audioService = AudioRecordingService()
@@ -58,17 +62,17 @@ struct ContentView: View {
         return voiceNotes.first { $0.id == selectedNoteID }
     }
 
+    private var folders: NoteFolderSet {
+        NoteFolderSet(folderRecords)
+    }
+
+    /// The notes the list shows: the selected folder, narrowed by the search.
+    private var visibleNotes: [VoiceNote] {
+        NoteLibraryFilter.notes(voiceNotes, in: folderFilter, matching: searchText)
+    }
+
     var body: some View {
-        GeometryReader { geometry in
-            Group {
-                if shouldUseHorizontalLayout(geometry: geometry) {
-                    horizontalSplitView(geometry: geometry)
-                } else {
-                    defaultNavigationView
-                }
-            }
-            .background(VoicelyTheme.groupedBackground)
-        }
+        libraryLayout
         .tint(VoicelyTheme.accent)
         .onAppear {
             configureRecordingSession()
@@ -171,6 +175,35 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: shouldShowFirstLaunchOnboarding)
     }
 
+    private var libraryLayout: some View {
+        GeometryReader { geometry in
+            Group {
+                if shouldUseHorizontalLayout(geometry: geometry) {
+                    horizontalSplitView(geometry: geometry)
+                } else {
+                    defaultNavigationView
+                }
+            }
+            .background(VoicelyTheme.groupedBackground)
+        }
+        .onChange(of: folderRecords.count) { _, _ in
+            // Another device may have removed the folder this list shows.
+            if case .folder(let slot) = folderFilter, folders.folder(forSlot: slot) == nil {
+                folderFilter = .all
+            }
+        }
+        .sheet(item: $editingFolderSlot) { request in
+            NoteFolderEditor(
+                slot: request.slot,
+                folder: folders.folder(forSlot: request.slot),
+                onSave: { name, colorIndex in
+                    saveFolder(slot: request.slot, name: name, colorIndex: colorIndex)
+                },
+                onRemove: { removeFolder(slot: request.slot) }
+            )
+        }
+    }
+
     private var onboardingModelSetupStatus: FirstLaunchModelSetupStatus {
         FirstLaunchOnboarding.modelSetupStatus(
             for: modelManager.modelState,
@@ -231,6 +264,7 @@ struct ContentView: View {
             )
             .navigationTitle("Voicely")
             .navigationBarTitleDisplayMode(.large)
+            .searchable(text: $searchText, prompt: "Search recordings")
             .toolbar {
                 libraryToolbarContent
             }
@@ -272,6 +306,7 @@ struct ContentView: View {
             )
                 .navigationTitle("Voicely")
                 .navigationBarTitleDisplayMode(.large)
+                .searchable(text: $searchText, placement: .sidebar, prompt: "Search recordings")
                 .toolbar {
                     libraryToolbarContent
                 }
@@ -377,12 +412,15 @@ struct ContentView: View {
                         await cloudManager.refreshSync()
                     }
                     .safeAreaInset(edge: .top, spacing: 0) {
-                        transcriptionQueueBar { noteID in
-                            selectedNoteID = noteID
-                            if opensDetailInCompactStack {
-                                compactNavigationPath = [noteID]
+                        VStack(spacing: 0) {
+                            folderBar
+                            transcriptionQueueBar { noteID in
+                                selectedNoteID = noteID
+                                if opensDetailInCompactStack {
+                                    compactNavigationPath = [noteID]
+                                }
+                                withAnimation { proxy.scrollTo(noteID, anchor: .center) }
                             }
-                            withAnimation { proxy.scrollTo(noteID, anchor: .center) }
                         }
                     }
             }
@@ -396,6 +434,16 @@ struct ContentView: View {
         }
         .background(VoicelyTheme.groupedBackground)
         // Preserve the identifiers on the recording controls and note rows.
+    }
+
+    private var folderBar: some View {
+        NoteFolderBar(
+            folders: folders,
+            filter: $folderFilter,
+            onDropNote: { noteID, slot in moveNote(noteID, toSlot: slot) },
+            onEditSlot: { editingFolderSlot = FolderEditRequest(slot: $0) },
+            onRemoveSlot: removeFolder(slot:)
+        )
     }
 
     /// The note this device is transcribing outside a live recording.
@@ -506,14 +554,21 @@ struct ContentView: View {
         }
 
         Section {
+            let notes = visibleNotes
             if voiceNotes.isEmpty {
                 EmptyLibraryCard()
                     .accessibilityIdentifier(AccessibilityIdentifiers.Library.emptyState)
                     .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 10, trailing: 12))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
+            } else if notes.isEmpty {
+                EmptyFilterCard(isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityIdentifier(AccessibilityIdentifiers.Library.emptyFilterState)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 10, trailing: 12))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             } else {
-                ForEach(voiceNotes) { note in
+                ForEach(notes) { note in
                     noteRow(
                         note: note,
                         usesSplitNavigationSelection: usesSplitNavigationSelection,
@@ -523,7 +578,10 @@ struct ContentView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .id(note.id)
+                        .draggable(NoteDragPayload.string(for: note.id))
                         .contextMenu {
+                            moveToFolderMenu(for: note)
+
                             if transcriptionService.isLocallyTranscribing(note)
                                 || transcriptionService.isQueuedForLocalTranscription(note) {
                                 Button {
@@ -542,11 +600,11 @@ struct ContentView: View {
                         }
                         .deleteDisabled(recordingSession.isRecording(note))
                 }
-                .onDelete(perform: deleteNotes)
+                .onDelete { offsets in deleteNotes(offsets.map { notes[$0] }) }
             }
         } header: {
             if !voiceNotes.isEmpty {
-                SectionHeaderLabel(text: "Recordings")
+                SectionHeaderLabel(text: folderFilter.title(in: folders))
                     .padding(.horizontal, 12)
                     .padding(.top, 4)
                     .padding(.bottom, 2)
@@ -586,7 +644,9 @@ struct ContentView: View {
             waitReason: transcriptionService.waitReason(for: note),
             localProgress: transcriptionService.localProgress(for: note),
             isRecordingPaused: isRecordingPaused(note),
-            isSelected: selectedNoteID == note.id
+            isSelected: selectedNoteID == note.id,
+            // Inside a folder every row would show the same dot.
+            folderColor: folderFilter == .all ? folders.color(forSlot: note.folderSlot) : nil
         )
 
         return Group {
@@ -691,7 +751,9 @@ struct ContentView: View {
     /// insertion and navigation selection. Bindings are captured (rather than
     /// `self`) so the session — which owns this closure — does not retain the view.
     private func configureRecordingSession() {
-        recordingSession.onRecordingComplete = { [modelContext, selection = $selectedNoteID, navigationPath = $compactNavigationPath] note in
+        recordingSession.onRecordingComplete = { [modelContext, selection = $selectedNoteID, navigationPath = $compactNavigationPath, filter = $folderFilter] note in
+            // A recording started while a folder is shown belongs to that folder.
+            note.folderSlot = filter.wrappedValue.slotForNewNotes
             modelContext.insert(note)
             // Save now rather than at the next autosave: if the app dies mid-recording,
             // launch recovery can only reattach the live PCM file to a saved note.
@@ -793,6 +855,7 @@ struct ContentView: View {
             // the transcript is in; a listening copy is stored then.
             let note = VoiceNote(title: title.isEmpty ? "Imported Audio" : title, audioFilePath: "")
             note.titleWasManuallyEdited = true
+            note.folderSlot = folderFilter.slotForNewNotes
 
             // Transcribe from a non-synced working copy of the original.
             let workingCopy = try await transcriptionService.segmentProgressStore.importWorkingCopyAsync(from: url, for: note.id)
@@ -936,12 +999,76 @@ struct ContentView: View {
         togglePauseQuickActionID = UUID()
     }
 
-    private func deleteNotes(offsets: IndexSet) {
+    private func deleteNotes(_ notes: [VoiceNote]) {
         withAnimation {
-            for index in offsets {
-                deleteNoteAndAudio(voiceNotes[index])
+            for note in notes {
+                deleteNoteAndAudio(note)
             }
         }
+    }
+
+    @ViewBuilder
+    private func moveToFolderMenu(for note: VoiceNote) -> some View {
+        let configured = folders.folders
+        if !configured.isEmpty {
+            Menu {
+                ForEach(configured, id: \.slot) { folder in
+                    Button {
+                        _ = moveNote(note.id, toSlot: folder.slot)
+                    } label: {
+                        Label(folder.name, systemImage: note.folderSlot == folder.slot ? "checkmark" : "folder")
+                    }
+                }
+                Divider()
+                Button {
+                    _ = moveNote(note.id, toSlot: NoteFolderSlots.unfiled)
+                } label: {
+                    Label("Unfiled", systemImage: NoteFolderSlots.isFolder(note.folderSlot) ? "tray" : "checkmark")
+                }
+            } label: {
+                Label("Move to", systemImage: "folder")
+            }
+        }
+    }
+
+    /// Returns whether the note changed folder.
+    private func moveNote(_ noteID: UUID, toSlot slot: Int) -> Bool {
+        guard let note = voiceNotes.first(where: { $0.id == noteID }), note.folderSlot != slot else { return false }
+        withAnimation {
+            note.folderSlot = slot
+        }
+        try? modelContext.save()
+        return true
+    }
+
+    private func saveFolder(slot: Int, name: String, colorIndex: Int) {
+        let records = folderRecords.filter { $0.slot == slot }
+        if let kept = folders.folder(forSlot: slot) {
+            kept.name = name
+            kept.colorIndex = colorIndex
+            kept.modifiedAt = Date()
+            // Drop copies another device created for the same slot.
+            for record in records where record !== kept {
+                modelContext.delete(record)
+            }
+        } else {
+            modelContext.insert(NoteFolder(slot: slot, name: name, colorIndex: colorIndex))
+            folderFilter = .folder(slot)
+        }
+        try? modelContext.save()
+    }
+
+    private func removeFolder(slot: Int) {
+        for note in voiceNotes where note.folderSlot == slot {
+            note.folderSlot = NoteFolderSlots.unfiled
+        }
+        for record in folderRecords where record.slot == slot {
+            modelContext.delete(record)
+        }
+        if folderFilter == .folder(slot) {
+            folderFilter = .all
+        }
+        try? modelContext.save()
     }
 
     private func deleteNote(_ note: VoiceNote) {
@@ -998,6 +1125,7 @@ struct VoiceNoteRow: View {
     let localProgress: Float
     let isRecordingPaused: Bool
     var isSelected = false
+    var folderColor: Color? = nil
 
     private var isAwaitingTranscription: Bool {
         note.isAwaitingTranscription || (isPending && !isLocallyTranscribing && !isRemoteTranscribing)
@@ -1086,6 +1214,15 @@ struct VoiceNoteRow: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let folderColor {
+                        Circle()
+                            .fill(folderColor)
+                            .frame(width: 8, height: 8)
+                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                            .padding(.trailing, -2)
+                            .accessibilityHidden(true)
+                    }
+
                     Text(note.title)
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(isSelected ? VoicelyTheme.accent : .primary)
@@ -2817,6 +2954,31 @@ struct EmptyLibraryCard: View {
     }
 }
 
+/// Shown when notes exist but none are in the selected folder or match the search.
+struct EmptyFilterCard: View {
+    let isSearching: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(isSearching ? "No Matching Recordings" : "Nothing Here Yet")
+                .font(.subheadline.weight(.semibold))
+            Text(isSearching
+                 ? "Try other words, or search All."
+                 : "Drag a recording onto this folder, or record while it's selected.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct FolderEditRequest: Identifiable {
+    let slot: Int
+    var id: Int { slot }
+}
+
 struct DetailPlaceholderView: View {
     var body: some View {
         VStack(spacing: 14) {
@@ -2923,7 +3085,7 @@ struct ShareSheet: UIViewControllerRepresentable {
 
 #Preview {
     ContentView()
-        .modelContainer(for: VoiceNote.self, inMemory: true)
+        .modelContainer(for: [VoiceNote.self, NoteFolder.self], inMemory: true)
 }
 
 private struct TranscriptionTelemetryCard: View {

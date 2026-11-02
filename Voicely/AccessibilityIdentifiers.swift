@@ -32,6 +32,9 @@ enum AccessibilityIdentifiers {
         static let recordingTimerMinutes = "RecordingTimerMinutes"
         static let recordingTimerSetButton = "RecordingTimerSetButton"
         static let detailPlaceholder = "DetailPlaceholder"
+        static let folderBar = "NoteFolderBar"
+        static let folderBarItem = "NoteFolderBarItem"
+        static let emptyFilterState = "EmptyFilterCard"
     }
 
     enum Detail {

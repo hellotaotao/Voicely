@@ -53,7 +53,8 @@ struct VoicelyApp: App {
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            VoiceNote.self
+            VoiceNote.self,
+            NoteFolder.self
         ])
         let cloudKitDatabase: ModelConfiguration.CloudKitDatabase = AppRuntime.isRunningTests ? .none : .automatic
         let modelConfiguration = ModelConfiguration(

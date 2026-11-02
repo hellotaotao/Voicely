@@ -67,7 +67,9 @@ final class VoiceNote {
     var transcriptionComputeSummary: String?
     var transcriptionComputeDetail: String?
     var transcriptionThermalStateLabel: String?
-    
+    /// 0 = no folder, 1...4 = a `NoteFolder` slot.
+    var folderSlot: Int = 0
+
     init(title: String = "", audioFilePath: String = "", transcription: String = "") {
         self.id = UUID()
         self.title = title.isEmpty ? "Voice Note" : title

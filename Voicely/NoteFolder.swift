@@ -97,14 +97,6 @@ enum NoteFolderFilter: Hashable {
         if case .folder(let slot) = self { return slot }
         return NoteFolderSlots.unfiled
     }
-
-    func title(in folders: NoteFolderSet) -> String {
-        switch self {
-        case .all: return "Recordings"
-        case .unfiled: return "Unfiled"
-        case .folder(let slot): return folders.folder(forSlot: slot)?.name ?? "Recordings"
-        }
-    }
 }
 
 enum NoteLibraryFilter {

@@ -604,14 +604,6 @@ struct ContentView: View {
                 }
                 .onDelete { offsets in deleteNotes(offsets.map { notes[$0] }) }
             }
-        } header: {
-            if !voiceNotes.isEmpty {
-                SectionHeaderLabel(text: folderFilter.title(in: folders))
-                    .padding(.horizontal, 12)
-                    .padding(.top, 4)
-                    .padding(.bottom, 2)
-                    .listRowInsets(EdgeInsets())
-            }
         }
     }
 
@@ -1926,6 +1918,7 @@ struct VoiceNoteDetailView: View {
                 findSearchMatches(jumpToFirst: false)
             }
         }
+        .modifier(TopScrollEdgeEffectHidden(isHidden: hidesNavigationBar))
         .coordinateSpace(name: Self.detailPageSpace)
         .overlay(alignment: .top) {
             if playerCardReachedTop, shouldShowAudioPlayerCard {
@@ -3059,6 +3052,20 @@ struct EmptyFilterCard: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// With the navigation bar hidden, the Mac's title bar sits over the page
+/// with nothing in it, so it needs no band to keep it readable.
+private struct TopScrollEdgeEffectHidden: ViewModifier {
+    let isHidden: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.scrollEdgeEffectHidden(isHidden, for: .top)
+        } else {
+            content
+        }
     }
 }
 

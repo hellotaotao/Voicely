@@ -771,7 +771,6 @@ struct ContentView: View {
 
         transcriptionService.setModelManager(modelManager)
         Task.detached(priority: .utility) { RetiredModelFiles.remove() }
-        Qwen3ASRDefaults.migrateSelectedLanguage()
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
         recordingSession.recoverInterruptedFinalizations(in: voiceNotes)
 

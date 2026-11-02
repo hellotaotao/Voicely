@@ -316,22 +316,6 @@ struct RetiredModelFilesTests {
     }
 }
 
-struct LanguageMigrationTests {
-    @Test func aLanguageQwenDoesNotSupportFallsBackToAuto() throws {
-        let suite = "LanguageMigrationTests-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        defaults.set("welsh", forKey: Qwen3ASRDefaults.selectedLanguageKey)
-        Qwen3ASRDefaults.migrateSelectedLanguage(in: defaults)
-        #expect(defaults.string(forKey: Qwen3ASRDefaults.selectedLanguageKey) == "auto")
-
-        defaults.set("chinese", forKey: Qwen3ASRDefaults.selectedLanguageKey)
-        Qwen3ASRDefaults.migrateSelectedLanguage(in: defaults)
-        #expect(defaults.string(forKey: Qwen3ASRDefaults.selectedLanguageKey) == "chinese")
-    }
-}
-
 struct Qwen3LanguageTagTests {
     @Test func theTagIsSplitOffTheTranscript() {
         let result = Qwen3Transcription.parse("language English<asr_text>Good morning.")

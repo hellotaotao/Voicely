@@ -149,14 +149,6 @@ enum Qwen3ASRDefaults {
 
     nonisolated static let selectedLanguageKey = "selectedLanguage"
 
-    /// A language saved from the longer Whisper list is treated as auto-detect;
-    /// storing "auto" makes Settings show what actually applies.
-    nonisolated static func migrateSelectedLanguage(in defaults: UserDefaults = .standard) {
-        guard let key = defaults.string(forKey: selectedLanguageKey), key != "auto",
-              languageNames[key] == nil else { return }
-        defaults.set("auto", forKey: selectedLanguageKey)
-    }
-
     /// Maps the stored "selectedLanguage" key to the model's language hint.
     /// nil means auto-detect, which also covers a key left over from the
     /// longer Whisper language list.

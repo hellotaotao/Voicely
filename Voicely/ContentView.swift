@@ -646,7 +646,8 @@ struct ContentView: View {
             isRecordingPaused: isRecordingPaused(note),
             isSelected: selectedNoteID == note.id,
             // Inside a folder every row would show the same dot.
-            folderColor: folderFilter == .all ? folders.color(forSlot: note.folderSlot) : nil
+            folderColor: folderFilter == .all ? folders.color(forSlot: note.folderSlot) : nil,
+            searchQuery: NoteSearch.query(searchText)
         )
 
         return Group {
@@ -689,7 +690,8 @@ struct ContentView: View {
             showingSettings: $showingSettings,
             isPreparingAudio: recordingSession.isPreparingAudio(note),
             activeTranscriptionTitle: activeTranscriptionNote?.title,
-            sidebarIsHidden: splitColumnVisibility == .detailOnly
+            sidebarIsHidden: splitColumnVisibility == .detailOnly,
+            searchQuery: NoteSearch.query(searchText)
         )
             .environmentObject(transcriptionService)
     }
@@ -1126,6 +1128,8 @@ struct VoiceNoteRow: View {
     let isRecordingPaused: Bool
     var isSelected = false
     var folderColor: Color? = nil
+    /// Trimmed; empty when the library is not being searched.
+    var searchQuery = ""
 
     private var isAwaitingTranscription: Bool {
         note.isAwaitingTranscription || (isPending && !isLocallyTranscribing && !isRemoteTranscribing)
@@ -1162,6 +1166,17 @@ struct VoiceNoteRow: View {
         if note.transcriptionOutcome == .noSpeech { return "No speech detected." }
         if note.transcriptionOutcome == .failed { return "Couldn't transcribe. Open to try again." }
         return nil
+    }
+
+    /// Where the transcript matches the search, in place of its opening lines.
+    private var searchSnippet: AttributedString? {
+        guard !searchQuery.isEmpty else { return nil }
+        return NoteSearch.snippet(of: note.transcription, matching: searchQuery)
+    }
+
+    private var titleText: Text {
+        guard !searchQuery.isEmpty else { return Text(note.title) }
+        return Text(NoteSearch.highlighted(note.title, ranges: NoteSearch.ranges(of: searchQuery, in: note.title)))
     }
 
     private var statusBadge: PillBadge? {
@@ -1223,7 +1238,7 @@ struct VoiceNoteRow: View {
                             .accessibilityHidden(true)
                     }
 
-                    Text(note.title)
+                    titleText
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(isSelected ? VoicelyTheme.accent : .primary)
                         .lineLimit(1)
@@ -1250,7 +1265,13 @@ struct VoiceNoteRow: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
 
-                if let previewText {
+                if let searchSnippet {
+                    Text(searchSnippet)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .padding(.top, 2)
+                } else if let previewText {
                     Text(previewText)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -1695,6 +1716,8 @@ struct VoiceNoteDetailView: View {
     /// Title of the note this device is transcribing, to explain a queue position.
     var activeTranscriptionTitle: String?
     var sidebarIsHidden = false
+    /// The library search, trimmed; its matches are marked in the transcript.
+    var searchQuery = ""
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
     @State private var showLoadModelPrompt = false
@@ -1713,6 +1736,9 @@ struct VoiceNoteDetailView: View {
     @State private var loadedAudioSelection: AudioPlaybackSelection?
     @State private var isScrubbingWaveform = false
     @State private var playerCardReachedTop = false
+    @State private var searchMatches: [NSRange] = []
+    @State private var currentSearchMatch = 0
+    @State private var searchJump = 0
 
     private var isModelLoaded: Bool {
         guard let modelManager = transcriptionService.modelManager else { return false }
@@ -1891,11 +1917,28 @@ struct VoiceNoteDetailView: View {
             .padding(usesCompactDetailLayout ? 16 : 20)
             .frame(maxWidth: detailContentMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
+            .onChange(of: SearchTarget(noteID: note.id, query: searchQuery), initial: true) { _, _ in
+                findSearchMatches(jumpToFirst: true)
+            }
+            .onChange(of: note.transcription) { _, _ in
+                findSearchMatches(jumpToFirst: false)
+            }
         }
         .coordinateSpace(name: Self.detailPageSpace)
         .overlay(alignment: .top) {
             if playerCardReachedTop, shouldShowAudioPlayerCard {
                 pinnedPlayerCard
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !searchQuery.isEmpty, !isEditing, !searchMatches.isEmpty || titleMatchesSearch {
+                SearchMatchBar(
+                    current: currentSearchMatch,
+                    count: searchMatches.count,
+                    isCapped: searchMatches.count >= NoteSearch.matchLimit,
+                    onStep: stepSearchMatch(by:)
+                )
+                .padding(.bottom, 12)
             }
         }
         .background(VoicelyTheme.groupedBackground)
@@ -2010,7 +2053,9 @@ struct VoiceNoteDetailView: View {
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.title)
                 } else {
-                    Text(note.title)
+                    Text(searchQuery.isEmpty
+                         ? AttributedString(note.title)
+                         : NoteSearch.highlighted(note.title, ranges: NoteSearch.ranges(of: searchQuery, in: note.title)))
                         .font(.title.weight(.bold))
                         .tracking(-0.5)
                         .lineLimit(2)
@@ -2089,6 +2134,33 @@ struct VoiceNoteDetailView: View {
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.metadata)
+    }
+
+    private struct SearchTarget: Equatable {
+        let noteID: UUID
+        let query: String
+    }
+
+    private var titleMatchesSearch: Bool {
+        !searchQuery.isEmpty && NoteSearch.contains(note.title, searchQuery)
+    }
+
+    /// A new note or query starts at the first match; a transcript that grows
+    /// while recording keeps the reader where they are.
+    private func findSearchMatches(jumpToFirst: Bool) {
+        searchMatches = NoteSearch.ranges(of: searchQuery, in: note.transcription)
+        if jumpToFirst || currentSearchMatch >= searchMatches.count {
+            currentSearchMatch = 0
+        }
+        if jumpToFirst, !searchMatches.isEmpty {
+            searchJump += 1
+        }
+    }
+
+    private func stepSearchMatch(by step: Int) {
+        guard !searchMatches.isEmpty else { return }
+        currentSearchMatch = (currentSearchMatch + step + searchMatches.count) % searchMatches.count
+        searchJump += 1
     }
 
     private var audioPlayerCard: some View {
@@ -2683,10 +2755,24 @@ struct VoiceNoteDetailView: View {
                 spans: spans,
                 currentTime: audioPlayer.isPlaying || audioPlayer.currentTime > 0 ? audioPlayer.currentTime : nil,
                 followsPlayback: !isScrubbingWaveform,
+                searchRanges: searchMatches,
+                currentSearchIndex: searchMatches.isEmpty ? nil : currentSearchMatch,
+                searchJump: searchJump,
                 onSeek: { time in
                     audioPlayer.seek(to: time)
                     audioPlayer.play()
                 }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if !searchMatches.isEmpty {
+            // Plain text has no way to mark or scroll to a match.
+            TappableTranscriptView(
+                text: note.transcription,
+                spans: [],
+                searchRanges: searchMatches,
+                currentSearchIndex: currentSearchMatch,
+                searchJump: searchJump,
+                onSeek: { _ in }
             )
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {

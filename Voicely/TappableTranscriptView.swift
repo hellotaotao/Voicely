@@ -6,6 +6,9 @@ import UIKit
 /// sentence being spoken is highlighted and scrolled into view. Scrolling by
 /// hand pauses the auto-scroll for a few seconds.
 ///
+/// Search matches are marked too, and `searchJump` scrolls to the current one.
+/// With no spans the view only shows text and matches, nothing to tap.
+///
 /// The text is as tall as it needs to be and scrolls with the page around it,
 /// so a long transcript can fill the screen.
 ///
@@ -19,6 +22,11 @@ struct TappableTranscriptView: UIViewRepresentable {
     var currentTime: TimeInterval?
     /// False holds the page still, for as long as the waveform is being dragged.
     var followsPlayback = true
+    /// UTF-16 ranges in `text`.
+    var searchRanges: [NSRange] = []
+    var currentSearchIndex: Int?
+    /// Each change scrolls to the current search match.
+    var searchJump = 0
     var onSeek: (TimeInterval) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onSeek: onSeek) }
@@ -33,7 +41,9 @@ struct TappableTranscriptView: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 0
         textView.accessibilityIdentifier = AccessibilityIdentifiers.Detail.transcriptionBody
         textView.layer.insertSublayer(context.coordinator.highlightLayer, at: 0)
-        textView.onWidthChange = { [weak coordinator = context.coordinator] in coordinator?.redrawHighlight() }
+        textView.layer.insertSublayer(context.coordinator.searchLayer, at: 0)
+        textView.layer.insertSublayer(context.coordinator.currentSearchLayer, at: 0)
+        textView.onWidthChange = { [weak coordinator = context.coordinator] in coordinator?.layoutDidChange() }
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         tap.cancelsTouchesInView = false      // keep selection gestures working
@@ -46,6 +56,7 @@ struct TappableTranscriptView: UIViewRepresentable {
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.onSeek = onSeek
         context.coordinator.apply(text: text, spans: spans, currentTime: currentTime, followsPlayback: followsPlayback)
+        context.coordinator.applySearch(ranges: searchRanges, current: currentSearchIndex, jump: searchJump)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -79,6 +90,15 @@ struct TappableTranscriptView: UIViewRepresentable {
         private let highlightColor = UIColor(VoicelyTheme.accent).withAlphaComponent(0.22)
         let highlightLayer = CAShapeLayer()
 
+        private var searchRanges: [NSRange] = []
+        private var currentSearchIndex: Int?
+        private var searchJump = 0
+        private var pendingSearchJump = false
+        private let searchColor = UIColor.systemYellow.withAlphaComponent(0.35)
+        private let currentSearchColor = UIColor.systemOrange.withAlphaComponent(0.55)
+        let searchLayer = CAShapeLayer()
+        let currentSearchLayer = CAShapeLayer()
+
         init(onSeek: @escaping (TimeInterval) -> Void) { self.onSeek = onSeek }
 
         /// Rebuilds the text only when the transcript changes; otherwise only
@@ -93,6 +113,75 @@ struct TappableTranscriptView: UIViewRepresentable {
             updateHighlight(for: currentTime)
             if scrubbingEnded, let highlightedIndex {
                 scrollToUnit(highlightedIndex, in: textView)
+            }
+        }
+
+        func applySearch(ranges: [NSRange], current: Int?, jump: Int) {
+            // Ranges found in a newer transcript than the one shown wait for it.
+            let length = (builtText as NSString).length
+            let valid = ranges.filter { NSMaxRange($0) <= length }
+            if valid != searchRanges || current != currentSearchIndex {
+                searchRanges = valid
+                currentSearchIndex = current
+                redrawSearch()
+            }
+            if jump != searchJump {
+                searchJump = jump
+                pendingSearchJump = true
+                performPendingSearchJump(retries: 5)
+            }
+        }
+
+        func layoutDidChange() {
+            redrawHighlight()
+            redrawSearch()
+            performPendingSearchJump(retries: 0)
+        }
+
+        /// The first jump can come before the page has laid the text out.
+        private func performPendingSearchJump(retries: Int) {
+            guard pendingSearchJump, let textView else { return }
+            guard let currentSearchIndex, currentSearchIndex < searchRanges.count else {
+                pendingSearchJump = false
+                return
+            }
+            if scroll(to: searchRanges[currentSearchIndex], in: textView, force: true) {
+                pendingSearchJump = false
+                // Playback would pull the page straight back to the spoken sentence.
+                autoScrollPausedUntil = Date().addingTimeInterval(4)
+            } else if retries > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.performPendingSearchJump(retries: retries - 1)
+                }
+            }
+        }
+
+        private func redrawSearch() {
+            guard let textView else { return }
+            let others = CGMutablePath()
+            let current = CGMutablePath()
+            for (index, range) in searchRanges.enumerated() {
+                addRects(for: range, in: textView, to: index == currentSearchIndex ? current : others)
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            searchLayer.fillColor = searchColor.resolvedColor(with: textView.traitCollection).cgColor
+            searchLayer.path = others
+            currentSearchLayer.fillColor = currentSearchColor.resolvedColor(with: textView.traitCollection).cgColor
+            currentSearchLayer.path = current
+            CATransaction.commit()
+        }
+
+        private func addRects(for range: NSRange, in textView: UITextView, to path: CGMutablePath) {
+            let layoutManager = textView.layoutManager
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let inset = textView.textContainerInset
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: textView.textContainer
+            ) { rect, _ in
+                path.addRect(rect.offsetBy(dx: inset.left, dy: inset.top))
             }
         }
 
@@ -121,7 +210,10 @@ struct TappableTranscriptView: UIViewRepresentable {
             units = TranscriptTimeline.units(text: text, spans: spans)
             highlightedIndex = nil
             tappedIndex = nil
+            searchRanges = []
+            currentSearchIndex = nil
             redrawHighlight()
+            redrawSearch()
         }
 
         private func updateHighlight(for time: TimeInterval?) {
@@ -143,16 +235,7 @@ struct TappableTranscriptView: UIViewRepresentable {
             guard let textView else { return }
             let path = CGMutablePath()
             if let highlightedIndex, highlightedIndex < units.count {
-                let layoutManager = textView.layoutManager
-                let glyphRange = layoutManager.glyphRange(forCharacterRange: units[highlightedIndex].range, actualCharacterRange: nil)
-                let inset = textView.textContainerInset
-                layoutManager.enumerateEnclosingRects(
-                    forGlyphRange: glyphRange,
-                    withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
-                    in: textView.textContainer
-                ) { rect, _ in
-                    path.addRect(rect.offsetBy(dx: inset.left, dy: inset.top))
-                }
+                addRects(for: units[highlightedIndex].range, in: textView, to: path)
             }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -162,10 +245,18 @@ struct TappableTranscriptView: UIViewRepresentable {
         }
 
         private func scrollToUnit(_ index: Int, in textView: UITextView) {
-            guard let page = watchedPage(of: textView), followsPlayback, Date() >= autoScrollPausedUntil,
-                  textView.bounds.height > 0, page.bounds.height > 0 else { return }
+            scroll(to: units[index].range, in: textView, force: false)
+        }
+
+        /// Brings the range into view unless it already is. `force` ignores
+        /// the pauses that hold playback's auto-scroll back. Returns false
+        /// when the page was not ready to scroll.
+        @discardableResult
+        private func scroll(to range: NSRange, in textView: UITextView, force: Bool) -> Bool {
+            guard let page = watchedPage(of: textView), textView.bounds.height > 0, page.bounds.height > 0 else { return false }
+            guard force || (followsPlayback && Date() >= autoScrollPausedUntil) else { return true }
             let layoutManager = textView.layoutManager
-            let glyphRange = layoutManager.glyphRange(forCharacterRange: units[index].range, actualCharacterRange: nil)
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textView.textContainer)
             rect.origin.y += textView.textContainerInset.top
             let target = textView.convert(rect, to: page)
@@ -175,12 +266,13 @@ struct TappableTranscriptView: UIViewRepresentable {
             let visibleHeight = page.bounds.height - coveredTop - insets.bottom
             let visible = CGRect(x: target.minX, y: page.contentOffset.y + coveredTop, width: target.width, height: visibleHeight)
                 .insetBy(dx: 0, dy: 40)
-            guard !visible.contains(target) else { return }
+            guard !visible.contains(target) else { return true }
 
             let lowest = -insets.top
             let highest = max(lowest, page.contentSize.height - page.bounds.height + insets.bottom)
             let offset = target.minY - coveredTop - visibleHeight / 3
             page.setContentOffset(CGPoint(x: page.contentOffset.x, y: min(max(lowest, offset), highest)), animated: true)
+            return true
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {

@@ -109,12 +109,11 @@ enum NoteFolderFilter: Hashable {
 
 enum NoteLibraryFilter {
     static func notes(_ notes: [VoiceNote], in filter: NoteFolderFilter, matching searchText: String) -> [VoiceNote] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = NoteSearch.query(searchText)
         return notes.filter { note in
             guard filter.includes(note) else { return false }
             guard !query.isEmpty else { return true }
-            return note.title.localizedStandardContains(query)
-                || note.transcription.localizedStandardContains(query)
+            return NoteSearch.contains(note.title, query) || NoteSearch.contains(note.transcription, query)
         }
     }
 }

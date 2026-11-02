@@ -39,6 +39,7 @@ enum AccessibilityIdentifiers {
 
     enum Detail {
         static let screen = "NoteDetailScreen"
+        static let searchMatchBar = "SearchMatchBar"
         static let title = "NoteDetailTitle"
         static let metadata = "NoteDetailMetadata"
         static let editButton = "NoteDetailEditButton"

@@ -44,5 +44,5 @@ If the scheme is not shared, open Xcode and mark the `Voicely` scheme as shared 
 
 All roadmap items and open tasks live in a single file: [`docs/stable-roadmap.md`](docs/stable-roadmap.md).
 It is the source of truth — if any other document disagrees with it, the roadmap wins.
-Do not add new to-dos here; add them under section 四 (跨阶段待办) of the roadmap.
+Do not add new to-dos here; add them under section 二 (待办) of the roadmap.
 Historical execution and verification records are in [`docs/roadmap-log.md`](docs/roadmap-log.md).

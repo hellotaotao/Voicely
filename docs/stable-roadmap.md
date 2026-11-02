@@ -16,7 +16,7 @@
 
 当前版本 **0.31.0**（以 `Config/Version.xcconfig` 为准）。到现在都只发过内部 TestFlight，没有公开上架过。
 
-- **0.31.0（2026-11-03）**：选 English 的录音全程只用 Parakeet，这段时间千问卸载（3a）；短的英文重转跳过千问，整条放回队列重转的录音保留它的一次性语言选择；笔记文件夹与搜索（2c）；搜索命中在列表和详情页里高亮，详情页可以逐处跳转（2d）；Mac 侧边栏去掉大标题、搜索框固定，列表去掉"Recordings"小标题。2c 新增了 `@Model NoteFolder` 和 `VoiceNote.folderSlot`，**上传前必须部署 CloudKit Prod schema**（见"上传与提交前"）。
+- **0.31.0（2026-11-03）**：选 English 的录音全程只用 Parakeet，这段时间千问卸载（3a）；短的英文重转跳过千问，整条放回队列重转的录音保留它的一次性语言选择；笔记文件夹与搜索（2c）；搜索命中在列表和详情页里高亮，详情页可以逐处跳转（2d）；Mac 侧边栏去掉大标题、搜索框固定，列表去掉"Recordings"小标题。2c 新增了 `@Model NoteFolder` 和 `VoiceNote.folderSlot`，上传前已部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight。
 - **0.30.2（2026-11-01）**：Parakeet 加载模型和转换音频格式时，每 5 秒给锁屏后台任务上报一次进度。修的是 0.30.0 在 iPhone 上锁屏重转长英文录音时，Parakeet 首次加载约 1 分 40 秒没有进度、后台任务被系统收走（见 3a 待办 5）。
 - **0.30.1（2026-11-01）**：详情页改成长页面，转写文字撑长整页，播放器卡片滚到顶部时吸住（Mac 实测通过）。
 - **0.30.0（2026-11-01）**：英文改用 Parakeet（3a）。停止录音后，满 3 分钟的英文大段交给 Parakeet 重转（整条只有英文时不看这个下限），千问那一版不保留；判定在语言标签之外加了文字检查；导入可以选 English 跳过千问。Parakeet 模型直接打包，iPhone Release 包从 961 MB 涨到 1.4 GB。
@@ -103,8 +103,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 **每次上传 TestFlight 前**
 
-- **CloudKit Prod schema**：dev 上的笔记文件夹（2c）新增了 `@Model NoteFolder` 和 `VoiceNote.folderSlot`，上传前在 CloudKit Console 部署到 Prod。顺带确认 Prod 里已有 0.29.0 加的 `transcriptSpansData`。
-- **部署前先重置 Development 环境**：3a 曾实现过"千问版本可以切回"（2026-10-31 撤掉），它的 `alternateTranscriptData` 字段只跑过 Debug，可能已经在 Development 里，不重置就会被带进 Prod，成为一个永远删不掉的空字段。重置后用 Debug 版同步一次，确认 `NoteFolder`、`folderSlot` 重新出现在 Development，再部署。
+- **CloudKit Prod schema**：新增 `@Model` 类型或存储字段的版本，上传前要在 CloudKit Console 把 schema 部署到 Prod。最近一次是 2026-11-03 随 0.31.0 部署的 `NoteFolder` 和 `folderSlot`，部署前要核对确认对话框里没有只在 Debug 跑过的 `alternateTranscriptData`（2026-10-31 撤掉的"千问版本可以切回"留下的字段，一旦进 Prod 就删不掉）。
 
 **首次公开提交前**
 

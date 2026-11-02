@@ -157,28 +157,6 @@ class ModelManager: ObservableObject {
     }
 }
 
-// MARK: - Retired model files
-
-enum RetiredModelFiles {
-    /// Models earlier versions downloaded and nothing reads any more: Whisper's
-    /// under Documents/huggingface (0.2–1.6 GB each) and Qwen3's under
-    /// Application Support/Qwen3ASR (about 1 GB), now that the model ships in
-    /// the app.
-    nonisolated static func remove(
-        documentsDirectory: URL? = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
-        applicationSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
-        fileManager: FileManager = .default
-    ) {
-        let retired = [
-            documentsDirectory?.appendingPathComponent("huggingface", isDirectory: true),
-            applicationSupportDirectory?.appendingPathComponent("Qwen3ASR", isDirectory: true),
-        ]
-        for directory in retired.compactMap({ $0 }) where fileManager.fileExists(atPath: directory.path) {
-            try? fileManager.removeItem(at: directory)
-        }
-    }
-}
-
 extension Notification.Name {
     static let modelLoadedNotification = Notification.Name("ModelLoadedNotification")
 }

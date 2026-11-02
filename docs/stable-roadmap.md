@@ -229,7 +229,7 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 - **切片**：两个后端都是单趟 30 s、分段 29 s、VAD 最早切点 15 s（`Qwen3SliceLimits`，依据见 P-0i、P-0j）。单元测试固定按 15 / 14 / 7 s 这组夹具跑。
 - **模型**：随 app 安装（见 5a）。Mac 带 MLX 8-bit（`mlx-community/Qwen3-ASR-0.6B-8bit`，约 1.0 GB，P-0j），iPhone/iPad 带 CoreML（`aufklarer/Qwen3-ASR-CoreML` 的四个 mlmodelc 加分词器，902 MB）。
 - **CoreML 解码**用的是 P-0h 验证过的 MLX-free 路径（`Qwen3CoreMLModel`），已补重复惩罚 1.15 和每片 `autoreleasepool`。
-- **移除**：模型选择与模型列表页、自定义 prompt、计算单元选项、Benchmark 页、prompt 回声检测、温度重试相关逻辑。语言列表缩到千问支持的 30 种。旧 Whisper 模型文件在启动时清掉（`RetiredWhisperModels`）。
+- **移除**：模型选择与模型列表页、自定义 prompt、计算单元选项、Benchmark 页、prompt 回声检测、温度重试相关逻辑。语言列表缩到千问支持的 30 种。旧 Whisper 模型文件在启动时清掉（`RetiredWhisperModels`，2026-11-03 已删，见"六、已完成"第 10 项）。
 - **部署目标**：iOS 18.0 / macOS 15.0（包的要求）。构建需要 Xcode 的 Metal Toolchain 组件。
 
 已验证（Mac）：310 个单元测试通过；`Qwen3RealModelTests` 用真实权重跑通 MLX 和 CoreML 两个后端；`RealRecordingReplayTests` 用真实模型跑通 5 分钟录音的边录边转与停止收尾（28 片，注入的失败全部原位恢复）；iOS 模拟器与真机架构 Release 均能编译。
@@ -726,7 +726,7 @@ Debug 版 app 转一条 64 分钟录音时，进程占了 13 GB，其中 12 GB �
 
 ### 5a ✅ 模型随 app 安装（2026-10-25）
 
-不再从 Hugging Face 下载（中国大陆连不上）。`scripts/fetch-speech-models.sh` 按固定版本把模型放到不进 git 的 `Models/`，构建阶段"Embed Speech Model"把它拷进 app 的 `SpeechModel/`：Mac 包带 MLX 8-bit（约 1.0 GB），iPhone/iPad 包带 CoreML（902 MB，Release 包共 961 MB）。启动直接从安装包离线加载；Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮已删除；以前下载到 Application Support/Qwen3ASR 的模型在启动时清掉。`VOICELY_MODEL_DIRECTORY` 可让测试或回放改读别的目录（如在 Mac 上跑 CoreML 后端）。
+不再从 Hugging Face 下载（中国大陆连不上）。`scripts/fetch-speech-models.sh` 按固定版本把模型放到不进 git 的 `Models/`，构建阶段"Embed Speech Model"把它拷进 app 的 `SpeechModel/`：Mac 包带 MLX 8-bit（约 1.0 GB），iPhone/iPad 包带 CoreML（902 MB，Release 包共 961 MB）。启动直接从安装包离线加载；Hugging Face 下载、蜂窝网络确认弹窗、设置页的下载/删除按钮已删除；以前下载到 Application Support/Qwen3ASR 的模型在启动时清掉（`RetiredModelFiles`，2026-11-03 已删，见"六、已完成"第 10 项）。`VOICELY_MODEL_DIRECTORY` 可让测试或回放改读别的目录（如在 Mac 上跑 CoreML 后端）。
 
 - **苹果托管（Background Assets）暂缓**：对用户没有区别（essential 资源包同样在安装时下完），好处主要是上传 TestFlight 不必每次带模型：带模型后每个包约 1.1 GB，0.28.0 实测每个平台上传约 15.5 分钟，两个平台合计半小时左右。第二个模型 Parakeet（443 MB）2026-10-29 定为直接打包，不走托管（见 3a）；Mac 对齐模型如果要做，按需下载走苹果托管（见 P-0p）。2026-10-22 已查明：`AssetPackManager.url(for:)` 支持返回目录（含 `.mlmodelc`）；要加 `ManagedDownloaderExtension` 下载扩展、App Group 和三个 Info.plist 键；Mac Catalyst 收哪个平台的包未知，需上传标记资源包实测；最低版本要升到 iOS 26 / macOS 26，会失去 iPhone XS/XS Max/XR 和 iPad 第 7 代，以及能升级但还没升级的设备；"这些老设备本来也跑不动"只是按算力推算，未实测。托管的另一个好处是模型能独立于 app 更新，但对现在只有一个模型的首发不构成迁移理由。
 
@@ -844,7 +844,7 @@ Debug 版 app 转一条 64 分钟录音时，进程占了 13 GB，其中 12 GB �
 - 5a 模型随 app 安装：✅ 2026-10-25，0.28.0。见"五"。
 - 5b 录音中的原始音频改存持久目录：✅ 2026-10-26。见"五"。
 - 5c 解码进展按 token 上报、记录每片的结束原因：✅ 2026-10-26。见"五"。原来 P-0n 里"CoreML 到 448 token 上限时静默截断"一条随之关闭：三条长录音 386 片 0 次撞上限。
-- 10 删除千问不支持的旧语言设置迁移（`Qwen3ASRDefaults.migrateSelectedLanguage`）：✅ 2026-11-03，已经没有设备停在 0.26.0 之前。原来同列的 `RetiredWhisperModels`（启动时删旧 Whisper 模型文件）在 0.28.0 模型随包那次删掉（`bb78f1f`）。哪些旧兼容代码不能删见 P-0n。
+- 10 删除只为跳过版本升级的设备保留的启动清理：✅ 2026-11-03，已经没有设备停在 0.28.0 之前。删了两段：千问不支持的旧语言设置改回自动检测（`Qwen3ASRDefaults.migrateSelectedLanguage`），以及启动时删以前下载的模型（`RetiredModelFiles`，Whisper 的在 Documents/huggingface，千问的在 Application Support/Qwen3ASR；0.28.0 模型随包时由 `RetiredWhisperModels` 改名扩展而来，`bb78f1f`）。哪些旧兼容代码不能删见 P-0n。
 - 8 ✅ 上架文档按千问重写（2026-10-26，存在本地 `promo/app-store-release/`，不进 git）：元数据（中英文）、隐私与审核说明（新增隐私政策草稿，App Privacy 建议填"不收集数据"）、截图计划（iPhone 6.9 寸、iPad 13 寸、Mac）、检查清单都已改为随包千问模型、iPhone/iPad/Mac 同一个上架条目。设置页"Fully on-device"卡片原来说音频和文字"永不离开本机"，与 iCloud 同步矛盾，已改为"留在你的设备和你自己的 iCloud 账户里"。剩下的事见"上传与提交前"。
 
 ---

@@ -770,7 +770,6 @@ struct ContentView: View {
         }
 
         transcriptionService.setModelManager(modelManager)
-        Task.detached(priority: .utility) { RetiredModelFiles.remove() }
         transcriptionService.migrateLegacyOwnershipIfNeeded(notes: voiceNotes)
         recordingSession.recoverInterruptedFinalizations(in: voiceNotes)
 

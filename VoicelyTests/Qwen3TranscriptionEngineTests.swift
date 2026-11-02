@@ -291,31 +291,6 @@ struct ModelManagerLoadingTests {
     }
 }
 
-struct RetiredModelFilesTests {
-    @Test func downloadedModelsAreRemovedAndRecordingsKept() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RetiredModels-\(UUID().uuidString)", isDirectory: true)
-        let documents = root.appendingPathComponent("Documents", isDirectory: true)
-        let support = root.appendingPathComponent("Application Support", isDirectory: true)
-        let whisper = documents.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/openai_whisper-small")
-        let qwen = support.appendingPathComponent("Qwen3ASR/models/mlx-community/Qwen3-ASR-0.6B-8bit")
-        try FileManager.default.createDirectory(at: whisper, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: qwen, withIntermediateDirectories: true)
-        let recording = documents.appendingPathComponent("recording.m4a")
-        FileManager.default.createFile(atPath: recording.path, contents: Data())
-        let store = support.appendingPathComponent("default.store")
-        FileManager.default.createFile(atPath: store.path, contents: Data())
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        RetiredModelFiles.remove(documentsDirectory: documents, applicationSupportDirectory: support)
-
-        #expect(!FileManager.default.fileExists(atPath: documents.appendingPathComponent("huggingface").path))
-        #expect(!FileManager.default.fileExists(atPath: support.appendingPathComponent("Qwen3ASR").path))
-        #expect(FileManager.default.fileExists(atPath: recording.path))
-        #expect(FileManager.default.fileExists(atPath: store.path))
-    }
-}
-
 struct Qwen3LanguageTagTests {
     @Test func theTagIsSplitOffTheTranscript() {
         let result = Qwen3Transcription.parse("language English<asr_text>Good morning.")

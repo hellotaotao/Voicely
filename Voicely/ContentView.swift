@@ -305,8 +305,10 @@ struct ContentView: View {
                 opensDetailInCompactStack: false
             )
                 .navigationTitle("Voicely")
-                .navigationBarTitleDisplayMode(.large)
-                .searchable(text: $searchText, placement: .sidebar, prompt: "Search recordings")
+                // On the Mac a large title only adds an empty band above the
+                // search field, and collapsing it while scrolling drags the field along.
+                .navigationBarTitleDisplayMode(ProcessInfo.processInfo.isMacCatalystApp ? .inline : .large)
+                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search recordings")
                 .toolbar {
                     libraryToolbarContent
                 }

@@ -164,7 +164,7 @@ struct SettingsView: View {
         case .loaded:
             return PillBadge(text: "Loaded", systemImage: "checkmark.circle.fill", variant: .success)
         case .unloaded:
-            return PillBadge(text: "Unloaded", systemImage: "circle", variant: .neutral)
+            return PillBadge(text: waitsForWork ? "Loads when needed" : "Unloaded", systemImage: "circle", variant: .neutral)
         case .prewarming:
             return PillBadge(text: "Warming up", systemImage: "flame", variant: .warning)
         default:
@@ -179,11 +179,18 @@ struct SettingsView: View {
         }
     }
 
+    /// With English as the language Parakeet transcribes, and the model is
+    /// left unloaded until something needs it.
+    private var waitsForWork: Bool {
+        EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguage)) == .english
+            && modelManager.errorMessage == nil
+    }
+
     /// The model ships with the app, so the only action left is loading it
     /// again after a failure.
     @ViewBuilder
     private var modelActionButtons: some View {
-        if modelManager.modelState == .unloaded {
+        if modelManager.modelState == .unloaded && !waitsForWork {
             Button {
                 Task { await modelManager.loadModel() }
             } label: {

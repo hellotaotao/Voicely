@@ -159,4 +159,7 @@ class ModelManager: ObservableObject {
 
 extension Notification.Name {
     static let modelLoadedNotification = Notification.Name("ModelLoadedNotification")
+    /// Work that waited for a recording with English chosen can run again
+    /// without Qwen3-ASR being loaded, because English is the setting.
+    static let transcriptionCanResumeNotification = Notification.Name("TranscriptionCanResumeNotification")
 }

@@ -38,6 +38,7 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var folderFilter: NoteFolderFilter = .all
     @State private var searchText = ""
+    @AppStorage(Qwen3ASRDefaults.selectedLanguageKey) private var languageSetting = "auto"
     @State private var editingFolderSlot: FolderEditRequest?
 
     init() {
@@ -118,10 +119,13 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
-            if !AppRuntime.isRunningTests { resumePendingImports() }
-            Task { @MainActor in
-                await processQueuedTranscriptionsIfReady()
-            }
+            resumeWaitingWork()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .transcriptionCanResumeNotification)) { _ in
+            resumeWaitingWork()
+        }
+        .onChange(of: languageSetting) { _, _ in
+            Task { await transcriptionService.followLanguageSetting() }
         }
         .onChange(of: voiceNotes.count) { _, _ in
             syncInitialSelection()
@@ -788,6 +792,13 @@ struct ContentView: View {
                 }
             }
         } else {
+            await processQueuedTranscriptionsIfReady()
+        }
+    }
+
+    private func resumeWaitingWork() {
+        if !AppRuntime.isRunningTests { resumePendingImports() }
+        Task { @MainActor in
             await processQueuedTranscriptionsIfReady()
         }
     }
@@ -1731,11 +1742,6 @@ struct VoiceNoteDetailView: View {
     @State private var searchMatches: [NSRange] = []
     @State private var currentSearchMatch = 0
     @State private var searchJump = 0
-
-    private var isModelLoaded: Bool {
-        guard let modelManager = transcriptionService.modelManager else { return false }
-        return modelManager.isModelLoaded()
-    }
 
     private var selectedModelDisplayName: String? {
         guard let selectedModel = transcriptionService.modelManager?.selectedModel, !selectedModel.isEmpty else {
@@ -2832,7 +2838,7 @@ struct VoiceNoteDetailView: View {
     private func requestTranscription(force: Bool = false, takeOver: Bool = false) {
         guard !note.audioFilePath.isEmpty
                 || transcriptionService.segmentProgressStore.existingWorkingCopyURL(for: note.id) != nil else { return }
-        guard isModelLoaded else {
+        guard transcriptionService.isReadyToTranscribe() else {
             showLoadModelPrompt = true
             return
         }

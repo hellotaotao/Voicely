@@ -325,6 +325,10 @@ final class RecordingSession: ObservableObject {
             transcriptionService.beginEnglishRecording(noteID: note.id)
         } else {
             transcriptionService.endEnglishRecordings()
+            // With English as the setting Qwen3-ASR is not loaded yet.
+            if transcriptionService.loadsQwenOnDemand && !isModelLoaded && !isModelLoading {
+                Task { _ = await transcriptionService.loadSpeechModel() }
+            }
         }
         note.isTranscribing = true
         note.transcriptionProgress = 0.0
@@ -718,9 +722,7 @@ final class RecordingSession: ObservableObject {
             await export.cleanupTemporaryAudio()
 
             transcriptionService.endLocalRecording(noteID: note.id)
-            if isModelLoaded {
-                await transcriptionService.processPendingTranscriptions(notes: [note])
-            }
+            await transcriptionService.processPendingTranscriptions(notes: [note])
         }
     }
 
@@ -873,9 +875,7 @@ final class RecordingSession: ObservableObject {
 
             transcriptionService.endLocalRecording(noteID: note.id)
             note.queueTranscription(at: Date())
-            if isModelLoaded {
-                await transcriptionService.processPendingTranscriptions(notes: [note])
-            }
+            await transcriptionService.processPendingTranscriptions(notes: [note])
         }
     }
 

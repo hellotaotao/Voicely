@@ -16,6 +16,7 @@
 
 当前版本 **0.31.0**（以 `Config/Version.xcconfig` 为准）。到现在都只发过内部 TestFlight，没有公开上架过。
 
+- **dev 上未发布**：默认语言是 English 时，千问不再常驻内存，Mac 上少占约 1 GB（3a）；删掉了只为 0.28.0 之前的设备保留的启动清理（第 10 项）。
 - **0.31.0（2026-11-03）**：选 English 的录音全程只用 Parakeet，这段时间千问卸载（3a）；短的英文重转跳过千问，整条放回队列重转的录音保留它的一次性语言选择；笔记文件夹与搜索（2c）；搜索命中在列表和详情页里高亮，详情页可以逐处跳转（2d）；Mac 侧边栏去掉大标题、搜索框固定，列表去掉"Recordings"小标题。2c 新增了 `@Model NoteFolder` 和 `VoiceNote.folderSlot`，上传前已部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight。
 - **0.30.2（2026-11-01）**：Parakeet 加载模型和转换音频格式时，每 5 秒给锁屏后台任务上报一次进度。修的是 0.30.0 在 iPhone 上锁屏重转长英文录音时，Parakeet 首次加载约 1 分 40 秒没有进度、后台任务被系统收走（见 3a 待办 5）。
 - **0.30.1（2026-11-01）**：详情页改成长页面，转写文字撑长整页，播放器卡片滚到顶部时吸住（Mac 实测通过）。
@@ -55,7 +56,6 @@
 2d. 🧪 **搜索命中高亮**（2026-11-03 实现，单元测试通过；界面未亲手点过）：搜索时列表每行的预览不再显示转写开头，而是显示第一处命中所在的那句话（句首离命中超过 60 个字时，从命中前一点截起，前面加"…"），关键词加粗、加黄底；标题里的命中同样标出。打开笔记后，正文里所有命中都标黄，当前一处标橙，自动滚到第一处；底部浮一条"3 of 12 ⌃ ⌄"，点箭头或在 Mac 上按 ⌘G / ⇧⌘G 跳到下一处 / 上一处；只有标题命中时显示"Only the title matches"。高亮画在文字后面的图层上，不重新排版。跳转算作一次手动滚动，之后 4 秒内播放不会把页面拉回正在播的句子。没有时间轴的笔记在有命中时也改用同一个文本视图显示，只是点句子不跳转。列表筛选和详情页高亮用同一套匹配规则（`NoteSearch`：不区分大小写、重音、全角半角），所以列表里留下的笔记点进去一定找得到命中。单条笔记最多标 2000 处，超过时显示"2000+"。待验：Mac 上实际滚动位置是否被吸顶播放器挡住；iPhone 上底部浮条和录音控制条的位置（并入发布前专项）。
 3a. **英文录音改用 Parakeet**（🧪 0.30.0 起，Mac 实测通过；方案、实现和实测记录见"五"里的 3a 一节和 P-0q）：英文上 Parakeet TDT v2 比千问准，也快得多（Mac M4 约 177× 实时，千问 CoreML 约 7.8×）。停止录音后把确认是英文的大段交给它重转；选 English 的录音、导入和重转全程只用它。还剩：
    - Mac app 里手动点一遍：语言菜单对导入生效；选 English 实际录一条，看边录边转和停止后的整条重转（会在笔记库里留下测试录音并同步到其他设备）。
-   - 设置页默认语言是 English 时，启动仍加载千问。
    - iPhone 部分见发布前 iPhone 清单。
 
 ⑤ **录音中的实时无信号提示**（Mac 专项剩下的一项）：现在只有录完后的静音提示。见"四、阶段详情"⑤。
@@ -803,7 +803,8 @@ Debug 版 app 转一条 64 分钟录音时，进程占了 13 GB，其中 12 GB �
   - **路由**（`EnglishStretchRouting`）：千问每片的语言标签随转写结果带回（`TranscriptionResult.language`）。停止录音后（`IncrementalTranscriptionCoordinator.transcribeEnglishStretches`）、导入和手动重转结束时（`SegmentedAudioTranscriber`，标签存进断点文件，重启后接着用）按上面的规则找大段。30 秒以内的导入和手动重转一次转完，整个文件算一片，用千问给这一片的标签走同样的规则（2026-10-31），全英文也交给 Parakeet；手动重转这一条在 `TranscriptionService.parakeetTranscript`。Parakeet 的词按中点时间分回原来的各片，所以文字仍是一片一行，时间轴（P-0p）结构不变。一段 Parakeet 失败，这段保留千问的文字。Parakeet 的进度计入后台任务的"解码工作量"，锁屏收尾不会因为没有进度被系统收走。
   - **显式选 English**（2026-11-02 改定，取代原来的"录音中仍用千问带 English 提示边录边转"）：整条录音不用千问。边录边转的每一片交给 Parakeet，插到 Parakeet 等待队列的最前面（`IncrementalTranscriptionCoordinator.transcribesWithParakeet`）；某片失败留到停止时重试。停止后 Parakeet 把整条重转一遍，作为最终文字。从开始录音到文字落定，千问卸载、Parakeet 保持加载（`TranscriptionService.beginEnglishRecording`）；之后卸载 Parakeet、重新加载千问，加载完成的通知让等着的工作接着跑。这段时间里要千问的排队项、导入和重转先暂停（千问入口返回"模型不可用"，走原有的暂停和重新排队），队列跳过它们；选 English 的项照常用 Parakeet 跑。英文录音还在收尾时又开一条非英文录音，千问立刻装回来。Parakeet 一次只做一件事，正在跑的整文件转写（比如英文长文件导入，Mac 上每小时约 16 秒）做完之前，实时片只能等。录音的实时文字用不了、整条放回队列重转时，保留这条录音的一次性语言选择（2026-11-02 修，原来重转改用设置页的默认值）。
     - Mac 实测（2026-11-02）：`ParakeetRealModelTests.englishRecordingRunsOnParakeetAlone` 用 5 分钟英文会议按录音节奏回放（测试用 14 秒切片），29 片边录边转共 2.7 秒，停止后整条 1.3 秒，千问全程没加载；逐片转丢了开头的 "She's"，整条重转找了回来。`Qwen3RealModelTests.modelUnloadedForAnEnglishRecordingLoadsAgain`：卸载千问让测试进程从 2.0 GB 降到 0.8 GB，重新加载后同一段文字逐字相同。单元测试 450 个全部通过。没在 Mac app 里实际录一条（会在笔记库里留下测试录音并同步到其他设备）。
-    - 没做：设置页默认语言是 English 时，启动仍加载千问。iPhone 锁屏时在后台重新加载 CoreML 千问没测，失败的话回到前台会再加载（并入发布前 iPhone 清单）。
+    - 默认语言是 English 时不再常驻千问（2026-11-03）：启动不加载，选 English 的录音结束后也不重新加载；队列、导入和重转直接交给 Parakeet。真要用千问时才加载：某条录音单独选了别的语言、Parakeet 失败或什么都没听出来要退回千问、在设置里把语言改走。设置页的模型状态这时显示"Loads when needed"，不显示"Load Model"按钮。Mac 实测：Debug app 用 English 启动 25 秒后占内存 81 MB，用 Auto 启动、千问加载完是 1126 MB。单元测试 482 个全部通过；设置页的显示没亲手看过。
+    - 没做：iPhone 锁屏时在后台重新加载 CoreML 千问没测，失败的话回到前台会再加载（并入发布前 iPhone 清单）。
   - **不保留千问版本**（2026-10-31 改定，取代 10-30 实现的"千问版本可以切回"）：Parakeet 替换后，千问的文字直接丢弃，不存进笔记，详情页没有切换入口。理由：抽样里 Parakeet 明显更准（P-0q：40 处分歧，Parakeet 对 20、千问对 7），千问赢的只是个别句子，整条切换拿不到这些好处，只会让用户无从选择；长期对比靠重跑本地录音，存下的旧文字用不上，笔记也只在用户自己的设备和 iCloud 里，别人的数据我们拿不到。Parakeet 转错时，在设置里把语言改成别的语言再 Re-transcribe，这条就只走千问（语言设置是全局的，混说的录音可能丢英文）；真碰到再给 Re-transcribe 加语言选项。元数据行的"Parakeet"标签保留（2026-11-01 从"Parakeet for English"改名），靠 `transcriptionModelIdentifier` 末尾的 `+parakeet` 判断，不新增 `@Model` 字段，所以这一版不需要部署 CloudKit Prod schema。`alternateTranscriptData` 只跑过 Debug，Development 环境里可能已有这个字段：下次部署前重置 Development 环境，否则它会被带进 Prod，多一个永远删不掉的空字段。
   - **录音页语言选择**：原来录音按钮左边的"Model"按钮改成语言菜单（Auto Detect、English、Chinese，其余在"Other Languages"里，另有"Speech Settings…"进设置页）。选择只对下一条录音生效，开始录音后清空；和设置页默认值相同就等于没选。不是 auto 时显示成橙色。
   - **Mac 实测**：Parakeet 第一次加载（神经引擎编译）约 20 秒，之后加载加转写 244 秒音频共 1.6 秒。真实千问按录音节奏回放 7 分钟英文会议（`ParakeetRealModelTests`，测试用 14 秒切片）：29 片里中间一片 None 留在大段里，结尾两片静音没带进去，Parakeet 这一步 2.1 秒。Debug app 导入同一条录音：详情页显示 Parakeet 版本。单元测试 431 个全部通过。

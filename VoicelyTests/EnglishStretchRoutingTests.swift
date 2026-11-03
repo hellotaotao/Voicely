@@ -719,6 +719,106 @@ struct EnglishRecordingTests {
         #expect(qwenCalls == 0)
     }
 
+    /// A service with English as the setting and Qwen3-ASR not loaded, set up
+    /// to transcribe 10 s notes queued on this device.
+    @MainActor
+    private func englishSettingService(
+        parakeetWords: [TimedWord]
+    ) -> (service: TranscriptionService, manager: ModelManager, loads: () -> Int, qwenCalls: () -> Int) {
+        let service = TranscriptionService()
+        service.languageSettingKey = { "english" }
+        var loads = 0
+        let manager = ModelManager(backend: .coreML, loader: { _ in loads += 1 })
+        service.setModelManager(manager)
+        service.deviceIDProvider = { "this-device" }
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        service.audioDurationProvider = { _ in 10 }
+        service.keepEnglishEngineLoaded = { _ in }
+        service.releaseEnglishEngine = {}
+        var qwenCalls = 0
+        service.transcribeImpl = { _, _ in
+            qwenCalls += 1
+            return "qwen"
+        }
+        service.transcribeEnglish = { _, _, _ in parakeetWords }
+        return (service, manager, { loads }, { qwenCalls })
+    }
+
+    private func queuedNote(_ title: String, url: URL) -> VoiceNote {
+        let note = VoiceNote(title: title, audioFilePath: url.path)
+        note.transcriptionOriginDeviceID = "this-device"
+        note.queueTranscription(at: Date())
+        return note
+    }
+
+    @Test @MainActor func englishSettingRunsTheQueueOnParakeetWithoutLoadingQwen() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let setup = englishSettingService(parakeetWords: [TimedWord(text: "parakeet", start: 4, end: 5)])
+        let note = queuedNote("English", url: url)
+
+        #expect(setup.service.isReadyToTranscribe())
+        #expect(setup.service.waitReason(for: note) != .waitingForModel)
+        await setup.service.processPendingTranscriptions(notes: [note])
+
+        #expect(note.transcription == "parakeet")
+        #expect(note.transcriptionState == .completed)
+        #expect(setup.loads() == 0)
+        #expect(!setup.manager.isModelLoaded())
+        #expect(setup.qwenCalls() == 0)
+    }
+
+    @Test(arguments: [true, false])
+    @MainActor func englishSettingLoadsQwenForADecodeThatNeedsIt(otherLanguage: Bool) async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Parakeet hears nothing in the English note, so Qwen3-ASR takes it.
+        let setup = englishSettingService(parakeetWords: [])
+        let note = queuedNote("Note", url: url)
+        if otherLanguage { setup.service.setLanguageKey("chinese", for: note.id) }
+
+        await setup.service.processPendingTranscriptions(notes: [note])
+
+        #expect(note.transcription == "qwen")
+        #expect(note.transcriptionState == .completed)
+        #expect(setup.loads() == 1)
+        #expect(setup.qwenCalls() == 1)
+    }
+
+    @Test @MainActor func englishRecordingEndsWithoutLoadingQwenWhenEnglishIsTheSetting() async {
+        let setup = englishSettingService(parakeetWords: [])
+        let resumed = OSAllocatedUnfairLock(initialState: 0)
+        let observer = NotificationCenter.default.addObserver(
+            forName: .transcriptionCanResumeNotification, object: nil, queue: nil) { _ in resumed.withLock { $0 += 1 } }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let recording = UUID()
+
+        setup.service.beginEnglishRecording(noteID: recording)
+        await setup.service.waitForEngineSwitch()
+        setup.service.endEnglishRecording(noteID: recording)
+        await setup.service.waitForEngineSwitch()
+
+        #expect(!setup.manager.isModelLoaded())
+        #expect(setup.loads() == 0)
+        #expect(resumed.withLock { $0 } == 1)
+        #expect(setup.service.isReadyToTranscribe())
+    }
+
+    @Test @MainActor func leavingEnglishInSettingsLoadsQwen() async {
+        let setup = englishSettingService(parakeetWords: [])
+        var setting = "english"
+        setup.service.languageSettingKey = { setting }
+
+        await setup.service.followLanguageSetting()
+        #expect(setup.loads() == 0)
+
+        setting = "auto"
+        #expect(!setup.service.isReadyToTranscribe())
+        await setup.service.followLanguageSetting()
+        #expect(setup.manager.isModelLoaded())
+        #expect(setup.loads() == 1)
+    }
+
     @Test func liveSlicesGoAheadOfWorkAlreadyWaiting() {
         var turns = ParakeetTurns<String>()
         let first = turns.takeIfFree()

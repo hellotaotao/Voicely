@@ -109,6 +109,15 @@ class TranscriptionService: ObservableObject {
     /// "selectedLanguage" setting; nil follows the setting.
     private var languageKeyByNoteID: [UUID: String] = [:]
 
+    /// Tests never follow the developer's own setting: with English chosen
+    /// there, a test could load the real model.
+    nonisolated private static let followsLanguageSetting = !AppRuntime.isRunningTests
+
+    /// The "selectedLanguage" setting. Tests replace it.
+    var languageSettingKey: () -> String? = {
+        TranscriptionService.followsLanguageSetting ? UserDefaults.standard.string(forKey: Qwen3ASRDefaults.selectedLanguageKey) : nil
+    }
+
     func setLanguageKey(_ key: String?, for noteID: UUID) {
         languageKeyByNoteID[noteID] = key
     }
@@ -116,8 +125,7 @@ class TranscriptionService: ObservableObject {
     /// The language hint for a decode of `noteID`'s audio: the recording's own
     /// choice, else the setting. Nil is auto-detect.
     func languageHint(for noteID: UUID?) -> String? {
-        let key = noteID.flatMap { languageKeyByNoteID[$0] }
-            ?? UserDefaults.standard.string(forKey: Qwen3ASRDefaults.selectedLanguageKey)
+        let key = noteID.flatMap { languageKeyByNoteID[$0] } ?? languageSettingKey()
         return Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)
     }
 
@@ -125,6 +133,20 @@ class TranscriptionService: ObservableObject {
     /// Qwen3-ASR only steps in when Parakeet fails.
     func transcribesWithParakeet(_ noteID: UUID?) -> Bool {
         EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID)) == .english
+    }
+
+    /// English is the setting, so Parakeet takes the work and Qwen3-ASR is not
+    /// kept loaded: a decode that needs it loads it.
+    var loadsQwenOnDemand: Bool {
+        EnglishStretchRouting.Mode(
+            languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: languageSettingKey())) == .english
+    }
+
+    /// The language setting changed: any other language than English needs
+    /// Qwen3-ASR loaded, and loading it resumes the work that waited.
+    func followLanguageSetting() async {
+        guard !loadsQwenOnDemand, !isEngineLoaded else { return }
+        _ = await loadSpeechModel()
     }
 
     // MARK: Recordings with English chosen
@@ -168,8 +190,13 @@ class TranscriptionService: ObservableObject {
         switchEngines { [weak self] in
             guard let self else { return }
             await self.keepEnglishEngineLoaded(false)
-            // Loading posts modelLoadedNotification, which resumes the work that waited.
             guard !self.isRecordingEnglish else { return }
+            if self.loadsQwenOnDemand {
+                // Qwen3-ASR stays unloaded; work that needs it loads it.
+                NotificationCenter.default.post(name: .transcriptionCanResumeNotification, object: nil)
+                return
+            }
+            // Loading posts modelLoadedNotification, which resumes the work that waited.
             _ = await self.loadSpeechModel()
         }
     }
@@ -195,10 +222,11 @@ class TranscriptionService: ObservableObject {
         }
     }
 
-    /// Whether work can start: Qwen3-ASR is loaded, or a recording with English
-    /// chosen keeps it unloaded and Parakeet takes what it can meanwhile.
+    /// Whether work can start: Qwen3-ASR is loaded, a recording with English
+    /// chosen keeps it unloaded and Parakeet takes what it can meanwhile, or
+    /// English is the setting and Qwen3-ASR loads when a decode needs it.
     func isReadyToTranscribe() -> Bool {
-        isEngineAvailable() || isRecordingEnglish
+        isEngineAvailable() || isRecordingEnglish || loadsQwenOnDemand
     }
 
     /// The note whose audio is being decoded, for its language choice.
@@ -369,9 +397,7 @@ class TranscriptionService: ObservableObject {
     }
 
     func processPendingTranscriptions(notes: [VoiceNote]) async {
-        updateEngineStatus()
-
-        guard isEngineLoaded || isRecordingEnglish else {
+        guard isReadyToTranscribe() else {
             return
         }
 
@@ -444,10 +470,8 @@ class TranscriptionService: ObservableObject {
         force: Bool = false,
         takeOver: Bool = false
     ) async -> Bool {
-        updateEngineStatus()
-
         let workingCopy = segmentProgressStore.existingWorkingCopyURL(for: note.id)
-        guard isEngineLoaded || isRecordingEnglish, !note.audioFilePath.isEmpty || workingCopy != nil,
+        guard isReadyToTranscribe(), !note.audioFilePath.isEmpty || workingCopy != nil,
               !localRecordingNoteIDs.contains(note.id), !discardedNoteIDs.contains(note.id) else {
             return false
         }
@@ -775,6 +799,9 @@ class TranscriptionService: ObservableObject {
         telemetrySession: TranscriptionTelemetrySession? = nil
     ) async -> TranscriptionOutcome {
         updateEngineStatus()
+        if !isEngineLoaded, !isRecordingEnglish, loadsQwenOnDemand {
+            _ = await loadSpeechModel()
+        }
 
         let pausedForEngine = isTranscribing && telemetrySession?.activeWorkOnly == true
         if pausedForEngine, let telemetrySession { pauseTelemetryWork(telemetrySession) }
@@ -1031,7 +1058,7 @@ extension TranscriptionService {
             return nil
         }
         if isPausedForBackground(noteID: note.id) { return .pausedInBackground }
-        if !isEngineLoaded { return .waitingForModel }
+        if !isEngineLoaded, !loadsQwenOnDemand { return .waitingForModel }
         if let index = localQueueOrder.firstIndex(of: note.id) { return .inLine(position: index + 1) }
         if audioWaitNoteIDs.contains(note.id) { return .waitingForAudio }
         if !isLocalTask(note) { return .waitingForOtherDevice }

@@ -172,6 +172,9 @@ final class RecordingSession: ObservableObject {
         return pendingLanguageKey
     }
 
+    /// The recording in progress has English chosen, so Parakeet transcribes it.
+    @Published private(set) var recordingUsesParakeet = false
+
     /// The active recording's scheduled stop, or nil when it runs until stopped by hand.
     @Published private(set) var stopSchedule: RecordingStopSchedule?
 
@@ -342,6 +345,7 @@ final class RecordingSession: ObservableObject {
 
         let coord = coordinatorFactory(pcmURL)
         coord.transcribesWithParakeet = transcribesWithParakeet
+        recordingUsesParakeet = transcribesWithParakeet
         coord.configureTelemetry(noteID: note.id)
         coord.telemetryCallback = { [weak note] snapshot in
             note?.replaceCumulativeTranscriptionTelemetry(snapshot)
@@ -349,7 +353,7 @@ final class RecordingSession: ObservableObject {
         coord.frameCountProvider = { [weak audioService] in
             audioService?.currentFramePosition ?? 0
         }
-        coord.transcriptCallback = { [weak self, note] transcript in
+        coord.transcriptCallback = { [weak self, weak coord, note] transcript in
             guard let self, !self.transcriptionService.wasTakenOverElsewhere(note) else { return }
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
 
@@ -357,7 +361,7 @@ final class RecordingSession: ObservableObject {
             note.isTranscribing = true
             let modelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
                 ?? self.transcriptionService.modelManager?.selectedModel
-            note.transcriptionModelIdentifier = transcribesWithParakeet
+            note.transcriptionModelIdentifier = (coord?.transcribesWithParakeet ?? transcribesWithParakeet)
                 ? EnglishStretchRouting.modelIdentifier(afterParakeet: modelIdentifier)
                 : modelIdentifier
             note.transcriptionLastErrorMessage = nil
@@ -374,6 +378,19 @@ final class RecordingSession: ObservableObject {
                 applyStopSchedule(RecordingStopSchedule(endDate: plan.endDate(startingAt: now())))
             }
         }
+    }
+
+    // MARK: Language
+
+    /// The recording with English chosen turns out not to be English only, so
+    /// it switches to Auto Detect, once: Qwen3-ASR transcribes from here, and at
+    /// stop it transcribes again what Parakeet took before, as if Auto Detect
+    /// had been chosen from the start.
+    func switchRecordingToAutoDetect() {
+        guard recordingUsesParakeet, let note = currentRecordingNote, let coordinator else { return }
+        recordingUsesParakeet = false
+        coordinator.switchToAutoDetect()
+        transcriptionService.switchRecordingToAutoDetect(noteID: note.id)
     }
 
     // MARK: Scheduled stop
@@ -747,6 +764,7 @@ final class RecordingSession: ObservableObject {
         let capturedCoordinator = coordinator
         let recordingNote = currentRecordingNote
         coordinator = nil
+        recordingUsesParakeet = false
         clearStopSchedule()
         registerLiveActivityControls()
         currentRecordingNote = nil

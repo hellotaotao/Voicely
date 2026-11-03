@@ -1596,11 +1596,53 @@ struct RecordingControls: View {
 
     private var recordingLayout: some View {
         VStack(spacing: 8) {
+            if session.recordingUsesParakeet {
+                recordingLanguageRow
+            }
             if let schedule = session.stopSchedule {
                 RecordingStopStatusRow(session: session, schedule: schedule)
             }
             recordingButtonsRow
         }
+    }
+
+    /// A recording with English chosen says so, and can switch to Auto Detect
+    /// once when it turns out not to be English only.
+    private var recordingLanguageRow: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "character.bubble")
+                Text("English")
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.orange)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Speech language: English")
+
+            Spacer(minLength: 4)
+
+            Button {
+                session.switchRecordingToAutoDetect()
+            } label: {
+                Text("Switch to Auto Detect")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Library.switchToAutoDetectButton)
+        }
+        .font(.caption.weight(.medium))
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.orange.opacity(0.12))
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingLanguageStatus)
     }
 
     private var recordingButtonsRow: some View {

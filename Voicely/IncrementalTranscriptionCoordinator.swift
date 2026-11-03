@@ -76,7 +76,7 @@ final class IncrementalTranscriptionCoordinator {
     var finalizationProgress: Double {
         guard let finalFrame, finalFrame > 0 else { return 0 }
         let settledFrames = slices.reduce(AVAudioFramePosition(0)) { total, slice in
-            slice.awaitsRetry ? total : total + (slice.endFrame - slice.startFrame)
+            isSettled(slice) ? total + (slice.endFrame - slice.startFrame) : total
         }
         // The slice being decoded is never settled yet — a tail slice is not in
         // `slices` and a retried one still awaits its retry — so its partial
@@ -87,8 +87,9 @@ final class IncrementalTranscriptionCoordinator {
         // settled slice; the bar moves on only once the decoder passes it.
         let decodingFrames = decodingSlice.map { decoding -> AVAudioFramePosition in
             let settledOverlap = slices.reduce(AVAudioFramePosition(0)) { total, slice in
-                slice.awaitsRetry ? total
-                    : total + max(0, min(slice.endFrame, decoding.end) - max(slice.startFrame, decoding.start))
+                isSettled(slice)
+                    ? total + max(0, min(slice.endFrame, decoding.end) - max(slice.startFrame, decoding.start))
+                    : total
             }
             let decoded = AVAudioFramePosition(Double(decoding.end - decoding.start) * decoding.fraction)
             return max(0, decoded - settledOverlap)
@@ -98,10 +99,10 @@ final class IncrementalTranscriptionCoordinator {
 
     /// Audio still to transcribe if the recording stops at `frame`: the part live
     /// transcription has not reached, the slice being transcribed, and slices
-    /// that could not be decoded live.
+    /// that could not be decoded live or that Qwen3-ASR still has to take over.
     func remainingAudioSeconds(upTo frame: AVAudioFramePosition) -> Double {
         let failedFrames = slices.reduce(AVAudioFramePosition(0)) { total, slice in
-            slice.awaitsRetry ? total + (slice.endFrame - slice.startFrame) : total
+            isSettled(slice) ? total : total + (slice.endFrame - slice.startFrame)
         }
         let inFlightFrames = inFlightSlice.map { $0.end - $0.start } ?? 0
         let unreachedFrames = max(0, frame - lastSegmentEndFrame)
@@ -192,6 +193,8 @@ final class IncrementalTranscriptionCoordinator {
         var failure: SliceFailure?
         /// The language Qwen3-ASR named for the slice, nil without one.
         var language: String?
+        /// Parakeet transcribed the slice, not Qwen3-ASR.
+        var byParakeet = false
 
         /// The engine never got to judge this audio, so stop decodes it once more.
         var awaitsRetry: Bool {
@@ -203,9 +206,10 @@ final class IncrementalTranscriptionCoordinator {
             }
         }
 
-        init(startFrame: AVAudioFramePosition, endFrame: AVAudioFramePosition, result: SliceResult) {
+        init(startFrame: AVAudioFramePosition, endFrame: AVAudioFramePosition, result: SliceResult, byParakeet: Bool) {
             self.startFrame = startFrame
             self.endFrame = endFrame
+            self.byParakeet = byParakeet
             apply(result)
         }
 
@@ -276,6 +280,7 @@ final class IncrementalTranscriptionCoordinator {
             waitForCompletion: true,
             useVoiceActivityCut: false
         )
+        await transcribeParakeetSlicesWithQwen()
         await retryUndecodedSlices()
         settleRemainingFailures()
         finishTelemetry()
@@ -297,6 +302,23 @@ final class IncrementalTranscriptionCoordinator {
     /// The recording has English chosen: Parakeet transcribes its live slices,
     /// and Qwen3-ASR is not used at all.
     var transcribesWithParakeet = false
+
+    /// The recording turns out not to be English only: Qwen3-ASR transcribes
+    /// the slices from here, and at stop the ones Parakeet transcribed before.
+    func switchToAutoDetect() {
+        transcribesWithParakeet = false
+    }
+
+    /// Where the next slice goes, read before it is transcribed.
+    private var nextSliceGoesToParakeet: Bool {
+        transcribesWithParakeet && transcribeOverride == nil
+    }
+
+    /// The slice's text is final: nothing retries it, and Qwen3-ASR does not
+    /// still have to take it over from Parakeet.
+    private func isSettled(_ slice: LiveSlice) -> Bool {
+        !slice.awaitsRetry && !(slice.byParakeet && !transcribesWithParakeet)
+    }
 
     /// Transcribes one live slice with Parakeet, ahead of work already waiting
     /// for it, such as an English import. Tests replace it.
@@ -440,9 +462,10 @@ final class IncrementalTranscriptionCoordinator {
                 transcriptCallback?(accumulatedTranscript)
                 return
             }
+            let byParakeet = nextSliceGoesToParakeet
             let result = await transcribeSlice(from: startFrame, to: endFrame, session: session)
             inFlightSlice = nil
-            slices.append(LiveSlice(startFrame: startFrame, endFrame: endFrame, result: result))
+            slices.append(LiveSlice(startFrame: startFrame, endFrame: endFrame, result: result, byParakeet: byParakeet))
             if case .text = result {
                 transcriptCallback?(accumulatedTranscript)
             }
@@ -469,9 +492,10 @@ final class IncrementalTranscriptionCoordinator {
         }
         var replacements: [LiveSlice] = []
         for (start, sliceEnd) in zip(bounds, bounds.dropFirst()) {
+            let byParakeet = nextSliceGoesToParakeet
             let result = await transcribeSlice(from: start, to: sliceEnd, session: session)
             if case .failed = result { return false }
-            replacements.append(LiveSlice(startFrame: start, endFrame: sliceEnd, result: result))
+            replacements.append(LiveSlice(startFrame: start, endFrame: sliceEnd, result: result, byParakeet: byParakeet))
         }
         if previous.text != nil, replacements.allSatisfy({ $0.text == nil }) { return false }
         slices.removeLast()
@@ -611,13 +635,34 @@ final class IncrementalTranscriptionCoordinator {
             guard !telemetryFinished else { return }
             let slice = slices[index]
             var result = SliceResult.failed(slice.failure ?? .unavailable)
+            let byParakeet = nextSliceGoesToParakeet
             await performSliceWork { session in
                 result = await transcribeSlice(from: slice.startFrame, to: slice.endFrame, session: session)
             }
             slices[index].apply(result)
+            slices[index].byParakeet = byParakeet
             if slices[index].text != nil {
                 transcriptCallback?(accumulatedTranscript)
             }
+        }
+    }
+
+    /// After a switch to Auto Detect, Qwen3-ASR transcribes again what Parakeet
+    /// took before it, so the recording ends as if Auto Detect had been chosen
+    /// from the start; the English stretch rule then decides what goes back to
+    /// Parakeet. A slice that fails here is retried like any other.
+    private func transcribeParakeetSlicesWithQwen() async {
+        guard !transcribesWithParakeet else { return }
+        for index in slices.indices where slices[index].byParakeet {
+            guard !telemetryFinished else { return }
+            let slice = slices[index]
+            var result = SliceResult.failed(.unavailable)
+            await performSliceWork { session in
+                result = await transcribeSlice(from: slice.startFrame, to: slice.endFrame, session: session)
+            }
+            slices[index].apply(result)
+            slices[index].byParakeet = false
+            transcriptCallback?(accumulatedTranscript)
         }
     }
 

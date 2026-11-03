@@ -201,6 +201,16 @@ class TranscriptionService: ObservableObject {
         }
     }
 
+    /// The recording with English chosen turns out not to be English only:
+    /// from here it is Auto Detect, and Qwen3-ASR loads now for its slices.
+    func switchRecordingToAutoDetect(noteID: UUID) {
+        setLanguageKey("auto", for: noteID)
+        endEnglishRecording(noteID: noteID)
+        if !isEngineLoaded {
+            Task { _ = await loadSpeechModel() }
+        }
+    }
+
     /// A recording that needs Qwen3-ASR starts: recordings with English chosen
     /// that are still settling their text no longer keep it unloaded.
     func endEnglishRecordings() {
@@ -799,7 +809,10 @@ class TranscriptionService: ObservableObject {
         telemetrySession: TranscriptionTelemetrySession? = nil
     ) async -> TranscriptionOutcome {
         updateEngineStatus()
-        if !isEngineLoaded, !isRecordingEnglish, loadsQwenOnDemand {
+        // With English as the setting Qwen3-ASR loads when a decode needs it;
+        // a load already under way, such as the one a switch to Auto Detect
+        // starts, is waited for instead of failing the decode.
+        if !isEngineLoaded, !isRecordingEnglish, loadsQwenOnDemand || modelManager?.isLoading == true {
             _ = await loadSpeechModel()
         }
 

@@ -624,6 +624,76 @@ struct EnglishRecordingTests {
         #expect(qwenCalls == 0)
     }
 
+    @Test(arguments: [("Chinese", "qwen\nqwen\nqwen"), ("English", "en0\nen1\nen2")])
+    @MainActor func switchingToAutoDetectEndsAsIfAutoDetectWasChosen(language: String, finalText: String) async throws {
+        let pcmURL = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 3 * 14)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let service = TranscriptionService()
+        service.setModelManager(EnglishStretchTranscriptionTests.LoadedModelManager(backend: .coreML))
+        var qwenCalls = 0
+        service.transcribeImpl = { [weak service] _, _ in
+            qwenCalls += 1
+            service?.decodedLanguage = language
+            return "qwen"
+        }
+        let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        coordinator.transcribesWithParakeet = true
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
+        var liveParakeetSlices = 0
+        coordinator.transcribeEnglishSlice = { _, start, _, _ in
+            liveParakeetSlices += 1
+            return [TimedWord(text: "live\(start / (14 * 16_000))", start: 1, end: 2)]
+        }
+        coordinator.transcribeEnglish = { _, start, end, _ in
+            EnglishStretchTranscriptionTests.words(for: 0...2, start: start, end: end)
+        }
+        coordinator.releaseEnglishEngine = {}
+
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
+        #expect(coordinator.accumulatedTranscript == "live0")
+        let remainingBefore = coordinator.remainingAudioSeconds(upTo: 14 * 16_000)
+        coordinator.switchToAutoDetect()
+        // The slice Parakeet transcribed is still to do.
+        #expect(coordinator.remainingAudioSeconds(upTo: 14 * 16_000) == remainingBefore + 14)
+
+        await coordinator.transcribeSegment(upToFrame: 29 * 16_000)
+        #expect(coordinator.accumulatedTranscript == "live0\nqwen")
+        _ = await coordinator.stop(currentFrame: 3 * 14 * 16_000)
+
+        #expect(liveParakeetSlices == 1)
+        #expect(qwenCalls == 3)
+        #expect(coordinator.accumulatedTranscript == "qwen\nqwen\nqwen")
+        #expect(coordinator.finalizationProgress == 1)
+        // Auto Detect's rule then takes English back to Parakeet.
+        _ = await coordinator.transcribeEnglishStretches(mode: .automatic)
+        #expect(coordinator.accumulatedTranscript == finalText)
+    }
+
+    @Test(arguments: [nil, "english"] as [String?])
+    @MainActor func switchingToAutoDetectLoadsQwenForTheRestOfTheRecording(setting: String?) async throws {
+        let service = TranscriptionService()
+        service.languageSettingKey = { setting }
+        let manager = ModelManager(backend: .coreML, loader: { _ in })
+        service.setModelManager(manager)
+        service.keepEnglishEngineLoaded = { _ in }
+        let recording = UUID()
+        service.setLanguageKey("english", for: recording)
+        service.beginEnglishRecording(noteID: recording)
+        await service.waitForEngineSwitch()
+        try #require(!manager.isModelLoaded())
+
+        service.switchRecordingToAutoDetect(noteID: recording)
+        await service.waitForEngineSwitch()
+        for _ in 0..<100 where !manager.isModelLoaded() {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(manager.isModelLoaded())
+        #expect(!service.isRecordingEnglish)
+        #expect(!service.transcribesWithParakeet(recording))
+        #expect(service.languageHint(for: recording) == nil)
+    }
+
     @Test @MainActor func qwenIsUnloadedUntilTheRecordingEnds() async throws {
         let service = TranscriptionService()
         var loads = 0

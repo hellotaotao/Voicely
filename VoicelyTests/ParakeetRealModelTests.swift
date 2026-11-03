@@ -142,6 +142,66 @@ struct ParakeetRealModelTests {
         #expect(coordinator.unrecoveredSliceCount == 0)
     }
 
+    /// A recording with English chosen that switches to Auto Detect halfway,
+    /// with both real models, ends with the same text as one that had Auto
+    /// Detect from the start: what Parakeet took before the switch is
+    /// transcribed again by Qwen3-ASR, which loads at the switch.
+    @Test @MainActor func englishRecordingSwitchedToAutoDetectEndsAsAutoDetect() async throws {
+        let file = try AVAudioFile(forReading: ParakeetRealModelInput.audioURL)
+        let pcmURL = try ParakeetEnglishEngine.writeMono16k(
+            from: ParakeetRealModelInput.audioURL, startFrame: 0, endFrame: file.length)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let totalFrames = try AVAudioFile(forReading: pcmURL).length
+        let switchFrame = totalFrames / 2
+
+        func replay(_ coordinator: IncrementalTranscriptionCoordinator, from start: AVAudioFramePosition,
+                    to end: AVAudioFramePosition) async {
+            var frame = start
+            while frame < end {
+                frame = min(end, frame + 16_000)
+                await coordinator.transcribeSegment(upToFrame: frame)
+            }
+        }
+
+        // English chosen, switched halfway.
+        let modelManager = ModelManager()
+        let service = TranscriptionService(modelManager: modelManager)
+        let noteID = UUID()
+        service.setLanguageKey("english", for: noteID)
+        let switched = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        switched.transcribesWithParakeet = true
+        switched.configureTelemetry(noteID: noteID)
+        service.beginEnglishRecording(noteID: noteID)
+        await service.waitForEngineSwitch()
+        await replay(switched, from: 0, to: switchFrame)
+        let beforeSwitch = switched.accumulatedTranscript
+        switched.switchToAutoDetect()
+        service.switchRecordingToAutoDetect(noteID: noteID)
+        await replay(switched, from: switchFrame, to: totalFrames)
+        let stopStarted = ProcessInfo.processInfo.systemUptime
+        _ = await switched.stop(currentFrame: totalFrames)
+        _ = await switched.transcribeEnglishStretches(mode: .automatic)
+        let stopSeconds = ProcessInfo.processInfo.systemUptime - stopStarted
+        await service.waitForEngineSwitch()
+
+        // Auto Detect from the start, with the same loaded model.
+        try #require(modelManager.isModelLoaded(), "Qwen3-ASR did not load at the switch")
+        let autoNoteID = UUID()
+        service.setLanguageKey("auto", for: autoNoteID)
+        let automatic = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        automatic.configureTelemetry(noteID: autoNoteID)
+        await replay(automatic, from: 0, to: totalFrames)
+        _ = await automatic.stop(currentFrame: totalFrames)
+        _ = await automatic.transcribeEnglishStretches(mode: .automatic)
+
+        print("🔍 switched at \(Double(switchFrame) / 16_000) s of \(Double(totalFrames) / 16_000) s; stop took \(stopSeconds) s")
+        print("🔍 before the switch (Parakeet): " + beforeSwitch.prefix(200))
+        print("🔍 switched, final: " + switched.accumulatedTranscript.prefix(200))
+        #expect(switched.accumulatedTranscript == automatic.accumulatedTranscript)
+        #expect(switched.unrecoveredSliceCount == 0)
+        #expect(!service.isRecordingEnglish)
+    }
+
     /// A short import end to end with both real models: Qwen3-ASR decodes it
     /// in one pass, and the language it names sends the file to Parakeet.
     @Test @MainActor func shortEnglishImportGoesToParakeet() async throws {

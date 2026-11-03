@@ -57,6 +57,9 @@ class ModelManager: ObservableObject {
     private let injectedLoader: Loader?
     private var activeLoad: Task<Void, Never>?
 
+    /// A load is under way; `loadModel` waits for it.
+    var isLoading: Bool { activeLoad != nil }
+
     init(
         backend: Qwen3Backend = .current,
         store: Qwen3ASRModelStore = .shared,

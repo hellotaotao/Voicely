@@ -55,7 +55,7 @@
 2c. 🧪 **笔记文件夹与搜索**（2026-11-02 实现，单元测试通过，Mac 上已试用，随 0.31.0 发布）：列表顶部一排固定 6 个图标："全部"、"未分类"和 4 个文件夹格子。点一下是筛选，把笔记拖上去就是归档；右键菜单里也有"Move to"。文件夹最多 4 个，不能嵌套、不能多加，这是有意的：用户不用管理文件夹，只给格子起名、选颜色。空格子显示虚线"+"，点开起名；有名字的格子右键可以改名、换色或删除，删除后里面的笔记回到未分类。在某个文件夹视图里录音或导入，新笔记直接进这个文件夹。"全部"视图里每行标题前有文件夹色点。搜索框在列表上方，按标题和转写全文匹配（不区分大小写和重音），范围是当前选中的格子。存储：笔记上加 `folderSlot`（0 = 未分类，1–4 = 格子），格子的名字和颜色放在新的 `@Model NoteFolder` 里，随 CloudKit 同步；两台设备同时建了同一格时取最后修改的那条，下次编辑时删掉多余的。新增了 `@Model` 类型和字段，Prod schema 已随 0.31.0 部署。待验：iPhone 部分见发布前 iPhone 清单。
 2d. 🧪 **搜索命中高亮**（2026-11-03 实现，单元测试通过，Mac 上已试用，随 0.31.0 发布）：搜索时列表每行的预览不再显示转写开头，而是显示第一处命中所在的那句话（句首离命中超过 60 个字时，从命中前一点截起，前面加"…"），关键词加粗、加黄底；标题里的命中同样标出。打开笔记后，正文里所有命中都标黄，当前一处标橙，自动滚到第一处；底部浮一条"3 of 12 ⌃ ⌄"，点箭头或在 Mac 上按 ⌘G / ⇧⌘G 跳到下一处 / 上一处；只有标题命中时显示"Only the title matches"。高亮画在文字后面的图层上，不重新排版。跳转算作一次手动滚动，之后 4 秒内播放不会把页面拉回正在播的句子。没有时间轴的笔记在有命中时也改用同一个文本视图显示，只是点句子不跳转。列表筛选和详情页高亮用同一套匹配规则（`NoteSearch`：不区分大小写、重音、全角半角），所以列表里留下的笔记点进去一定找得到命中。单条笔记最多标 2000 处，超过时显示"2000+"。待验：Mac 上实际滚动位置是否被吸顶播放器挡住；iPhone 上底部浮条和录音控制条的位置（并入发布前专项）。
 3a. **英文录音改用 Parakeet**（🧪 0.30.0 起，Mac 实测通过；方案、实现和实测记录见"五"里的 3a 一节和 P-0q）：英文上 Parakeet TDT v2 比千问准，也快得多（Mac M4 约 177× 实时，千问 CoreML 约 7.8×）。停止录音后把确认是英文的大段交给它重转；选 English 的录音、导入和重转全程只用它。还剩：
-   - Mac app 里手动点一遍：语言菜单对导入生效；选 English 实际录一条，看边录边转和停止后的整条重转（会在笔记库里留下测试录音并同步到其他设备）。
+   - Mac app 里手动点一遍：语言菜单对导入生效；选 English 录一条有人声的英文，看边录边转和停止后的整条重转（会在笔记库里留下测试录音并同步到其他设备）。2026-11-05 已在 Mac Debug 版上验过切回 Auto Detect 的界面和流程：录音条上方出现橙色 "English" 和 "Switch to Auto Detect"，点了以后这一行消失、录音继续、千问加载（内存到约 1.17 GB），停止后正常收尾。那次 Mac 的输入是 DJI 无线麦，收不到音箱放的 `say` 语音，录成了无声笔记，所以切换后文字是否变成 Auto Detect 的结果只由 `ParakeetRealModelTests` 覆盖。另外看到：切换过的录音结束后，设置仍是 English，千问留在内存里直到 app 退出。
    - iPhone 部分见发布前 iPhone 清单。
 
 ⑤ **录音中的实时无信号提示**（Mac 专项剩下的一项）：现在只有录完后的静音提示。见"四、阶段详情"⑤。
@@ -95,9 +95,9 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 - 同步状态 UI 区分"文字已同步 / 音频待下载"。
 - 排除启动即批量 `startDownloadingUbiquitousItem` 间接抢带宽的路径。
 
-#### P-4 ⚠️ 收紧生产日志
+#### P-7 ⬜ 速度卡片的模型名一直写千问
 
-`AudioRecordingService`、`AudioPlayerService`、`VoicelyApp` 已清理干净（`VoicelyApp` 的 13 处 print 都在 `#if DEBUG` 里，2026-11-03 核对）。剩余：`CloudStorageManager` 20 处裸 `print` 仍未用 `#if DEBUG` 包住。
+详情页的速度卡片和笔记上的模型标签都取自 `TranscriptionService.currentTelemetryModelName()`，它只问千问的模型管理器，所以 Parakeet 转的部分也标成 "Qwen3 ASR 0.6B · GPU"。2026-11-05 在 Mac 上选 English 录音时看到：全程是 Parakeet 在转，卡片写的是千问。按"如实呈现"应该标实际干活的模型；一条笔记里两个模型都转过时怎么标还没定。
 
 ### 上传与提交前
 
@@ -107,8 +107,8 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 **首次公开提交前**
 
-- 原第 8 项"上架文档"剩下的部分：支持页和隐私政策页上线；定版本号；截图（iPhone/iPad 的截图在真机验收时一起拍）。
-- `UIBackgroundModes` 里的 `processing`：0.23.10 为 `BGContinuedProcessingTask` 加的（与 stash 里的实现一致），SDK 文档只对 `BGProcessingTask` 明确要求它。确认是否必需，不需要就去掉，免得审核追问。
+- 原第 8 项"上架文档"剩下的部分：支持页和隐私政策页上线；截图（iPhone、iPad 13 寸、Mac 三套，iPhone/iPad 的在真机验收时一起拍）；版权人确认。版本号已定为 **1.0.0**（2026-11-05），打提交审核的包时改 `Config/Version.xcconfig`。
+- 上架范围包括 iPad（`TARGETED_DEVICE_FAMILY = 1,2`），至少在 iPad 模拟器上看一遍布局。
 - 下面的发布前 iPhone 清单全部过一遍。
 
 ### 发布前 iPhone 清单
@@ -118,6 +118,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 **转录主流程**
 
 - 千问 CoreML：一台最低支持的设备加一台较新的设备，前台和锁屏各录一条并转完；至少一条 60–90 分钟的完整流程，记录模型加载峰值内存、后半程速度、最长进度上报间隔（Mac 上 CoreML 最长 1.09 s，iOS 约 30 s 没有进度就判停滞）、停止到文字落定的时间。最低支持 iOS 18，锁屏续跑（continued processing）依赖 iOS 26，两条路径分别验。（原第 6 项、④、5c）
+- 去掉 `processing` 后台模式之后（2026-11-05 起的包）：iOS 26 上停止录音或点 Re-transcribe 后锁屏，Console 里 `ContinuedProcessing` 类别要出现 `event=submissionAccepted`。出现 `submissionRejected` 且 `code=3`（不允许），就把 `processing` 加回 `UIBackgroundModes`。依据：WWDC25 讲 continued processing 时只要求在 `BGTaskSchedulerPermittedIdentifiers` 登记标识符，没提后台模式；`processing` 是 `BGProcessingTask` 要的，app 没用它。
 - 锁屏收尾：锁屏录 5 分钟以上的会议，解锁、停止、立刻再锁屏。回来时文字完整、没有整篇重转；详情页显示 "Finalizing transcription…" 而不是 "Recording"，而且只持续尾段解码的时间；出现 `[… transcription unavailable]` 就记下是哪段、什么内容。（P-0、P-0g）
 - 锁屏重转：前台点 Re-transcribe 后锁屏，看能否在锁屏期间完成；被系统中断后解锁，从已保存的分段继续，全部成功才替换旧文字。锁屏重转一条 20 分钟以上的录音看能撑多久，被收走就拉设备日志看理由（系统给这类任务标的 `UserInitiated, 900s` 是否等于 15 分钟上限，还没确认）。（P-0a、P-0c、P-0d）
 - 自动恢复：留一个没转完的重转任务，重启 App 让它自动恢复，不点 Re-transcribe 直接锁屏，看后台任务是否获批、锁屏期间断点是否推进。（P-0e）
@@ -865,6 +866,8 @@ Debug 版 app 转一条 64 分钟录音时，进程占了 13 GB，其中 12 GB �
 - 5b 录音中的原始音频改存持久目录：✅ 2026-10-26。见"五"。
 - 5c 解码进展按 token 上报、记录每片的结束原因：✅ 2026-10-26。见"五"。原来 P-0n 里"CoreML 到 448 token 上限时静默截断"一条随之关闭：三条长录音 386 片 0 次撞上限。
 - 10 删除只为跳过版本升级的设备保留的启动清理：✅ 2026-11-03，已经没有设备停在 0.28.0 之前。删了两段：千问不支持的旧语言设置改回自动检测（`Qwen3ASRDefaults.migrateSelectedLanguage`），以及启动时删以前下载的模型（`RetiredModelFiles`，Whisper 的在 Documents/huggingface，千问的在 Application Support/Qwen3ASR；0.28.0 模型随包时由 `RetiredWhisperModels` 改名扩展而来，`bb78f1f`）。哪些旧兼容代码不能删见 P-0n。
+- P-4 收紧生产日志：✅ 2026-11-05。`CloudStorageManager` 剩下的 20 处 `print` 改走 `debugLog`，Release 不再输出；`AudioRecordingService`、`AudioPlayerService`、`VoicelyApp` 之前已清理。
+- 上架前收尾（2026-11-05）：`UIBackgroundModes` 去掉 `processing`（真机确认见发布前 iPhone 清单）；麦克风权限文案从 "This app needs access to your microphone to record voice notes for transcription." 改成 "Voicely uses the microphone to record your meetings and transcribes them on this device."；本地上架材料改正了过时的地方：体积从 1.1 GB 改为 iPhone/iPad 约 1.4 GB、Mac 约 1.5 GB，引导从 4 页改为 2 页，补上随包的英文模型 Parakeet、只剩 Auto Detect 和 English 两个语言选项、文件夹和搜索，版本定为 1.0.0。
 - 8 ✅ 上架文档按千问重写（2026-10-26，存在本地 `promo/app-store-release/`，不进 git）：元数据（中英文）、隐私与审核说明（新增隐私政策草稿，App Privacy 建议填"不收集数据"）、截图计划（iPhone 6.9 寸、iPad 13 寸、Mac）、检查清单都已改为随包千问模型、iPhone/iPad/Mac 同一个上架条目。设置页"Fully on-device"卡片原来说音频和文字"永不离开本机"，与 iCloud 同步矛盾，已改为"留在你的设备和你自己的 iCloud 账户里"。剩下的事见"上传与提交前"。
 
 ---

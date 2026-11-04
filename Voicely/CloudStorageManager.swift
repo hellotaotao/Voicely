@@ -104,7 +104,7 @@ class CloudStorageManager: ObservableObject {
         let localURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         localContainerURL = localURL
         if !AppRuntime.isRunningTests {
-            print("Local audio directory: \(localURL.path)")
+            debugLog("Local audio directory: \(localURL.path)")
         }
     }
     
@@ -112,7 +112,7 @@ class CloudStorageManager: ObservableObject {
         guard syncAudioFiles else {
             isCloudEnabled = false
             UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
-            print("iCloud audio sync disabled - using local storage only")
+            debugLog("iCloud audio sync disabled - using local storage only")
             return
         }
 
@@ -127,18 +127,18 @@ class CloudStorageManager: ObservableObject {
             debugLog("✅ [DEBUG] Cloud audio directory path: \(cloudURL.path)")
 
             createDirectoryIfNeeded(at: cloudURL, excludeFromBackup: false)
-            print("iCloud Documents enabled for audio files: \(cloudURL.path)")
+            debugLog("iCloud Documents enabled for audio files: \(cloudURL.path)")
             
             // Check iCloud account status
             checkiCloudAccountStatus()
         } else {
             debugLog("❌ [DEBUG] Failed to obtain iCloud container URL")
             debugLog("❌ [DEBUG] Possible causes:")
-            print("   - iCloud Drive not enabled in System Settings")
-            print("   - Not signed into iCloud account")
-            print("   - App entitlements not properly configured")
-            print("   - Container identifier mismatch")
-            print("iCloud Documents not available - check entitlements and Apple ID")
+            debugLog("   - iCloud Drive not enabled in System Settings")
+            debugLog("   - Not signed into iCloud account")
+            debugLog("   - App entitlements not properly configured")
+            debugLog("   - Container identifier mismatch")
+            debugLog("iCloud Documents not available - check entitlements and Apple ID")
             isCloudEnabled = false
             cloudContainerURL = nil
             UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
@@ -164,9 +164,9 @@ class CloudStorageManager: ObservableObject {
         if !fileManager.fileExists(atPath: url.path) {
             do {
                 try fileManager.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
-                print("Created audio directory: \(url.path)")
+                debugLog("Created audio directory: \(url.path)")
             } catch {
-                print("Failed to create audio directory: \(error)")
+                debugLog("Failed to create audio directory: \(error)")
                 directoryReady = false
             }
         }
@@ -182,7 +182,7 @@ class CloudStorageManager: ObservableObject {
             do {
                 try mutableURL.setResourceValues(values)
             } catch {
-                print("Failed to exclude audio directory from backup: \(error)")
+                debugLog("Failed to exclude audio directory from backup: \(error)")
             }
         }
     }
@@ -340,12 +340,12 @@ class CloudStorageManager: ObservableObject {
             UserDefaults.standard.set(true, forKey: Self.localToCloudMigrationDefaultsKey)
 
             if report.migratedCount > 0 {
-                print("Migrated \(report.migratedCount) legacy local file(s) to iCloud")
+                debugLog("Migrated \(report.migratedCount) legacy local file(s) to iCloud")
             } else {
                 debugLog("🔍 [DEBUG] No legacy local audio files needed migration")
             }
         } catch {
-            print("Failed to migrate files: \(error)")
+            debugLog("Failed to migrate files: \(error)")
         }
     }
     
@@ -416,7 +416,7 @@ class CloudStorageManager: ObservableObject {
                 // Placeholder-only item: the resource-value check below would
                 // throw because the materialised file does not exist yet.
                 try fileManager.startDownloadingUbiquitousItem(at: url)
-                print("Started downloading file from iCloud: \(url.lastPathComponent)")
+                debugLog("Started downloading file from iCloud: \(url.lastPathComponent)")
                 return
             }
 
@@ -429,7 +429,7 @@ class CloudStorageManager: ObservableObject {
                 if status != URLUbiquitousItemDownloadingStatus.current.rawValue {
                     debugLog("⬇️ [DEBUG] File not fully downloaded, starting download...")
                     try fileManager.startDownloadingUbiquitousItem(at: url)
-                    print("Started downloading file from iCloud: \(url.lastPathComponent)")
+                    debugLog("Started downloading file from iCloud: \(url.lastPathComponent)")
                 } else {
                     debugLog("✅ [DEBUG] File already downloaded from iCloud")
                 }
@@ -549,14 +549,14 @@ class CloudStorageManager: ObservableObject {
                     try fileManager.removeItem(at: url)
                     deletedPaths.append(url.path)
                 } catch {
-                    print("Failed to delete file at \(url.path): \(error)")
+                    debugLog("Failed to delete file at \(url.path): \(error)")
                 }
             }
 
             if deletedPaths.isEmpty {
-                print("No audio file found to delete for path: \(path)")
+                debugLog("No audio file found to delete for path: \(path)")
             } else {
-                print("Deleted file(s): \(deletedPaths.joined(separator: ", "))")
+                debugLog("Deleted file(s): \(deletedPaths.joined(separator: ", "))")
             }
         }
     }
@@ -719,11 +719,11 @@ class CloudStorageManager: ObservableObject {
                 if let status = downloadStatus as? String,
                    status == URLUbiquitousItemDownloadingStatus.notDownloaded.rawValue {
                     try fileManager.startDownloadingUbiquitousItem(at: url)
-                    print("Triggered download for: \(url.lastPathComponent)")
+                    debugLog("Triggered download for: \(url.lastPathComponent)")
                 }
             }
         } catch {
-            print("Error forcing downloads: \(error)")
+            debugLog("Error forcing downloads: \(error)")
         }
     }
     

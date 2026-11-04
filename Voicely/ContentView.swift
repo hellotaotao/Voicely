@@ -267,8 +267,12 @@ struct ContentView: View {
                 showsRecordingControls: false
             )
             .navigationTitle("Voicely")
-            .navigationBarTitleDisplayMode(.large)
-            .searchable(text: $searchText, prompt: "Search recordings")
+            // With the sync status in the title's slot, iOS 26 draws no large
+            // title, only its empty band above the search field.
+            .navigationBarTitleDisplayMode(.inline)
+            // Pinned under the bar: iOS 26 otherwise puts the field at the
+            // bottom, under the recording bar.
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search recordings")
             .toolbar {
                 libraryToolbarContent
             }

@@ -109,19 +109,22 @@ struct Qwen3ASRDefaultsTests {
         #expect(Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: "auto") == nil)
     }
 
-    @Test func knownLanguagesMapToTheNamesTheModelExpects() {
-        #expect(Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: "chinese") == "Chinese")
+    @Test func englishMapsToTheNameTheModelExpects() {
         #expect(Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: "english") == "English")
     }
 
-    /// A key saved from the longer Whisper language list must not be passed on.
-    @Test func languageTheModelDoesNotSupportMapsToNil() {
-        #expect(Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: "welsh") == nil)
+    /// A language saved while Settings listed more is Auto Detect, as is one
+    /// from the older Whisper list.
+    @Test(arguments: ["chinese", "japanese", "welsh"])
+    func anyOtherLanguageIsAutoDetect(key: String) {
+        #expect(Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key) == nil)
+        #expect(Qwen3ASRDefaults.languageKey(key) == "auto")
     }
 
-    @Test func everyOfferedLanguageHasAHint() {
-        for language in LanguageConstants.availableLanguages where language != "auto" {
-            #expect(Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: language) != nil)
+    @Test func onlyAutoDetectAndEnglishAreOffered() {
+        #expect(Qwen3ASRDefaults.languageKeys == ["auto", "english"])
+        for key in Qwen3ASRDefaults.languageKeys {
+            #expect(Qwen3ASRDefaults.languageKey(key) == key)
         }
     }
 

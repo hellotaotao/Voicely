@@ -71,15 +71,9 @@ enum EnglishStretchRouting {
         case automatic
         /// The user chose English: Parakeet transcribes the whole recording.
         case english
-        /// The user chose another language: Parakeet is never used.
-        case otherLanguage
 
         init(languageHint: String?) {
-            switch languageHint {
-            case nil: self = .automatic
-            case englishTag?: self = .english
-            default: self = .otherLanguage
-            }
+            self = languageHint == englishTag ? .english : .automatic
         }
     }
 
@@ -101,8 +95,6 @@ enum EnglishStretchRouting {
         minimumSeconds: TimeInterval = minimumStretchSeconds
     ) -> [ClosedRange<Int>] {
         switch mode {
-        case .otherLanguage:
-            return []
         case .english:
             return slices.isEmpty ? [] : [0...(slices.count - 1)]
         case .automatic:

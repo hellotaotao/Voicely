@@ -8,15 +8,6 @@
 import SwiftUI
 import CoreML
 
-/// Languages offered in Settings: auto-detect plus what Qwen3-ASR supports.
-struct LanguageConstants {
-    static var availableLanguages: [String] {
-        let topLanguages = ["auto", "english", "chinese", "cantonese", "spanish", "french", "german", "japanese", "korean"]
-        let remainingLanguages = Qwen3ASRDefaults.languageNames.keys.filter { !topLanguages.contains($0) }.sorted()
-        return topLanguages + remainingLanguages
-    }
-}
-
 struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
@@ -215,15 +206,18 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Speech Language")
                     .font(.subheadline.weight(.medium))
-                Text("Auto Detect handles mixed languages, such as Chinese with English. Choose a language only if Auto Detect keeps getting it wrong; while one is chosen, the recording screen shows it.")
+                Text("Auto Detect handles every language, including Chinese mixed with English. Choose English only when your recordings are all in English: they are then transcribed faster and with less battery. While English is chosen, the recording screen shows it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Picker("", selection: $selectedLanguage) {
-                ForEach(LanguageConstants.availableLanguages, id: \.self) { language in
-                    Text(language == "auto" ? "Auto Detect" : language.capitalized).tag(language)
+            Picker("", selection: Binding(
+                get: { Qwen3ASRDefaults.languageKey(selectedLanguage) },
+                set: { selectedLanguage = $0 }
+            )) {
+                ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { language in
+                    Text(language == "english" ? "English" : "Auto Detect").tag(language)
                 }
             }
             .pickerStyle(.menu)

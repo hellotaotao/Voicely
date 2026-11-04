@@ -132,29 +132,24 @@ enum Qwen3ASRDefaults {
     nonisolated static let chunkSeconds = Qwen3SliceLimits.current.chunkSeconds
     nonisolated static let minimumChunkCutSeconds = Qwen3SliceLimits.current.minimumCutSeconds
 
-    /// Languages Qwen3-ASR was trained on, keyed the way Settings stores the
-    /// choice. The value is the name the model's prompt expects.
-    nonisolated static let languageNames: [String: String] = [
-        "chinese": "Chinese", "english": "English", "cantonese": "Cantonese",
-        "arabic": "Arabic", "german": "German", "french": "French",
-        "spanish": "Spanish", "portuguese": "Portuguese", "indonesian": "Indonesian",
-        "italian": "Italian", "korean": "Korean", "russian": "Russian",
-        "thai": "Thai", "vietnamese": "Vietnamese", "japanese": "Japanese",
-        "turkish": "Turkish", "hindi": "Hindi", "malay": "Malay",
-        "dutch": "Dutch", "swedish": "Swedish", "danish": "Danish",
-        "finnish": "Finnish", "polish": "Polish", "czech": "Czech",
-        "filipino": "Filipino", "persian": "Persian", "greek": "Greek",
-        "hungarian": "Hungarian", "macedonian": "Macedonian", "romanian": "Romanian"
-    ]
+    /// The language choices, keyed the way Settings stores them: Auto Detect,
+    /// or English, which Parakeet transcribes alone. Naming any other language
+    /// only hinted it to Qwen3-ASR, for text no better than Auto Detect's, and
+    /// kept the English stretches from Parakeet.
+    nonisolated static let languageKeys = ["auto", "english"]
 
     nonisolated static let selectedLanguageKey = "selectedLanguage"
 
-    /// Maps the stored "selectedLanguage" key to the model's language hint.
-    /// nil means auto-detect, which also covers a key left over from the
-    /// longer Whisper language list.
+    /// The stored key as one of `languageKeys`. Any other key, such as a
+    /// language saved while Settings listed more, is Auto Detect.
+    nonisolated static func languageKey(_ key: String?) -> String {
+        key == "english" ? "english" : "auto"
+    }
+
+    /// Maps the stored "selectedLanguage" key to the model's language hint:
+    /// "English" with English chosen, nil (Auto Detect) for anything else.
     nonisolated static func languageHint(forSelectedLanguageKey key: String?) -> String? {
-        guard let key, key != "auto" else { return nil }
-        return languageNames[key]
+        languageKey(key) == "english" ? "English" : nil
     }
 }
 

@@ -172,7 +172,7 @@ struct RecordingSessionTests {
         session.onRecordingComplete = { collector.append($0) }
         transcription.keepEnglishEngineLoaded = { _ in }
         transcription.beginEnglishRecording(noteID: UUID())
-        session.pendingLanguageKey = "japanese"
+        session.pendingLanguageKey = "auto"
 
         session.startRecording()
         try await waitUntil { session.currentRecordingNote != nil }
@@ -189,7 +189,14 @@ struct RecordingSessionTests {
         let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 5)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         audio.currentPCMFileURL = pcmURL
+        struct ParakeetDown: Error {}
         let transcription = TranscriptionService()
+        // Parakeet fails and Qwen3-ASR is not loaded, so a queued recording
+        // stays queued and live text stays as it is.
+        transcription.keepEnglishEngineLoaded = { _ in }
+        transcription.transcribeEnglish = { _, _, _ in throw ParakeetDown() }
+        transcription.releaseEnglishEngine = {}
+        transcription.prepareAudioFileForReading = { _ in pcmURL }
         let session = RecordingSession(audioService: audio, transcriptionService: transcription)
         let collector = NoteCollector()
         session.onRecordingComplete = { collector.append($0) }
@@ -198,9 +205,11 @@ struct RecordingSessionTests {
                 transcriptionService: TranscriptionService(), recordingFileURL: url)
             // An empty live transcript sends the recording to the queue.
             coordinator.transcribeOverride = { @Sendable _ in queued ? "" : "Live words." }
+            coordinator.transcribeEnglish = { _, _, _, _ in throw ParakeetDown() }
+            coordinator.releaseEnglishEngine = {}
             return coordinator
         }
-        session.pendingLanguageKey = "japanese"
+        session.pendingLanguageKey = "english"
         session.startRecording()
         try await waitUntil { session.currentRecordingNote != nil }
         let note = try #require(collector.notes.first)
@@ -211,7 +220,7 @@ struct RecordingSessionTests {
 
         if queued {
             #expect(note.transcriptionState == .queued)
-            #expect(transcription.languageHint(for: note.id) == "Japanese")
+            #expect(transcription.languageHint(for: note.id) == "English")
             transcription.setLanguageKey(nil, for: note.id)
         } else {
             #expect(note.transcriptionState == .completed)

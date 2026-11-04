@@ -45,11 +45,8 @@ struct EnglishStretchRoutingTests {
     @Test func chosenLanguageDecidesAlone() {
         let tags = ["Chinese", "-"]
         #expect(EnglishStretchRouting.stretches(in: Self.slices(tags), mode: .english) == [0...1])
-        #expect(EnglishStretchRouting.stretches(in: Self.slices(["English", "English", "English", "English"]),
-                                                mode: .otherLanguage).isEmpty)
         #expect(EnglishStretchRouting.Mode(languageHint: nil) == .automatic)
         #expect(EnglishStretchRouting.Mode(languageHint: "English") == .english)
-        #expect(EnglishStretchRouting.Mode(languageHint: "Chinese") == .otherLanguage)
     }
 
     @Test(arguments: [
@@ -237,11 +234,6 @@ struct EnglishStretchTranscriptionTests {
         let expected = ["q0"] + (1...13).map { "en\($0)" } + ["q14", "q15", "q16"]
         #expect(coordinator.accumulatedTranscript == expected.joined(separator: "\n"))
         #expect(coordinator.accumulatedSpans?.map(\.start) == qwenSpans?.map(\.start))
-
-        // Another language chosen: nothing goes to Parakeet.
-        stretches = []
-        #expect(await coordinator.transcribeEnglishStretches(mode: .otherLanguage) == false)
-        #expect(stretches.isEmpty)
     }
 
     @Test @MainActor func savedAudioReplacesTheEnglishStretchAndMarksTheNote() async throws {
@@ -775,7 +767,7 @@ struct EnglishRecordingTests {
             note.transcriptionOriginDeviceID = "this-device"
             note.queueTranscription(at: Date())
         }
-        service.setLanguageKey("chinese", for: other.id)
+        service.setLanguageKey("auto", for: other.id)
         service.setLanguageKey("english", for: english.id)
 
         service.beginEnglishRecording(noteID: UUID())
@@ -839,13 +831,13 @@ struct EnglishRecordingTests {
     }
 
     @Test(arguments: [true, false])
-    @MainActor func englishSettingLoadsQwenForADecodeThatNeedsIt(otherLanguage: Bool) async throws {
+    @MainActor func englishSettingLoadsQwenForADecodeThatNeedsIt(autoDetect: Bool) async throws {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
         defer { try? FileManager.default.removeItem(at: url) }
         // Parakeet hears nothing in the English note, so Qwen3-ASR takes it.
         let setup = englishSettingService(parakeetWords: [])
         let note = queuedNote("Note", url: url)
-        if otherLanguage { setup.service.setLanguageKey("chinese", for: note.id) }
+        if autoDetect { setup.service.setLanguageKey("auto", for: note.id) }
 
         await setup.service.processPendingTranscriptions(notes: [note])
 

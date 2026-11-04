@@ -1474,7 +1474,7 @@ struct RecordingControls: View {
 
     /// The language the next recording uses: its own choice, else the setting.
     private var nextRecordingLanguageKey: String {
-        session.pendingLanguageKey ?? selectedLanguage
+        Qwen3ASRDefaults.languageKey(session.pendingLanguageKey ?? selectedLanguage)
     }
 
     private var nextRecordingLanguageName: String? {
@@ -1482,14 +1482,14 @@ struct RecordingControls: View {
     }
 
     private func languageLabel(for key: String) -> String {
-        key == "auto" ? "Auto Detect" : Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key) ?? key.capitalized
+        Qwen3ASRDefaults.languageKey(key) == "english" ? "English" : "Auto Detect"
     }
 
     /// A choice equal to the setting is no choice of its own.
     private var languageChoice: Binding<String> {
         Binding(
             get: { nextRecordingLanguageKey },
-            set: { session.pendingLanguageKey = $0 == selectedLanguage ? nil : $0 }
+            set: { session.pendingLanguageKey = $0 == Qwen3ASRDefaults.languageKey(selectedLanguage) ? nil : $0 }
         )
     }
 
@@ -1497,19 +1497,11 @@ struct RecordingControls: View {
         HStack(spacing: 10) {
             Menu {
                 Picker("Language for the Next Recording or Import", selection: languageChoice) {
-                    ForEach(LanguageConstants.availableLanguages.prefix(3), id: \.self) { key in
+                    ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { key in
                         Text(languageLabel(for: key)).tag(key)
                     }
                 }
                 .pickerStyle(.inline)
-                Menu("Other Languages") {
-                    Picker("Other Languages", selection: languageChoice) {
-                        ForEach(LanguageConstants.availableLanguages.dropFirst(3), id: \.self) { key in
-                            Text(languageLabel(for: key)).tag(key)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                }
                 Divider()
                 Button("Speech Settings…") {
                     onManageModels()

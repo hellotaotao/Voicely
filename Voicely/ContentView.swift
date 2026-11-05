@@ -2153,7 +2153,8 @@ struct VoiceNoteDetailView: View {
                     systemImage: note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu",
                     variant: note.transcriptionModelDisplayName == nil ? .neutral : .info
                 )
-                if note.usedParakeetForEnglish {
+                // The model badge already says Parakeet when it wrote everything.
+                if note.usedParakeetForEnglish, !note.transcribedByParakeetAlone {
                     PillBadge(text: "Parakeet", systemImage: "character.bubble", variant: .info)
                 }
                 if let computeLabel = note.transcriptionComputeBadgeLabel {

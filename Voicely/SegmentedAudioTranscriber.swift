@@ -197,7 +197,8 @@ final class SegmentedAudioTranscriber {
                     let english = EnglishStretchRouting.transcript(of: routed.slices)
                     note.setTranscript(english.text, spans: english.spans)
                     note.lastTranscriptionDuration = result.duration
-                    note.transcriptionModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: result.modelIdentifier)
+                    // One slice, which Parakeet's text replaced.
+                    note.transcriptionModelIdentifier = EnglishStretchRouting.parakeetOnlyModelIdentifier
                     persistTelemetry(on: note)
                     note.completeTranscription()
                     note.transcriptionOutcome = .transcribed
@@ -352,6 +353,8 @@ final class SegmentedAudioTranscriber {
         func seconds(_ frame: Int64) -> TimeInterval { Double(frame) / info.sampleRate }
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         var producedAnyText = !pieces.isEmpty
+        // A resumed run cannot tell which model wrote the text it picks up.
+        var qwenMayHaveWrittenText = producedAnyText
         var segmentIndex = 0
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
@@ -443,6 +446,9 @@ final class SegmentedAudioTranscriber {
                 tagged?.append(LanguageTaggedSlice(start: seconds(start), end: seconds(end),
                                                    text: text, language: text == nil ? nil : result.language))
                 producedAnyText = true
+                if text != nil, result.modelIdentifier != EnglishStretchRouting.parakeetOnlyModelIdentifier {
+                    qwenMayHaveWrittenText = true
+                }
                 lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
                 accumulatedDuration += result.duration
             case .noSpeech:
@@ -480,11 +486,14 @@ final class SegmentedAudioTranscriber {
         guard ownsRun(note) else { return }
 
         if parakeetWroteText {
-            lastModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: lastModelIdentifier)
+            lastModelIdentifier = qwenMayHaveWrittenText
+                ? EnglishStretchRouting.modelIdentifier(afterParakeet: lastModelIdentifier)
+                : EnglishStretchRouting.parakeetOnlyModelIdentifier
         } else if let tagged, let routed = await transcribeEnglishStretches(
             in: tagged, of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
             guard ownsRun(note) else { return }
-            lastModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: lastModelIdentifier)
+            lastModelIdentifier = EnglishStretchRouting.modelIdentifier(
+                afterParakeetReplaced: routed.replaced, in: routed.slices, qwenIdentifier: lastModelIdentifier)
             let english = EnglishStretchRouting.transcript(of: routed.slices)
             accumulatedText = english.text
             spans = TranscriptSpanBuilder(resumedText: english.text, resumedSpans: english.spans)
@@ -544,7 +553,7 @@ final class SegmentedAudioTranscriber {
         defer { parakeetSeconds = 0 }
         return .transcribed(TranscriptionResult(
             text: text, duration: parakeetSeconds,
-            modelIdentifier: EnglishStretchRouting.modelIdentifier(afterParakeet: nil)))
+            modelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier))
     }
 
     private func runParakeet(on sourceURL: URL, from start: Int64, to end: Int64) async {

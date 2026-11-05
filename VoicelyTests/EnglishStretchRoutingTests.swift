@@ -116,6 +116,20 @@ struct EnglishStretchRoutingTests {
         let marked = EnglishStretchRouting.modelIdentifier(afterParakeet: "model")
         #expect(marked == "model+parakeet")
         #expect(EnglishStretchRouting.modelIdentifier(afterParakeet: marked) == marked)
+        // Parakeet's own identifier names no Qwen3-ASR model, so this device's is used.
+        #expect(EnglishStretchRouting.modelIdentifier(afterParakeet: EnglishStretchRouting.parakeetOnlyModelIdentifier)
+                == Qwen3Backend.current.modelIdentifier + EnglishStretchRouting.parakeetModelSuffix)
+    }
+
+    @Test func parakeetOwnsTheNoteOnlyWhenNoOtherSliceKeepsText() {
+        let slices = [
+            LanguageTaggedSlice(start: 0, end: 14, text: "en0", language: "English"),
+            LanguageTaggedSlice(start: 14, end: 28, text: nil, language: nil),
+            LanguageTaggedSlice(start: 28, end: 42, text: "q2", language: "Chinese"),
+        ]
+        let own = EnglishStretchRouting.parakeetOnlyModelIdentifier
+        #expect(EnglishStretchRouting.modelIdentifier(afterParakeetReplaced: [0], in: slices, qwenIdentifier: "m") == "m+parakeet")
+        #expect(EnglishStretchRouting.modelIdentifier(afterParakeetReplaced: [0, 2], in: slices, qwenIdentifier: "m") == own)
     }
 
     @Test func wordsGoToTheSliceTheirMiddleFallsIn() {
@@ -177,6 +191,12 @@ struct EnglishStretchRoutingTests {
         note.transcriptionModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: nil)
         #expect(note.usedParakeetForEnglish)
         #expect(note.transcriptionModelDisplayName == qwenName)
+        #expect(!note.transcribedByParakeetAlone)
+
+        note.transcriptionModelIdentifier = EnglishStretchRouting.parakeetOnlyModelIdentifier
+        #expect(note.usedParakeetForEnglish)
+        #expect(note.transcribedByParakeetAlone)
+        #expect(note.transcriptionModelDisplayName == "Parakeet TDT 0.6B v2")
     }
 }
 
@@ -232,6 +252,7 @@ struct EnglishStretchTranscriptionTests {
 
         // Parakeet's pass runs after the live clock stopped and still shows on the card.
         #expect(service.telemetryState.snapshot(for: noteID)?.models == [.qwen3, .parakeet])
+        #expect(!coordinator.parakeetWroteAllText)
 
         #expect(stretches.count == 1 && stretches[0] == (14 * 16_000, 14 * 14 * 16_000))
         #expect(service.decodeWorkCount > workBefore)
@@ -309,7 +330,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(note.transcription == "parakeet")
         #expect(note.transcriptionOutcome == .transcribed)
         #expect(note.transcriptSpans?.count == 1)
-        #expect(note.usedParakeetForEnglish)
+        #expect(note.transcribedByParakeetAlone)
     }
 
     @Test(arguments: [("qwen", "Chinese"), ("qwen 你好", "English"), ("qwen", "None"), ("qwen", nil)] as [(String, String?)])
@@ -386,7 +407,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(run.note.transcriptSpans?.count == 1)
-        #expect(run.note.usedParakeetForEnglish)
+        #expect(run.note.transcribedByParakeetAlone)
     }
 
     @Test(arguments: [("qwen", "Chinese"), ("qwen 你好", "English"), ("qwen", "None"), ("qwen", nil)] as [(String, String?)])
@@ -422,8 +443,8 @@ struct EnglishStretchTranscriptionTests {
 
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
-        #expect(run.note.usedParakeetForEnglish)
-        #expect(run.note.transcriptionModelDisplayName != nil)
+        #expect(run.note.transcribedByParakeetAlone)
+        #expect(run.note.transcriptionModelDisplayName == "Parakeet TDT 0.6B v2")
     }
 
     /// A file imported with English chosen, cut into 14 s slices when it does
@@ -479,8 +500,8 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.stretches.count == 1 && run.stretches[0] == (0, Int64(seconds * 16_000)))
         #expect(run.note.transcription == expected)
         #expect(run.note.transcriptionOutcome == .transcribed)
-        #expect(run.note.usedParakeetForEnglish)
-        #expect(run.note.transcriptionModelDisplayName != nil)
+        #expect(run.note.transcribedByParakeetAlone)
+        #expect(run.note.transcriptionModelDisplayName == "Parakeet TDT 0.6B v2")
         #expect(run.released)
         // The choice was for this run: a later Re-transcribe follows the setting.
         #expect(run.service.languageHint(for: run.note.id) == nil)
@@ -501,6 +522,8 @@ struct EnglishStretchTranscriptionTests {
 
         #expect(run.stretches.count == 1 && run.stretches[0] == (14 * 16_000, 42 * 16_000))
         #expect(run.note.transcription == "saved\ntwo\nthree")
+        #expect(run.note.usedParakeetForEnglish)
+        #expect(!run.note.transcribedByParakeetAlone)
     }
 
     private struct ParakeetFailed: Error {}
@@ -627,6 +650,7 @@ struct EnglishRecordingTests {
         #expect(coordinator.accumulatedTranscript == "en0\nen1\nen2")
         #expect(qwenCalls == 0)
         #expect(service.telemetryState.snapshot(for: noteID)?.models == [.parakeet])
+        #expect(coordinator.parakeetWroteAllText)
     }
 
     @Test(arguments: [("Chinese", "qwen\nqwen\nqwen"), ("English", "en0\nen1\nen2")])

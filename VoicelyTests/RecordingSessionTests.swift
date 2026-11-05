@@ -160,7 +160,7 @@ struct RecordingSessionTests {
         #expect(!transcription.isRecordingEnglish)
         #expect(holds == [true, false])
         #expect(note.transcription == "settled")
-        #expect(note.usedParakeetForEnglish)
+        #expect(note.transcribedByParakeetAlone)
     }
 
     @Test func recordingThatNeedsQwenEndsTheHoldOfOneWithEnglishStillSettling() async throws {

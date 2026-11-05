@@ -1395,7 +1395,7 @@ private extension TranscriptionService {
             english = parakeet
             outcome = .transcribed(TranscriptionResult(
                 text: parakeet.text, duration: nowProvider().timeIntervalSince(parakeetStarted),
-                modelIdentifier: EnglishStretchRouting.modelIdentifier(afterParakeet: nil)))
+                modelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier))
         } else {
             outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
 
@@ -1430,7 +1430,8 @@ private extension TranscriptionService {
             recordProcessedAudio(start: 0, end: resolvedDuration, session: session)
             if let english {
                 note.setTranscript(english.text, spans: english.spans)
-                note.transcriptionModelIdentifier = EnglishStretchRouting.modelIdentifier(afterParakeet: result.modelIdentifier)
+                // A one-pass note is a single slice, so Parakeet's text replaced all of it.
+                note.transcriptionModelIdentifier = EnglishStretchRouting.parakeetOnlyModelIdentifier
             } else {
                 note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(for: result.text, duration: resolvedDuration))
                 note.transcriptionModelIdentifier = result.modelIdentifier

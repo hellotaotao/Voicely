@@ -137,6 +137,9 @@ class ModelManager: ObservableObject {
         if modelIdentifier.hasPrefix("qwen3-asr") {
             return Qwen3ASRDefaults.modelDisplayName
         }
+        if modelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier {
+            return SpeechModelKind.parakeet.displayName
+        }
         let normalized = modelIdentifier
             .replacingOccurrences(of: "openai_whisper-", with: "Whisper-")
             .replacingOccurrences(of: "_", with: "-")

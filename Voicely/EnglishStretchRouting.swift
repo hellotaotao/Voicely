@@ -57,12 +57,24 @@ enum EnglishStretchRouting {
     private static let fillerPattern = #"\b(um+|uh+|er+m?|ah+|hm+|mm+)\b[,.]?\s*"#
     /// Added to a note's model identifier when Parakeet replaced part of its text.
     static let parakeetModelSuffix = "+parakeet"
+    /// A note's model identifier when Parakeet wrote all of its text.
+    static let parakeetOnlyModelIdentifier = "parakeet-tdt-0.6b-v2"
 
     /// The model identifier of a note whose text Parakeet replaced in part.
     /// Qwen3-ASR names no model when it hears no speech: `nil` means this device's.
     static func modelIdentifier(afterParakeet identifier: String?) -> String {
-        let identifier = identifier ?? Qwen3Backend.current.modelIdentifier
+        let qwen = identifier == parakeetOnlyModelIdentifier ? nil : identifier
+        let identifier = qwen ?? Qwen3Backend.current.modelIdentifier
         return identifier.hasSuffix(parakeetModelSuffix) ? identifier : identifier + parakeetModelSuffix
+    }
+
+    /// The model identifier of a note after Parakeet replaced the `replaced`
+    /// slices: Parakeet's own when no other slice still has text.
+    static func modelIdentifier(
+        afterParakeetReplaced replaced: [Int], in slices: [LanguageTaggedSlice], qwenIdentifier: String?
+    ) -> String {
+        let othersHaveText = slices.indices.contains { slices[$0].text != nil && !replaced.contains($0) }
+        return othersHaveText ? modelIdentifier(afterParakeet: qwenIdentifier) : parakeetOnlyModelIdentifier
     }
 
     /// How the language for a recording was chosen.

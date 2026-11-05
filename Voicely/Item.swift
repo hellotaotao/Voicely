@@ -159,7 +159,13 @@ extension VoiceNote {
 
     /// True when Parakeet wrote the English parts of the transcript.
     var usedParakeetForEnglish: Bool {
-        transcriptionModelIdentifier?.hasSuffix(EnglishStretchRouting.parakeetModelSuffix) == true
+        transcribedByParakeetAlone
+            || transcriptionModelIdentifier?.hasSuffix(EnglishStretchRouting.parakeetModelSuffix) == true
+    }
+
+    /// True when Parakeet wrote all of the transcript.
+    var transcribedByParakeetAlone: Bool {
+        transcriptionModelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier
     }
 
     var averageTranscriptionSpeedLabel: String? {

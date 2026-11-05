@@ -338,6 +338,9 @@ final class IncrementalTranscriptionCoordinator {
         }
     }
 
+    /// Parakeet's stretches after stop replaced every slice that has text.
+    private(set) var parakeetWroteAllText = false
+
     /// After `stop`, transcribes the English stretches again with Parakeet
     /// (`EnglishStretchRouting`) and puts its text in their slices. Returns
     /// true when anything was replaced, false when nothing was, Parakeet
@@ -360,6 +363,9 @@ final class IncrementalTranscriptionCoordinator {
         }
         await releaseEnglishEngine()
         guard !routed.replaced.isEmpty else { return false }
+        parakeetWroteAllText = EnglishStretchRouting.modelIdentifier(
+            afterParakeetReplaced: routed.replaced, in: routed.slices, qwenIdentifier: nil
+        ) == EnglishStretchRouting.parakeetOnlyModelIdentifier
         var replacedStarts = Set<AVAudioFramePosition>()
         for index in routed.replaced {
             slices[index].text = routed.slices[index].text

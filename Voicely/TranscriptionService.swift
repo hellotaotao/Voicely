@@ -143,10 +143,70 @@ class TranscriptionService: ObservableObject {
     }
 
     /// The language setting changed: any other language than English needs
-    /// Qwen3-ASR loaded, and loading it resumes the work that waited.
+    /// Qwen3-ASR loaded, and loading it resumes the work that waited. With
+    /// English, a loaded Qwen3-ASR is let go once idle.
     func followLanguageSetting() async {
-        guard !loadsQwenOnDemand, !isEngineLoaded else { return }
+        if loadsQwenOnDemand {
+            scheduleIdleQwenRelease()
+            return
+        }
+        guard !isEngineLoaded else { return }
         _ = await loadSpeechModel()
+    }
+
+    // MARK: Letting go of Qwen3-ASR loaded on demand
+
+    /// With English as the setting, how long Qwen3-ASR stays loaded after the
+    /// last work that needed it. Tests shorten it.
+    var idleQwenReleaseDelay: TimeInterval = 60
+    private var idleQwenRelease: Task<Void, Never>?
+    private var isReleasingIdleQwen = false
+
+    /// With English as the setting nothing keeps Qwen3-ASR loaded: once it has
+    /// sat idle for `idleQwenReleaseDelay`, it is unloaded, as at launch.
+    /// Each load and each decode's end starts the wait again.
+    func scheduleIdleQwenRelease() {
+        guard !isReleasingIdleQwen else { return }
+        idleQwenRelease?.cancel()
+        idleQwenRelease = nil
+        guard loadsQwenOnDemand, isEngineLoaded else { return }
+        let delay = idleQwenReleaseDelay
+        idleQwenRelease = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            await self.releaseIdleQwen()
+        }
+    }
+
+    private func releaseIdleQwen() async {
+        idleQwenRelease = nil
+        guard loadsQwenOnDemand, isEngineLoaded else { return }
+        // A recording, a queue run or a load still under way may need it soon.
+        if isTranscribing || modelManager?.isLoading == true
+            || !localRecordingNoteIDs.isEmpty || isProcessingPendingTranscriptions {
+            scheduleIdleQwenRelease()
+            return
+        }
+        isReleasingIdleQwen = true
+        idleQwenRelease = Task { @MainActor [weak self] in
+            await self?.modelManager?.unloadModel()
+        }
+        await idleQwenRelease?.value
+        idleQwenRelease = nil
+        isReleasingIdleQwen = false
+        updateEngineStatus()
+    }
+
+    /// A decode is about to start: a release still waiting is called off, and
+    /// one already unloading finishes first, so the decode loads Qwen3-ASR again.
+    private func holdQwenForDecode() async {
+        guard let release = idleQwenRelease else { return }
+        if isReleasingIdleQwen {
+            await release.value
+        } else {
+            release.cancel()
+            idleQwenRelease = nil
+        }
     }
 
     // MARK: Recordings with English chosen
@@ -350,6 +410,7 @@ class TranscriptionService: ObservableObject {
 
         updateEngineStatus()
         loadingProgress = modelManager.loadingProgressValue
+        scheduleIdleQwenRelease()
         return modelManager.isModelLoaded()
     }
 
@@ -809,6 +870,8 @@ class TranscriptionService: ObservableObject {
         telemetrySession: TranscriptionTelemetrySession? = nil
     ) async -> TranscriptionOutcome {
         updateEngineStatus()
+        await holdQwenForDecode()
+        defer { scheduleIdleQwenRelease() }
         // With English as the setting Qwen3-ASR loads when a decode needs it;
         // a load already under way, such as the one a switch to Auto Detect
         // starts, is waited for instead of failing the decode.

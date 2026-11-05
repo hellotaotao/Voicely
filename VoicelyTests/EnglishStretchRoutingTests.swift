@@ -934,6 +934,76 @@ struct EnglishRecordingTests {
         #expect(setup.loads() == 1)
     }
 
+    /// Waits up to a second for `condition`.
+    @MainActor
+    private func eventually(_ condition: () -> Bool) async throws -> Bool {
+        for _ in 0..<100 where !condition() {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
+    }
+
+    @Test @MainActor func englishSettingLetsQwenGoOnceIdleAndLoadsItAgainForMoreWork() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Parakeet hears nothing, so each note needs Qwen3-ASR.
+        let setup = englishSettingService(parakeetWords: [])
+        setup.service.idleQwenReleaseDelay = 0.05
+        let first = queuedNote("First", url: url)
+
+        await setup.service.processPendingTranscriptions(notes: [first])
+        #expect(first.transcription == "qwen")
+        #expect(try await eventually { !setup.manager.isModelLoaded() })
+
+        let second = queuedNote("Second", url: url)
+        await setup.service.processPendingTranscriptions(notes: [second])
+        #expect(second.transcription == "qwen")
+        #expect(setup.loads() == 2)
+    }
+
+    @Test @MainActor func qwenStaysWhileTheRecordingSwitchedToAutoDetectGoesOn() async throws {
+        let setup = englishSettingService(parakeetWords: [])
+        setup.service.idleQwenReleaseDelay = 0.02
+        let recording = UUID()
+        setup.service.setLanguageKey("english", for: recording)
+        setup.service.beginLocalRecording(noteID: recording)
+        setup.service.beginEnglishRecording(noteID: recording)
+        await setup.service.waitForEngineSwitch()
+
+        setup.service.switchRecordingToAutoDetect(noteID: recording)
+        await setup.service.waitForEngineSwitch()
+        try #require(try await eventually { setup.manager.isModelLoaded() })
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(setup.manager.isModelLoaded())
+
+        setup.service.endLocalRecording(noteID: recording)
+        #expect(try await eventually { !setup.manager.isModelLoaded() })
+    }
+
+    @Test @MainActor func choosingEnglishInSettingsLetsALoadedQwenGo() async throws {
+        let setup = englishSettingService(parakeetWords: [])
+        setup.service.idleQwenReleaseDelay = 0.02
+        var setting = "auto"
+        setup.service.languageSettingKey = { setting }
+        await setup.service.followLanguageSetting()
+        try #require(setup.manager.isModelLoaded())
+
+        setting = "english"
+        await setup.service.followLanguageSetting()
+
+        #expect(try await eventually { !setup.manager.isModelLoaded() })
+    }
+
+    @Test @MainActor func autoDetectSettingKeepsQwenLoaded() async throws {
+        let setup = englishSettingService(parakeetWords: [])
+        setup.service.idleQwenReleaseDelay = 0.02
+        setup.service.languageSettingKey = { "auto" }
+        await setup.service.followLanguageSetting()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(setup.manager.isModelLoaded())
+    }
+
     @Test func liveSlicesGoAheadOfWorkAlreadyWaiting() {
         var turns = ParakeetTurns<String>()
         let first = turns.takeIfFree()

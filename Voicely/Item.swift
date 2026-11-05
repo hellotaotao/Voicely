@@ -177,12 +177,11 @@ extension VoiceNote {
         }
 
         switch transcriptionComputeSummary {
-        case "Neural Engine (NPU)":
-            return "NPU"
         case "Mixed Compute":
+            // Written by runs before each model's units were named.
             return "Mixed"
         default:
-            return transcriptionComputeSummary
+            return transcriptionComputeSummary.replacingOccurrences(of: "Neural Engine (NPU)", with: "NPU")
         }
     }
 

@@ -1858,14 +1858,8 @@ struct VoiceNoteDetailView: View {
     }
 
     private var fallbackTelemetrySnapshot: TranscriptionTelemetrySnapshot {
-        let modelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
-            ?? transcriptionService.modelManager?.selectedModel
-        let modelName = modelIdentifier.map(ModelManager.displayName(for:)) ?? "No model"
-
-        return TranscriptionTelemetrySnapshot.inactive(
-            modelName: modelName,
-            computeRoute: TranscriptionComputeRoute(backend: transcriptionService.modelManager?.backend ?? .current)
-        )
+        .inactive(describing: [transcriptionService.expectedTelemetryModel(for: note.id)],
+                  qwenBackend: transcriptionService.qwenBackend)
     }
 
     private static let detailPageSpace = "NoteDetailPage"

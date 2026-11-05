@@ -853,6 +853,12 @@ final class RecordingSession: ObservableObject {
                 let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
                 parakeetReplacedText = await coord.transcribeEnglishStretches(mode: mode)
                 if parakeetReplacedText { accumulatedTranscript = coord.accumulatedTranscript }
+                // That pass runs after the live clock stopped, so the note's badge
+                // learns of Parakeet only here.
+                if let snapshot = transcriptionService.telemetryState.snapshot(for: note.id),
+                   snapshot.models.contains(.parakeet) {
+                    note.replaceCumulativeTranscriptionTelemetry(snapshot)
+                }
             }
 
             if await assetTask.value {

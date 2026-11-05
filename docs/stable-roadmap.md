@@ -95,10 +95,6 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 - 同步状态 UI 区分"文字已同步 / 音频待下载"。
 - 排除启动即批量 `startDownloadingUbiquitousItem` 间接抢带宽的路径。
 
-#### P-7 ⬜ 速度卡片的模型名一直写千问
-
-详情页的速度卡片和笔记上的模型标签都取自 `TranscriptionService.currentTelemetryModelName()`，它只问千问的模型管理器，所以 Parakeet 转的部分也标成 "Qwen3 ASR 0.6B · GPU"。2026-11-05 在 Mac 上选 English 录音时看到：全程是 Parakeet 在转，卡片写的是千问。按"如实呈现"应该标实际干活的模型；一条笔记里两个模型都转过时怎么标还没定。
-
 ### 上传与提交前
 
 **每次上传 TestFlight 前**
@@ -866,6 +862,7 @@ Debug 版 app 转一条 64 分钟录音时，进程占了 13 GB，其中 12 GB �
 - 5b 录音中的原始音频改存持久目录：✅ 2026-10-26。见"五"。
 - 5c 解码进展按 token 上报、记录每片的结束原因：✅ 2026-10-26。见"五"。原来 P-0n 里"CoreML 到 448 token 上限时静默截断"一条随之关闭：三条长录音 386 片 0 次撞上限。
 - 10 删除只为跳过版本升级的设备保留的启动清理：✅ 2026-11-03，已经没有设备停在 0.28.0 之前。删了两段：千问不支持的旧语言设置改回自动检测（`Qwen3ASRDefaults.migrateSelectedLanguage`），以及启动时删以前下载的模型（`RetiredModelFiles`，Whisper 的在 Documents/huggingface，千问的在 Application Support/Qwen3ASR；0.28.0 模型随包时由 `RetiredWhisperModels` 改名扩展而来，`bb78f1f`）。哪些旧兼容代码不能删见 P-0n。
+- P-7 速度卡片和笔记的算力标签写实际干活的模型：✅ 2026-11-05。原来模型名只问千问的模型管理器，Parakeet 转的部分也标成 "Qwen3 ASR 0.6B · GPU"。现在每次转写记下真正跑过的模型（千问的解码入口，Parakeet 的边录边转切片、整条重转和英文长段替换），两个都跑过就都写：Mac 上 "Qwen3 ASR 0.6B + Parakeet TDT 0.6B v2 · Compute: GPU + Neural Engine (NPU)"，笔记小标签 "GPU + NPU"；iPhone 上两个都在神经引擎，标签仍是 "NPU"。还没有模型开工时按这条录音的语言先显示预计的那个（English 显示 Parakeet）。录音停止后才跑的英文长段替换不计入速度，但会补进模型名和笔记标签。
 - P-4 收紧生产日志：✅ 2026-11-05。`CloudStorageManager` 剩下的 20 处 `print` 改走 `debugLog`，Release 不再输出；`AudioRecordingService`、`AudioPlayerService`、`VoicelyApp` 之前已清理。
 - 上架前收尾（2026-11-05）：`UIBackgroundModes` 去掉 `processing`（真机确认见发布前 iPhone 清单）；麦克风权限文案从 "This app needs access to your microphone to record voice notes for transcription." 改成 "Voicely uses the microphone to record your meetings and transcribes them on this device."；本地上架材料改正了过时的地方：体积从 1.1 GB 改为 iPhone/iPad 约 1.4 GB、Mac 约 1.5 GB，引导从 4 页改为 2 页，补上随包的英文模型 Parakeet、只剩 Auto Detect 和 English 两个语言选项、文件夹和搜索，版本定为 1.0.0。
 - 8 ✅ 上架文档按千问重写（2026-10-26，存在本地 `promo/app-store-release/`，不进 git）：元数据（中英文）、隐私与审核说明（新增隐私政策草稿，App Privacy 建议填"不收集数据"）、截图计划（iPhone 6.9 寸、iPad 13 寸、Mac）、检查清单都已改为随包千问模型、iPhone/iPad/Mac 同一个上架条目。设置页"Fully on-device"卡片原来说音频和文字"永不离开本机"，与 iCloud 同步矛盾，已改为"留在你的设备和你自己的 iCloud 账户里"。剩下的事见"上传与提交前"。

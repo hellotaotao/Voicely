@@ -132,10 +132,13 @@ final class IncrementalTranscriptionCoordinator {
     var telemetryCallback: ((TranscriptionTelemetrySnapshot) -> Void)?
     private var telemetryFinished = false
     private var telemetrySession: TranscriptionTelemetrySession?
+    /// Outlives the session, so a pass after stop can still name its model.
+    private var telemetryNoteID: UUID?
 
     func configureTelemetry(noteID: UUID) {
         finishTelemetry()
         telemetryFinished = false
+        telemetryNoteID = noteID
         telemetrySession = transcriptionService.beginTelemetrySession(noteID: noteID, activeWorkOnly: true)
     }
 
@@ -345,6 +348,7 @@ final class IncrementalTranscriptionCoordinator {
         let tagged = languageTaggedSlices
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: tagged, mode: mode)
         guard !stretches.isEmpty else { return false }
+        if let telemetryNoteID { transcriptionService.recordModel(.parakeet, afterRunOf: telemetryNoteID) }
 
         let counter = transcriptionService.decodeWorkCounter
         let transcribeEnglish = self.transcribeEnglish
@@ -596,6 +600,7 @@ final class IncrementalTranscriptionCoordinator {
     ) async -> SliceResult {
         decodingSlice = (startFrame, endFrame, 0)
         defer { decodingSlice = nil }
+        transcriptionService.recordModel(.parakeet, session: session)
         let counter = transcriptionService.decodeWorkCounter
         let words: [TimedWord]
         do {

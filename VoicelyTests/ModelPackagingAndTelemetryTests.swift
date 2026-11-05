@@ -71,10 +71,7 @@ struct ModelPackagingAndTelemetryTests {
 
     @Test func voiceNoteAveragesCompletedTelemetrySamples() {
         let note = VoiceNote(title: "Telemetry")
-        let route = TranscriptionComputeRoute(
-            encoderUnits: .cpuAndNeuralEngine,
-            decoderUnits: .cpuAndNeuralEngine
-        )
+        let route = TranscriptionComputeRoute(units: [.cpuAndNeuralEngine])
 
         note.recordTranscriptionTelemetry(
             TranscriptionTelemetrySnapshot(
@@ -139,13 +136,30 @@ struct ModelPackagingAndTelemetryTests {
     }
 
     @Test func telemetryLabelsNeuralEngineAsNPU() {
-        let route = TranscriptionComputeRoute(
-            encoderUnits: .cpuAndNeuralEngine,
-            decoderUnits: .cpuAndNeuralEngine
-        )
+        let route = TranscriptionComputeRoute(units: [.cpuAndNeuralEngine])
 
         #expect(route.summary == "Neural Engine (NPU)")
-        #expect(route.detail == "Encoder ANE · Decoder ANE")
+        #expect(route.detail == "ANE")
+    }
+
+    @Test(arguments: [
+        ([SpeechModelKind.qwen3], Qwen3Backend.mlx, "Qwen3 ASR 0.6B", "GPU", "GPU"),
+        ([.parakeet], .mlx, "Parakeet TDT 0.6B v2", "Neural Engine (NPU)", "NPU"),
+        ([.parakeet, .qwen3], .mlx, "Qwen3 ASR 0.6B + Parakeet TDT 0.6B v2", "GPU + Neural Engine (NPU)", "GPU + NPU"),
+        ([.parakeet, .qwen3, .parakeet], .coreML, "Qwen3 ASR 0.6B + Parakeet TDT 0.6B v2", "Neural Engine (NPU)", "NPU"),
+    ] as [([SpeechModelKind], Qwen3Backend, String, String, String)])
+    func telemetryNamesEveryModelThatWorkedAndItsUnits(
+        models: [SpeechModelKind], backend: Qwen3Backend, name: String, compute: String, badge: String
+    ) {
+        let snapshot = TranscriptionTelemetrySnapshot.inactive(describing: models, qwenBackend: backend)
+        #expect(snapshot.modelName == name)
+        #expect(snapshot.computeRoute.compactDescription == compute)
+
+        var withSpeed = snapshot
+        withSpeed.metrics = TranscriptionTelemetryMetrics(elapsedSeconds: 1, audioDurationSeconds: 10)
+        let note = VoiceNote(title: "Badge")
+        note.replaceCumulativeTranscriptionTelemetry(withSpeed)
+        #expect(note.transcriptionComputeBadgeLabel == badge)
     }
 
 }

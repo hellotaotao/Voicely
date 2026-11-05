@@ -857,6 +857,7 @@ class TranscriptionService: ObservableObject {
         guard isEngineLoaded else {
             return .modelUnavailable
         }
+        recordModel(.qwen3, session: session)
 
         if ownsTelemetry {
             setTelemetryAudioDuration(await audioDurationProvider(filePath), session: session)
@@ -1050,6 +1051,31 @@ extension TranscriptionService {
         refreshTranscriptionTelemetry(session)
     }
 
+    /// Names `model` on the run's speed card and compute badge from now on.
+    func recordModel(_ model: SpeechModelKind, session: TranscriptionTelemetrySession) {
+        guard telemetrySessions[session.id] != nil, session.models.insert(model).inserted else { return }
+        refreshTranscriptionTelemetry(session)
+    }
+
+    /// Names `model` on `noteID`'s card once its run's clock has stopped, as
+    /// for Parakeet's English stretches after a recording stops.
+    func recordModel(_ model: SpeechModelKind, afterRunOf noteID: UUID) {
+        if let id = noteTelemetrySessions[noteID], let session = telemetrySessions[id] {
+            recordModel(model, session: session)
+            return
+        }
+        guard var snapshot = telemetryState.snapshot(for: noteID), !snapshot.models.contains(model) else { return }
+        snapshot.describe(snapshot.models + [model], qwenBackend: qwenBackend)
+        telemetryState.update(snapshot, noteID: noteID)
+    }
+
+    /// The model a run on `noteID`'s audio is shown with until one does work.
+    func expectedTelemetryModel(for noteID: UUID?) -> SpeechModelKind {
+        transcribesWithParakeet(noteID) ? .parakeet : .qwen3
+    }
+
+    var qwenBackend: Qwen3Backend { modelManager?.backend ?? .current }
+
     func endTelemetrySession(_ session: TranscriptionTelemetrySession) {
         guard telemetrySessions[session.id] != nil else { return }
         pauseTelemetryWork(session)
@@ -1096,29 +1122,17 @@ private extension TranscriptionService {
     func refreshTranscriptionTelemetry(_ session: TranscriptionTelemetrySession, isActive: Bool = true) {
         guard telemetrySessions[session.id] != nil else { return }
         let elapsed = session.elapsed + (session.runningSince.map { max(0, nowProvider().timeIntervalSince($0)) } ?? 0)
-        telemetryState.update(TranscriptionTelemetrySnapshot(
-            isActive: isActive,
-            modelName: currentTelemetryModelName(),
-            computeRoute: currentTelemetryComputeRoute(),
-            metrics: TranscriptionTelemetryMetrics(
-                elapsedSeconds: elapsed,
-                audioDurationSeconds: session.audioDuration,
-                processedAudioSeconds: session.coverage.processedSeconds
-            ),
-            thermalState: ProcessInfo.processInfo.thermalState
-        ), noteID: session.noteID)
-    }
-
-    func currentTelemetryModelName() -> String {
-        let modelIdentifier = modelManager?.currentModelIdentifier() ?? modelManager?.selectedModel
-        guard let modelIdentifier, !modelIdentifier.isEmpty else {
-            return "No model"
-        }
-        return ModelManager.displayName(for: modelIdentifier)
-    }
-
-    func currentTelemetryComputeRoute() -> TranscriptionComputeRoute {
-        TranscriptionComputeRoute(backend: modelManager?.backend ?? .current)
+        var snapshot = TranscriptionTelemetrySnapshot.inactive()
+        snapshot.isActive = isActive
+        snapshot.metrics = TranscriptionTelemetryMetrics(
+            elapsedSeconds: elapsed,
+            audioDurationSeconds: session.audioDuration,
+            processedAudioSeconds: session.coverage.processedSeconds
+        )
+        snapshot.describe(
+            session.models.isEmpty ? [expectedTelemetryModel(for: session.noteID)] : Array(session.models),
+            qwenBackend: qwenBackend)
+        telemetryState.update(snapshot, noteID: session.noteID)
     }
 
     func updateEngineStatus() {
@@ -1377,7 +1391,7 @@ private extension TranscriptionService {
         let parakeetStarted = nowProvider()
         // An English choice goes to Parakeet first, as a longer file does; Qwen3-ASR
         // takes the note only when Parakeet fails or hears nothing.
-        if mode == .english, let parakeet = await parakeetTranscript(after: nil, mode: mode, fileURL: url) {
+        if mode == .english, let parakeet = await parakeetTranscript(after: nil, mode: mode, fileURL: url, session: session) {
             english = parakeet
             outcome = .transcribed(TranscriptionResult(
                 text: parakeet.text, duration: nowProvider().timeIntervalSince(parakeetStarted),
@@ -1392,7 +1406,7 @@ private extension TranscriptionService {
             }
 
             if mode != .english {
-                english = await parakeetTranscript(after: outcome, mode: mode, fileURL: url)
+                english = await parakeetTranscript(after: outcome, mode: mode, fileURL: url, session: session)
             }
         }
 
@@ -1478,7 +1492,8 @@ private extension TranscriptionService {
     private func parakeetTranscript(
         after outcome: TranscriptionOutcome?,
         mode: EnglishStretchRouting.Mode,
-        fileURL: URL
+        fileURL: URL,
+        session: TranscriptionTelemetrySession
     ) async -> (text: String, spans: [TranscriptSpan]?)? {
         switch outcome {
         case nil, .transcribed?, .noSpeech?: break
@@ -1490,6 +1505,7 @@ private extension TranscriptionService {
             ?? LanguageTaggedSlice(start: 0, end: duration, text: nil, language: nil)]
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
         guard !stretches.isEmpty else { return nil }
+        recordModel(.parakeet, session: session)
         let routed = await EnglishStretchRouting.transcribeStretches(
             stretches, in: slices, fileURL: fileURL, sampleRate: info.sampleRate, transcribe: transcribeEnglish)
         await releaseEnglishEngine()

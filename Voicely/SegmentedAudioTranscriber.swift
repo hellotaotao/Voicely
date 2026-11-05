@@ -549,6 +549,7 @@ final class SegmentedAudioTranscriber {
 
     private func runParakeet(on sourceURL: URL, from start: Int64, to end: Int64) async {
         parakeetRan = true
+        if let telemetrySession { transcriptionService.recordModel(.parakeet, session: telemetrySession) }
         let started = nowProvider()
         do {
             let words = try await transcribeEnglish(sourceURL, start, end)
@@ -571,6 +572,7 @@ final class SegmentedAudioTranscriber {
         let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
         guard !stretches.isEmpty else { return nil }
+        if let telemetrySession { transcriptionService.recordModel(.parakeet, session: telemetrySession) }
         let transcribeEnglish = self.transcribeEnglish
         let routed = await EnglishStretchRouting.transcribeStretches(
             stretches, in: slices, fileURL: sourceURL, sampleRate: sampleRate, transcribe: transcribeEnglish)

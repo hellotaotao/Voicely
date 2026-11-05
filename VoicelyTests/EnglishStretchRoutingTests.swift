@@ -208,6 +208,8 @@ struct EnglishStretchTranscriptionTests {
             return .text("q\(decoded)")
         }
         let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        let noteID = UUID()
+        coordinator.configureTelemetry(noteID: noteID)
         coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         var stretches: [(Int64, Int64)] = []
         coordinator.transcribeEnglish = { _, start, end, progress in
@@ -224,8 +226,12 @@ struct EnglishStretchTranscriptionTests {
         _ = await coordinator.stop(currentFrame: Int64(languages.count * 14) * 16_000)
         let qwenSpans = coordinator.accumulatedSpans
         let workBefore = service.decodeWorkCount
+        #expect(service.telemetryState.snapshot(for: noteID)?.models == [.qwen3])
 
         let replaced = await coordinator.transcribeEnglishStretches(mode: .automatic)
+
+        // Parakeet's pass runs after the live clock stopped and still shows on the card.
+        #expect(service.telemetryState.snapshot(for: noteID)?.models == [.qwen3, .parakeet])
 
         #expect(stretches.count == 1 && stretches[0] == (14 * 16_000, 14 * 14 * 16_000))
         #expect(service.decodeWorkCount > workBefore)
@@ -262,6 +268,8 @@ struct EnglishStretchTranscriptionTests {
         #expect(note.transcriptSpans?.count == languages.count)
         #expect(note.transcriptionOutcome == .transcribed)
         #expect(note.transcriptionModelIdentifier == "m" + EnglishStretchRouting.parakeetModelSuffix)
+        // Qwen3-ASR is stubbed past the service here, so only Parakeet's mark is checked.
+        #expect(service.telemetryState.snapshot(for: note.id)?.models.contains(.parakeet) == true)
     }
 
     /// Imports a 10 s file, which Qwen3-ASR decodes in one pass, in auto-detect.
@@ -531,6 +539,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.qwenCalls == 0)
         #expect(run.stretches.count == 1 && run.stretches[0] == (0, 10 * 16_000))
         #expect(run.released)
+        #expect(run.service.telemetryState.snapshot(for: run.note.id)?.modelName == "Parakeet TDT 0.6B v2")
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(run.note.transcriptSpans?.count == 1)
@@ -549,6 +558,7 @@ struct EnglishStretchTranscriptionTests {
 
         #expect(run.stretches.count == 1)
         #expect(run.qwenCalls == 1)
+        #expect(run.service.telemetryState.snapshot(for: run.note.id)?.models == [.qwen3, .parakeet])
         #expect(run.note.transcription == "qwen")
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(!run.note.usedParakeetForEnglish)
@@ -580,6 +590,8 @@ struct EnglishRecordingTests {
             return "qwen"
         }
         let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: pcmURL)
+        let noteID = UUID()
+        coordinator.configureTelemetry(noteID: noteID)
         coordinator.transcribesWithParakeet = true
         coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         var failSecondSlice = true
@@ -614,6 +626,7 @@ struct EnglishRecordingTests {
         #expect(stretches.count == 1 && stretches[0] == (0, 3 * 14 * 16_000))
         #expect(coordinator.accumulatedTranscript == "en0\nen1\nen2")
         #expect(qwenCalls == 0)
+        #expect(service.telemetryState.snapshot(for: noteID)?.models == [.parakeet])
     }
 
     @Test(arguments: [("Chinese", "qwen\nqwen\nqwen"), ("English", "en0\nen1\nen2")])

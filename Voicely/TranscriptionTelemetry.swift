@@ -80,35 +80,58 @@ struct TranscriptionAudioCoverage {
     }
 }
 
-struct TranscriptionComputeRoute: Equatable {
-    let encoderUnits: MLComputeUnits
-    let decoderUnits: MLComputeUnits
+/// A speech model that worked on a transcription run, as its speed card and
+/// compute badge name it.
+enum SpeechModelKind: Int, Comparable {
+    case qwen3
+    case parakeet
 
-    init(encoderUnits: MLComputeUnits, decoderUnits: MLComputeUnits) {
-        self.encoderUnits = encoderUnits
-        self.decoderUnits = decoderUnits
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    var displayName: String {
+        switch self {
+        case .qwen3: return Qwen3ASRDefaults.modelDisplayName
+        case .parakeet: return "Parakeet TDT 0.6B v2"
+        }
     }
 
-    /// MLX runs the whole model on the GPU; CoreML is pinned off it.
+    /// MLX runs Qwen3-ASR on the GPU and CoreML keeps it off it; Parakeet is
+    /// CoreML on CPU + Neural Engine on every device.
+    func computeUnits(qwenBackend: Qwen3Backend) -> MLComputeUnits {
+        switch self {
+        case .qwen3: return qwenBackend == .mlx ? .cpuAndGPU : .cpuAndNeuralEngine
+        case .parakeet: return .cpuAndNeuralEngine
+        }
+    }
+}
+
+struct TranscriptionComputeRoute: Equatable {
+    /// The units the run's models ran on, each once.
+    let units: [MLComputeUnits]
+
+    init(units: [MLComputeUnits]) {
+        var distinct: [MLComputeUnits] = []
+        for unit in units where !distinct.contains(unit) { distinct.append(unit) }
+        self.units = distinct
+    }
+
+    /// Qwen3-ASR alone.
     init(backend: Qwen3Backend) {
-        let units: MLComputeUnits = backend == .mlx ? .cpuAndGPU : .cpuAndNeuralEngine
-        self.init(encoderUnits: units, decoderUnits: units)
+        self.init(models: [.qwen3], qwenBackend: backend)
+    }
+
+    init(models: [SpeechModelKind], qwenBackend: Qwen3Backend) {
+        self.init(units: models.sorted().map { $0.computeUnits(qwenBackend: qwenBackend) })
     }
 
     var summary: String {
-        if encoderUnits == decoderUnits {
-            return Self.displayName(for: encoderUnits)
-        }
-
-        return "Mixed Compute"
+        units.map(Self.displayName(for:)).joined(separator: " + ")
     }
 
-    var compactDescription: String {
-        encoderUnits == decoderUnits ? Self.displayName(for: encoderUnits) : detail
-    }
+    var compactDescription: String { summary }
 
     var detail: String {
-        "Encoder \(Self.shortName(for: encoderUnits)) · Decoder \(Self.shortName(for: decoderUnits))"
+        units.map(Self.shortName(for:)).joined(separator: " + ")
     }
 
     static func shortName(for units: MLComputeUnits) -> String {
@@ -148,13 +171,25 @@ struct TranscriptionTelemetrySnapshot: Equatable {
     var computeRoute: TranscriptionComputeRoute
     var metrics: TranscriptionTelemetryMetrics
     var thermalState: ProcessInfo.ThermalState
+    /// The models `modelName` and `computeRoute` describe.
+    var models: [SpeechModelKind] = []
+
+    /// Names `models`, Qwen3-ASR first, and the units they ran on.
+    mutating func describe(_ models: [SpeechModelKind], qwenBackend: Qwen3Backend) {
+        self.models = Array(Set(models)).sorted()
+        modelName = self.models.map(\.displayName).joined(separator: " + ")
+        computeRoute = TranscriptionComputeRoute(models: self.models, qwenBackend: qwenBackend)
+    }
+
+    static func inactive(describing models: [SpeechModelKind], qwenBackend: Qwen3Backend) -> TranscriptionTelemetrySnapshot {
+        var snapshot = inactive()
+        snapshot.describe(models, qwenBackend: qwenBackend)
+        return snapshot
+    }
 
     static func inactive(
         modelName: String = "No model",
-        computeRoute: TranscriptionComputeRoute = TranscriptionComputeRoute(
-            encoderUnits: .cpuAndNeuralEngine,
-            decoderUnits: .cpuAndNeuralEngine
-        ),
+        computeRoute: TranscriptionComputeRoute = TranscriptionComputeRoute(units: [.cpuAndNeuralEngine]),
         thermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
     ) -> TranscriptionTelemetrySnapshot {
         TranscriptionTelemetrySnapshot(
@@ -196,6 +231,8 @@ final class TranscriptionTelemetrySession {
     var elapsed: TimeInterval = 0
     var audioDuration: TimeInterval?
     var coverage = TranscriptionAudioCoverage()
+    /// The models that have worked on this run so far.
+    var models = Set<SpeechModelKind>()
 
     init(noteID: UUID?, activeWorkOnly: Bool, now: Date) {
         self.noteID = noteID

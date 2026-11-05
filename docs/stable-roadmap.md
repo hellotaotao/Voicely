@@ -16,7 +16,7 @@
 
 当前版本 **0.32.1**（以 `Config/Version.xcconfig` 为准）。到现在都只发过内部 TestFlight，没有公开上架过。
 
-- **0.32.1（2026-11-06）**：设置是 English 时，千问因为某次转写临时加载以后，空闲 60 秒就卸载，不再留到 app 退出（录音中切回 Auto Detect、Parakeet 没听出字退回千问、导入时选 Auto Detect、把设置从 Auto Detect 改成 English，都会让千问加载）；速度卡片和笔记的算力标签写实际干活的模型，全部由 Parakeet 转写的笔记只显示 Parakeet（P-7）；`UIBackgroundModes` 去掉 `processing`，iOS 26 锁屏续转是否仍被系统接受要在真机上确认（见发布前 iPhone 清单）；麦克风权限说明改写；Release 包里 `CloudStorageManager` 不再打日志。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。
+- **0.32.1（2026-11-06）**：设置是 English 时，千问因为某次转写临时加载以后，空闲 60 秒就卸载，不再留到 app 退出（录音中切回 Auto Detect、Parakeet 没听出字退回千问、导入时选 Auto Detect、把设置从 Auto Detect 改成 English，都会让千问加载）；速度卡片和笔记的算力标签写实际干活的模型，全部由 Parakeet 转写的笔记只显示 Parakeet（P-7）；`UIBackgroundModes` 去掉 `processing`，iOS 26 锁屏续转是否仍被系统接受要在真机上确认（见发布前 iPhone 清单）；麦克风权限说明改写；Release 包里 `CloudStorageManager` 不再打日志。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight（两个包同时上传，iOS 27 分钟、Mac 28.5 分钟，都没有遇到凭证失效）。
 - **0.32.0（2026-11-04）**：默认语言是 English 时，千问不再常驻内存，Mac 上少占约 1 GB（3a）；删掉了只为 0.28.0 之前的设备保留的启动清理（第 10 项）；选 English 的录音在录音中可以切回 Auto Detect，语言选项只留 Auto Detect 和 English（3a）；iPhone 列表页顶部不再空一条（大标题的位置留着却不画字），搜索框固定在标题栏下面，原来被 iOS 26 放到屏幕底部、压在录音条下面（两处都是 0.31.0 加搜索时带进来的，iPhone 17 Pro 模拟器 iOS 27 确认）。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight（两个包同时上传，这次 Mac 包没有遇到凭证失效）。
 - **0.31.0（2026-11-03）**：选 English 的录音全程只用 Parakeet，这段时间千问卸载（3a）；短的英文重转跳过千问，整条放回队列重转的录音保留它的一次性语言选择；笔记文件夹与搜索（2c）；搜索命中在列表和详情页里高亮，详情页可以逐处跳转（2d）；Mac 侧边栏去掉大标题、搜索框固定，列表去掉"Recordings"小标题。2c 新增了 `@Model NoteFolder` 和 `VoiceNote.folderSlot`，上传前已部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight。
 - **0.30.2（2026-11-01）**：Parakeet 加载模型和转换音频格式时，每 5 秒给锁屏后台任务上报一次进度。修的是 0.30.0 在 iPhone 上锁屏重转长英文录音时，Parakeet 首次加载约 1 分 40 秒没有进度、后台任务被系统收走（见 3a 待办 5）。

@@ -124,7 +124,10 @@ struct RecordingSessionTests {
         transcription.setLanguageKey(nil, for: note.id)
     }
 
-    @Test func recordingWithEnglishChosenRunsOnParakeetUntilItsTextIsSettled() async throws {
+    private struct ParakeetPassFailed: Error {}
+
+    @Test(arguments: [false, true])
+    func recordingWithEnglishChosenRunsOnParakeetUntilItsTextIsSettled(passAfterStopFails: Bool) async throws {
         let audio = MockRecordingAudio()
         let pcmURL = try IncrementalTranscriptionCoordinatorTests().makeSilentCAF(seconds: 5)
         defer { try? FileManager.default.removeItem(at: pcmURL) }
@@ -139,7 +142,10 @@ struct RecordingSessionTests {
         session.coordinatorFactory = { url in
             let created = IncrementalTranscriptionCoordinator(transcriptionService: transcription, recordingFileURL: url)
             created.transcribeEnglishSlice = { _, _, _, _ in [TimedWord(text: "live", start: 1, end: 2)] }
-            created.transcribeEnglish = { _, _, _, _ in [TimedWord(text: "settled", start: 1, end: 2)] }
+            created.transcribeEnglish = { _, _, _, _ in
+                if passAfterStopFails { throw ParakeetPassFailed() }
+                return [TimedWord(text: "settled", start: 1, end: 2)]
+            }
             created.releaseEnglishEngine = {}
             coordinator = created
             return created
@@ -159,7 +165,8 @@ struct RecordingSessionTests {
 
         #expect(!transcription.isRecordingEnglish)
         #expect(holds == [true, false])
-        #expect(note.transcription == "settled")
+        // A failed pass keeps the live text, which Parakeet wrote too.
+        #expect(note.transcription == (passAfterStopFails ? "live" : "settled"))
         #expect(note.transcribedByParakeetAlone)
     }
 

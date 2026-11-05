@@ -61,8 +61,6 @@ final class SegmentedAudioTranscriber {
     private var parakeetWords: ArraySlice<TimedWord>?
     /// How long Parakeet's run took, until a slice has counted it.
     private var parakeetSeconds: TimeInterval = 0
-    /// Whether any slice of this run took Parakeet's words.
-    private var parakeetWroteText = false
 
     /// When true, the segment loop stops at the next boundary, leaving the
     /// sidecar intact for later resume. Wired to background-time expiration.
@@ -353,8 +351,11 @@ final class SegmentedAudioTranscriber {
         func seconds(_ frame: Int64) -> TimeInterval { Double(frame) / info.sampleRate }
         var failedRanges: [SegmentFailureRange] = resumed?.failedRanges ?? []
         var producedAnyText = !pieces.isEmpty
-        // A resumed run cannot tell which model wrote the text it picks up.
-        var qwenMayHaveWrittenText = producedAnyText
+        // Who wrote the text so far. A checkpoint that predates the record
+        // leaves it to the model this run starts with, as the run before did.
+        let unknownAuthor = producedAnyText && resumed?.parakeetWroteText == nil
+        var parakeetHasText = resumed?.parakeetWroteText ?? (unknownAuthor && parakeetFirst)
+        var qwenHasText = resumed?.qwenWroteText ?? (unknownAuthor && !parakeetFirst)
         var segmentIndex = 0
         var lastModelIdentifier: String?
         var accumulatedDuration: TimeInterval = 0
@@ -414,7 +415,8 @@ final class SegmentedAudioTranscriber {
                 progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                          accumulatedText: accumulatedText,
                                          failedRanges: failedRanges, updatedAt: nowProvider(),
-                                         spans: spans.spans, slices: tagged), for: noteID)
+                                         spans: spans.spans, slices: tagged,
+                                         parakeetWroteText: parakeetHasText, qwenWroteText: qwenHasText), for: noteID)
                 transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
                 continue
             }
@@ -446,8 +448,12 @@ final class SegmentedAudioTranscriber {
                 tagged?.append(LanguageTaggedSlice(start: seconds(start), end: seconds(end),
                                                    text: text, language: text == nil ? nil : result.language))
                 producedAnyText = true
-                if text != nil, result.modelIdentifier != EnglishStretchRouting.parakeetOnlyModelIdentifier {
-                    qwenMayHaveWrittenText = true
+                if text != nil {
+                    if result.modelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier {
+                        parakeetHasText = true
+                    } else {
+                        qwenHasText = true
+                    }
                 }
                 lastModelIdentifier = result.modelIdentifier ?? lastModelIdentifier
                 accumulatedDuration += result.duration
@@ -477,7 +483,8 @@ final class SegmentedAudioTranscriber {
             progressStore.save(.init(lastFrame: start, totalFrames: info.totalFrames,
                                      accumulatedText: accumulatedText,
                                      failedRanges: failedRanges, updatedAt: nowProvider(),
-                                     spans: spans.spans, slices: tagged), for: noteID)
+                                     spans: spans.spans, slices: tagged,
+                                     parakeetWroteText: parakeetHasText, qwenWroteText: qwenHasText), for: noteID)
             transcriptionService.reportExternalPreview(accumulatedText, for: noteID)
             note.transcriptionLeaseExpiresAt = nowProvider().addingTimeInterval(transcriptionService.leaseDuration)
             reportProgress(Float(start) / Float(info.totalFrames), for: noteID)
@@ -485,10 +492,9 @@ final class SegmentedAudioTranscriber {
 
         guard ownsRun(note) else { return }
 
-        if parakeetWroteText {
-            lastModelIdentifier = qwenMayHaveWrittenText
-                ? EnglishStretchRouting.modelIdentifier(afterParakeet: lastModelIdentifier)
-                : EnglishStretchRouting.parakeetOnlyModelIdentifier
+        if parakeetFirst {
+            lastModelIdentifier = EnglishStretchRouting.modelIdentifier(
+                parakeetWrote: parakeetHasText, qwenWrote: qwenHasText, qwenIdentifier: lastModelIdentifier)
         } else if let tagged, let routed = await transcribeEnglishStretches(
             in: tagged, of: note, sourceURL: sourceURL, sampleRate: info.sampleRate) {
             guard ownsRun(note) else { return }
@@ -549,7 +555,6 @@ final class SegmentedAudioTranscriber {
         guard let text = LocalTranscriptFinalizer.finalizedText(sliceWords.map(\.text).joined(separator: " ")) else {
             return .noSpeech
         }
-        parakeetWroteText = true
         defer { parakeetSeconds = 0 }
         return .transcribed(TranscriptionResult(
             text: text, duration: parakeetSeconds,

@@ -68,13 +68,24 @@ enum EnglishStretchRouting {
         return identifier.hasSuffix(parakeetModelSuffix) ? identifier : identifier + parakeetModelSuffix
     }
 
+    /// The model identifier of a note from who wrote the text it holds:
+    /// Parakeet's own when Parakeet wrote all of it, Qwen3-ASR's marked when
+    /// both did, else Qwen3-ASR's.
+    static func modelIdentifier(parakeetWrote: Bool, qwenWrote: Bool, qwenIdentifier: String?) -> String? {
+        guard parakeetWrote else { return qwenIdentifier }
+        return qwenWrote ? modelIdentifier(afterParakeet: qwenIdentifier) : parakeetOnlyModelIdentifier
+    }
+
     /// The model identifier of a note after Parakeet replaced the `replaced`
-    /// slices: Parakeet's own when no other slice still has text.
+    /// slices. A replaced slice Parakeet heard nothing in is no one's text.
     static func modelIdentifier(
         afterParakeetReplaced replaced: [Int], in slices: [LanguageTaggedSlice], qwenIdentifier: String?
-    ) -> String {
-        let othersHaveText = slices.indices.contains { slices[$0].text != nil && !replaced.contains($0) }
-        return othersHaveText ? modelIdentifier(afterParakeet: qwenIdentifier) : parakeetOnlyModelIdentifier
+    ) -> String? {
+        let replaced = Set(replaced)
+        return modelIdentifier(
+            parakeetWrote: replaced.contains { slices[$0].text != nil },
+            qwenWrote: slices.indices.contains { !replaced.contains($0) && slices[$0].text != nil },
+            qwenIdentifier: qwenIdentifier)
     }
 
     /// How the language for a recording was chosen.

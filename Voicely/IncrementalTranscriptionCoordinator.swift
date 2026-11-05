@@ -338,8 +338,19 @@ final class IncrementalTranscriptionCoordinator {
         }
     }
 
-    /// Parakeet's stretches after stop replaced every slice that has text.
-    private(set) var parakeetWroteAllText = false
+    /// Slices whose text Parakeet's stretches after stop wrote.
+    private var englishPassStarts = Set<AVAudioFramePosition>()
+
+    /// The note's model identifier for the text the slices hold now. Gap
+    /// markers are no one's text.
+    func modelIdentifier(qwenIdentifier: String?) -> String? {
+        let written = slices.filter { $0.text != nil && $0.failure == nil }
+        let byParakeet = { (slice: LiveSlice) in slice.byParakeet || self.englishPassStarts.contains(slice.startFrame) }
+        return EnglishStretchRouting.modelIdentifier(
+            parakeetWrote: written.contains(where: byParakeet),
+            qwenWrote: written.contains { !byParakeet($0) },
+            qwenIdentifier: qwenIdentifier)
+    }
 
     /// After `stop`, transcribes the English stretches again with Parakeet
     /// (`EnglishStretchRouting`) and puts its text in their slices. Returns
@@ -363,15 +374,13 @@ final class IncrementalTranscriptionCoordinator {
         }
         await releaseEnglishEngine()
         guard !routed.replaced.isEmpty else { return false }
-        parakeetWroteAllText = EnglishStretchRouting.modelIdentifier(
-            afterParakeetReplaced: routed.replaced, in: routed.slices, qwenIdentifier: nil
-        ) == EnglishStretchRouting.parakeetOnlyModelIdentifier
         var replacedStarts = Set<AVAudioFramePosition>()
         for index in routed.replaced {
             slices[index].text = routed.slices[index].text
             slices[index].failure = nil
             replacedStarts.insert(slices[index].startFrame)
         }
+        englishPassStarts.formUnion(replacedStarts)
         // Parakeet transcribed the gaps it covered, so they are no longer unavailable.
         unrecoveredSliceRanges.removeAll { replacedStarts.contains($0.startFrame) }
         unrecoveredSliceCount = unrecoveredSliceRanges.count

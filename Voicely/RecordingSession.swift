@@ -361,9 +361,7 @@ final class RecordingSession: ObservableObject {
             note.isTranscribing = true
             let modelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
                 ?? self.transcriptionService.modelManager?.selectedModel
-            note.transcriptionModelIdentifier = (coord?.transcribesWithParakeet ?? transcribesWithParakeet)
-                ? EnglishStretchRouting.parakeetOnlyModelIdentifier
-                : modelIdentifier
+            note.transcriptionModelIdentifier = coord?.modelIdentifier(qwenIdentifier: modelIdentifier) ?? modelIdentifier
             note.transcriptionLastErrorMessage = nil
         }
         coordinator = coord
@@ -884,9 +882,8 @@ final class RecordingSession: ObservableObject {
                 note.setTranscript(trimmedTranscript, spans: spans)
                 let modelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
-                note.transcriptionModelIdentifier = !parakeetReplacedText ? modelIdentifier
-                    : capturedCoordinator?.parakeetWroteAllText == true ? EnglishStretchRouting.parakeetOnlyModelIdentifier
-                    : EnglishStretchRouting.modelIdentifier(afterParakeet: modelIdentifier)
+                note.transcriptionModelIdentifier = capturedCoordinator?.modelIdentifier(qwenIdentifier: modelIdentifier)
+                    ?? modelIdentifier
                 note.completeTranscription()
                 if let unrecovered = capturedCoordinator?.unrecoveredSliceRanges, !unrecovered.isEmpty {
                     // Gaps are marked inline; re-transcribing is an explicit user choice.

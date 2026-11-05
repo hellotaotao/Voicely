@@ -22,6 +22,10 @@ struct SegmentedTranscriptionProgress: Codable, Equatable {
     /// Each slice so far with its language tag, for the English stretches.
     /// Absent from checkpoints written before tags were recorded.
     var slices: [LanguageTaggedSlice]? = nil
+    /// Whether Parakeet and Qwen3-ASR wrote any of `accumulatedText`. Absent
+    /// from checkpoints written before authors were recorded.
+    var parakeetWroteText: Bool? = nil
+    var qwenWroteText: Bool? = nil
 }
 
 struct RetainedTranscriptionAttempt: Codable, Equatable, Identifiable {

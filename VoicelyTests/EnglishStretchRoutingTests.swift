@@ -130,6 +130,8 @@ struct EnglishStretchRoutingTests {
         let own = EnglishStretchRouting.parakeetOnlyModelIdentifier
         #expect(EnglishStretchRouting.modelIdentifier(afterParakeetReplaced: [0], in: slices, qwenIdentifier: "m") == "m+parakeet")
         #expect(EnglishStretchRouting.modelIdentifier(afterParakeetReplaced: [0, 2], in: slices, qwenIdentifier: "m") == own)
+        // Parakeet heard nothing in the stretch it took, so only Qwen3-ASR's text is left.
+        #expect(EnglishStretchRouting.modelIdentifier(afterParakeetReplaced: [1], in: slices, qwenIdentifier: "m") == "m")
     }
 
     @Test func wordsGoToTheSliceTheirMiddleFallsIn() {
@@ -252,7 +254,7 @@ struct EnglishStretchTranscriptionTests {
 
         // Parakeet's pass runs after the live clock stopped and still shows on the card.
         #expect(service.telemetryState.snapshot(for: noteID)?.models == [.qwen3, .parakeet])
-        #expect(!coordinator.parakeetWroteAllText)
+        #expect(coordinator.modelIdentifier(qwenIdentifier: "m") == "m+parakeet")
 
         #expect(stretches.count == 1 && stretches[0] == (14 * 16_000, 14 * 14 * 16_000))
         #expect(service.decodeWorkCount > workBefore)
@@ -454,6 +456,7 @@ struct EnglishStretchTranscriptionTests {
         seconds: Double,
         qwen: TranscriptionOutcome = .noSpeech,
         savedFrame: Int64? = nil,
+        savedAuthors: (parakeet: Bool, qwen: Bool)? = nil,
         parakeet: @escaping () throws -> [TimedWord]
     ) async throws -> (note: VoiceNote, service: TranscriptionService, stretches: [(Int64, Int64)], qwenCalls: Int, released: Bool) {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: seconds)
@@ -478,7 +481,8 @@ struct EnglishStretchTranscriptionTests {
         service.setLanguageKey("english", for: note.id)
         if let savedFrame {
             store.save(.init(lastFrame: savedFrame, totalFrames: Int64(seconds * 16_000), accumulatedText: "saved",
-                             failedRanges: [], updatedAt: Date()), for: note.id)
+                             failedRanges: [], updatedAt: Date(),
+                             parakeetWroteText: savedAuthors?.parakeet, qwenWroteText: savedAuthors?.qwen), for: note.id)
         }
 
         await transcriber.transcribe(note: note, sourceURL: url)
@@ -515,15 +519,24 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.note.transcriptionOutcome == .transcribed)
     }
 
-    @Test @MainActor func englishChoiceResumesAParakeetRunFromTheSavedFrame() async throws {
-        let run = try await Self.importWithEnglishChosen(seconds: 42, savedFrame: 14 * 16_000) {
+    /// The checkpoint says who wrote the text before the pause; one written
+    /// before that was recorded counts as the English run's, Parakeet's.
+    @Test(arguments: [
+        ((true, false) as (Bool, Bool)?, true),
+        ((false, true) as (Bool, Bool)?, false),
+        (nil as (Bool, Bool)?, true),
+    ])
+    @MainActor func englishChoiceResumesAParakeetRunFromTheSavedFrame(
+        savedAuthors: (parakeet: Bool, qwen: Bool)?, parakeetAlone: Bool
+    ) async throws {
+        let run = try await Self.importWithEnglishChosen(seconds: 42, savedFrame: 14 * 16_000, savedAuthors: savedAuthors) {
             Array(Self.wordsAt4And20And40.dropFirst())
         }
 
         #expect(run.stretches.count == 1 && run.stretches[0] == (14 * 16_000, 42 * 16_000))
         #expect(run.note.transcription == "saved\ntwo\nthree")
         #expect(run.note.usedParakeetForEnglish)
-        #expect(!run.note.transcribedByParakeetAlone)
+        #expect(run.note.transcribedByParakeetAlone == parakeetAlone)
     }
 
     private struct ParakeetFailed: Error {}
@@ -650,7 +663,7 @@ struct EnglishRecordingTests {
         #expect(coordinator.accumulatedTranscript == "en0\nen1\nen2")
         #expect(qwenCalls == 0)
         #expect(service.telemetryState.snapshot(for: noteID)?.models == [.parakeet])
-        #expect(coordinator.parakeetWroteAllText)
+        #expect(coordinator.modelIdentifier(qwenIdentifier: "m") == EnglishStretchRouting.parakeetOnlyModelIdentifier)
     }
 
     @Test(arguments: [("Chinese", "qwen\nqwen\nqwen"), ("English", "en0\nen1\nen2")])
@@ -687,7 +700,10 @@ struct EnglishRecordingTests {
 
         await coordinator.transcribeSegment(upToFrame: 29 * 16_000)
         #expect(coordinator.accumulatedTranscript == "live0\nqwen")
+        #expect(coordinator.modelIdentifier(qwenIdentifier: "m") == "m+parakeet")
         _ = await coordinator.stop(currentFrame: 3 * 14 * 16_000)
+        // Qwen3-ASR took Parakeet's slice back at stop.
+        #expect(coordinator.modelIdentifier(qwenIdentifier: "m") == "m")
 
         #expect(liveParakeetSlices == 1)
         #expect(qwenCalls == 3)

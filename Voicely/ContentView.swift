@@ -1377,6 +1377,10 @@ struct RecordingControls: View {
 
     private var statusTint: Color {
         if audioService.microphonePermission == .denied { return .orange }
+        // English goes to Parakeet, which loads when a recording needs it.
+        if nextRecordingLanguageName != nil {
+            return ParakeetEnglishEngine.isAvailable ? .green : .secondary
+        }
         guard let modelManager else { return .secondary }
         switch modelManager.modelState {
         case .loaded: return .green
@@ -1509,7 +1513,7 @@ struct RecordingControls: View {
             } label: {
                 HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(nextRecordingLanguageName == nil ? statusTint : .orange)
+                        .fill(statusTint)
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(session.pendingLanguageKey == nil ? "Language" : "Next only")
@@ -1517,7 +1521,7 @@ struct RecordingControls: View {
                             .foregroundStyle(.tertiary)
                         Text(languageLabel(for: nextRecordingLanguageKey))
                             .font(.footnote.weight(.medium))
-                            .foregroundStyle(nextRecordingLanguageName == nil ? Color.primary : Color.orange)
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 6)

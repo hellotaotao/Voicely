@@ -145,7 +145,6 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 - 点句跳转在 iPhone 上的显示和点按。（P-0p）
 - 笔记文件夹：长按拖动和长按菜单是否互相干扰，6 个图标在窄屏上的文字是否放得下。（2c）
 - Live Activity / 灵动岛录音状态、"Start Voicely Recording" 快捷指令和操作按钮。（⑦）
-- 锁屏暂停按钮改成 Toggle（11-06）：点下去暂停↔继续图标是否当场翻转，不再等约 0.4 秒；标题和计时器在等新状态时是否有系统的淡化效果；连点两下状态不乱。改之前的旧按钮 11-06 真机日志实测点击到锁屏卡片更新 0.35–0.46 秒；熄屏或常亮显示时第一下只会点亮屏幕，这是系统行为。
 
 ### git 卫生
 
@@ -282,6 +281,8 @@ Apple Watch、智能自动停止（听到告别语+静音判定会议结束）�
 ### ⑦ 反馈驱动的增强
 
 Live Activity / Dynamic Island 录音状态、Start Voicely Recording 快捷指令 / 操作按钮指派路径——代码已在 `Voicely/RecordingLiveActivityController.swift`、`VoicelyWidgets/`、`Voicely/StartRecordingIntent.swift`、`Voicely/VoicelyDeepLink.swift`，**只差真机验收**。
+
+锁屏暂停按钮（2026-11-06/07，iPhone 17 Pro 真机）：旧版是 `Button`，真机日志实测从点击到锁屏卡片换状态 0.35–0.46 秒，其中点击到 app 执行约 0.2 秒、app 推出新状态到卡片重绘约 0.15–0.2 秒，都在系统那边；熄屏或常亮显示时第一下只会点亮屏幕，这是系统行为。改成 `Toggle` + 带目标值的 `SetRecordingPausedIntent`（73eafaf）后，锁屏上图标按下当场翻转，用户实测"手感非常好"。
 
 一项做完整，发布后再做下一项。
 

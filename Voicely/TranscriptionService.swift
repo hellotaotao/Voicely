@@ -179,8 +179,10 @@ class TranscriptionService: ObservableObject {
     // MARK: Letting go of Qwen3-ASR loaded on demand
 
     /// When Qwen3-ASR loads on demand, how long it stays loaded after the
-    /// last work that needed it. Tests shorten it.
-    var idleQwenReleaseDelay: TimeInterval = 60
+    /// last work that needed it. Recordings and queue runs hold it on their
+    /// own; this only spans the gaps between slices of one run (under a
+    /// second) and actions taken back to back. Tests shorten it.
+    var idleQwenReleaseDelay: TimeInterval = 10
     private var idleQwenRelease: Task<Void, Never>?
     private var isReleasingIdleQwen = false
 

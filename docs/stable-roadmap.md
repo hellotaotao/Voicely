@@ -14,7 +14,9 @@
 
 ### 版本
 
-当前版本 **0.32.1**（以 `Config/Version.xcconfig` 为准）。到现在都只发过内部 TestFlight，没有公开上架过。
+当前版本 **0.33.0**（以 `Config/Version.xcconfig` 为准）。到现在都只发过内部 TestFlight，没有公开上架过。
+
+- **0.33.0（2026-11-07）**：Mac 上千问不再开机加载、常驻约 1.1 GB，选 Auto Detect 时也按需加载（Mac 上加载 2–3 秒）：开始录音时边录第一片边加载，导入和队列转写时加载，空闲 10 秒卸载，录音中不卸载；设置页显示 "Loads when needed"。iPhone 和 iPad 仍常驻，等实测加载时间再说（见发布前 iPhone 清单）。锁屏和灵动岛的暂停按钮改成 Toggle，按下当场翻转图标，不再等约 0.4 秒；intent 改成带目标值，连点不会把状态搞反（iPhone 17 Pro 已实测）。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。
 
 - **0.32.1（2026-11-06）**：设置是 English 时，千问因为某次转写临时加载以后，空闲 60 秒就卸载，不再留到 app 退出（录音中切回 Auto Detect、Parakeet 没听出字退回千问、导入时选 Auto Detect、把设置从 Auto Detect 改成 English，都会让千问加载）；速度卡片和笔记的算力标签写实际干活的模型，全部由 Parakeet 转写的笔记只显示 Parakeet（P-7）；`UIBackgroundModes` 去掉 `processing`，iOS 26 锁屏续转是否仍被系统接受要在真机上确认（见发布前 iPhone 清单）；麦克风权限说明改写；Release 包里 `CloudStorageManager` 不再打日志。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight（两个包同时上传，iOS 27 分钟、Mac 28.5 分钟，都没有遇到凭证失效）。
 - **0.32.0（2026-11-04）**：默认语言是 English 时，千问不再常驻内存，Mac 上少占约 1 GB（3a）；删掉了只为 0.28.0 之前的设备保留的启动清理（第 10 项）；选 English 的录音在录音中可以切回 Auto Detect，语言选项只留 Auto Detect 和 English（3a）；iPhone 列表页顶部不再空一条（大标题的位置留着却不画字），搜索框固定在标题栏下面，原来被 iOS 26 放到屏幕底部、压在录音条下面（两处都是 0.31.0 加搜索时带进来的，iPhone 17 Pro 模拟器 iOS 27 确认）。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight（两个包同时上传，这次 Mac 包没有遇到凭证失效）。

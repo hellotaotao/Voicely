@@ -7,26 +7,29 @@
 
 import Foundation
 
+/// Hands the Live Activity's pause control to the recording session that owns
+/// the current recording. With no session registered nothing is recording, so
+/// there is nothing to pause.
 @MainActor
 final class RecordingControlCommandCenter {
     static let shared = RecordingControlCommandCenter()
 
-    private var togglePauseHandler: (() -> Void)?
+    private var pauseHandler: ((_ paused: Bool) -> Void)?
 
     private init() {}
 
-    func setTogglePauseHandler(_ handler: @escaping () -> Void) {
-        togglePauseHandler = handler
+    func setPauseHandler(_ handler: @escaping (_ paused: Bool) -> Void) {
+        pauseHandler = handler
     }
 
-    func clearTogglePauseHandler() {
-        togglePauseHandler = nil
+    func clearPauseHandler() {
+        pauseHandler = nil
     }
 
     @discardableResult
-    func togglePauseResume() -> Bool {
-        guard let togglePauseHandler else { return false }
-        togglePauseHandler()
+    func setPaused(_ paused: Bool) -> Bool {
+        guard let pauseHandler else { return false }
+        pauseHandler(paused)
         return true
     }
 }

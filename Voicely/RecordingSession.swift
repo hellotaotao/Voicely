@@ -530,12 +530,35 @@ final class RecordingSession: ObservableObject {
         togglePauseResume()
     }
 
+    /// Applies the state the Live Activity's pause toggle asked for.
+    func setPausedFromLiveActivity(_ paused: Bool) {
+        guard audioService.isRecording else { return }
+        let wasPaused = audioService.isPaused
+        if wasPaused != paused {
+            togglePauseResume()
+        }
+        // The widget already drew the requested state. When nothing changed
+        // (already in that state, or resume failed) no update went out, so send
+        // the real state or the toggle keeps showing one the recording is not in.
+        if audioService.isPaused == wasPaused {
+            reportPauseStateToLiveActivity()
+        }
+    }
+
+    private func reportPauseStateToLiveActivity() {
+        let elapsed = audioService.recordingDuration
+        if audioService.isPaused {
+            RecordingLiveActivityController.shared.pause(elapsedDuration: elapsed)
+        } else {
+            RecordingLiveActivityController.shared.resume(elapsedDuration: elapsed)
+        }
+    }
+
     /// Wires the lock-screen / Live Activity pause toggle to this session.
     /// Captures `self` weakly so a stale session can never act on a recording.
     func registerLiveActivityControls() {
-        RecordingControlCommandCenter.shared.setTogglePauseHandler { [weak self] in
-            guard let self, self.audioService.isRecording else { return }
-            self.togglePauseResume()
+        RecordingControlCommandCenter.shared.setPauseHandler { [weak self] paused in
+            self?.setPausedFromLiveActivity(paused)
         }
     }
 

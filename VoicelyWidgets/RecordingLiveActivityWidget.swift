@@ -85,6 +85,7 @@ private struct RecordingLiveActivityLockScreenView: View {
                     .font(.headline)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
+                    .invalidatableContent()
                 Text(lockScreenSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -101,6 +102,7 @@ private struct RecordingLiveActivityLockScreenView: View {
                 ActivityElapsedTimeView(state: context.state, compact: false)
                     .font(.title3.weight(.semibold).monospacedDigit())
                     .multilineTextAlignment(.trailing)
+                    .invalidatableContent()
             }
             .frame(width: 72, alignment: .trailing)
             .layoutPriority(1)
@@ -131,20 +133,37 @@ private struct RecordingLiveActivityLockScreenView: View {
     }
 }
 
+/// A `Toggle` rather than a `Button`: the system draws a tapped toggle in its
+/// new state immediately, before the intent reaches the app and a new
+/// Live Activity state comes back (about 0.4 s on device), so the icon flips
+/// under the finger.
 private struct RecordingPauseButton: View {
     let state: RecordingActivityAttributes.ContentState
     let diameter: CGFloat
 
+    private var isPaused: Bool { state.recordingState == .paused }
+
     var body: some View {
-        Button(intent: ToggleRecordingPauseIntent()) {
-            Image(systemName: state.recordingState == .paused ? "play.fill" : "pause.fill")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: diameter, height: diameter)
-                .background(Color.red, in: Circle())
+        Toggle(isOn: isPaused, intent: SetRecordingPausedIntent(paused: !isPaused)) {
+            Text(isPaused ? "Resume recording" : "Pause recording")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(state.recordingState == .paused ? "Resume recording" : "Pause recording")
+        .toggleStyle(RecordingPauseToggleStyle(diameter: diameter))
+    }
+}
+
+/// On = paused, so the control offers play; off = recording, so it offers pause.
+private struct RecordingPauseToggleStyle: ToggleStyle {
+    let diameter: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        Image(systemName: configuration.isOn ? "play.fill" : "pause.fill")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white)
+            .frame(width: diameter, height: diameter)
+            .background(Color.red, in: Circle())
+            .contentShape(Circle())
+            .accessibilityElement()
+            .accessibilityLabel(configuration.isOn ? "Resume recording" : "Pause recording")
     }
 }
 

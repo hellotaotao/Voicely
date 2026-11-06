@@ -61,37 +61,27 @@ struct QuickActionTests {
         #expect(QuickAction.consumePendingStartRecording() == false)
     }
 
-    @Test func toggleRecordingPauseIntentRunsRegisteredHandler() async throws {
-        var didTogglePause = false
-        RecordingControlCommandCenter.shared.setTogglePauseHandler {
-            didTogglePause = true
+    @Test func setRecordingPausedIntentPassesRequestedStateToHandler() async throws {
+        var requested: [Bool] = []
+        RecordingControlCommandCenter.shared.setPauseHandler { paused in
+            requested.append(paused)
         }
         defer {
-            RecordingControlCommandCenter.shared.clearTogglePauseHandler()
+            RecordingControlCommandCenter.shared.clearPauseHandler()
         }
 
-        _ = try await ToggleRecordingPauseIntent().perform()
+        _ = try await SetRecordingPausedIntent(paused: true).perform()
+        _ = try await SetRecordingPausedIntent(paused: false).perform()
 
-        #expect(didTogglePause == true)
+        #expect(requested == [true, false])
     }
 
-    @Test func toggleRecordingPauseIntentFallsBackToNotificationWithoutHandler() async throws {
-        RecordingControlCommandCenter.shared.clearTogglePauseHandler()
-        var didPostNotification = false
-        let observer = NotificationCenter.default.addObserver(
-            forName: .toggleRecordingPauseQuickAction,
-            object: nil,
-            queue: nil
-        ) { _ in
-            didPostNotification = true
-        }
-        defer {
-            NotificationCenter.default.removeObserver(observer)
-        }
+    @Test func setRecordingPausedIntentDoesNothingWithoutHandler() async throws {
+        RecordingControlCommandCenter.shared.clearPauseHandler()
 
-        _ = try await ToggleRecordingPauseIntent().perform()
+        _ = try await SetRecordingPausedIntent(paused: true).perform()
 
-        #expect(didPostNotification == true)
+        #expect(RecordingControlCommandCenter.shared.setPaused(true) == false)
     }
 
     private func clearPendingStartRecording() {

@@ -83,9 +83,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .startRecordingQuickAction)) { _ in
             consumePendingStartRecordingQuickActionIfNeeded()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleRecordingPauseQuickAction)) { _ in
-            requestTogglePauseFromQuickAction()
-        }
         .onReceive(NotificationCenter.default.publisher(for: .recordingInterruptedBySystem)) { _ in
             recordingInterruptionID = UUID()
             recordingInterruptionNotice = "An incoming call or another app interrupted recording. What you recorded so far has been saved. Start a new recording to continue."

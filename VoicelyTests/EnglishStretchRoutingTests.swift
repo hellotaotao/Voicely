@@ -994,6 +994,49 @@ struct EnglishRecordingTests {
         #expect(try await eventually { !setup.manager.isModelLoaded() })
     }
 
+    @Test(arguments: [
+        ("auto", true, false), ("english", true, true),
+        ("auto", false, true), ("english", false, true), (nil, false, true),
+    ] as [(String?, Bool, Bool)])
+    func qwenLoadsOnDemandOnTheMacOrWithEnglish(setting: String?, keepsLoaded: Bool, onDemand: Bool) {
+        #expect(TranscriptionService.loadsQwenOnDemand(selectedLanguageKey: setting, keepsQwenLoaded: keepsLoaded) == onDemand)
+    }
+
+    @Test @MainActor func onTheMacQwenLoadsForAutoDetectWorkAndGoesOnceIdle() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let setup = englishSettingService(parakeetWords: [])
+        setup.service.languageSettingKey = { "auto" }
+        setup.service.keepsQwenLoaded = false
+        setup.service.idleQwenReleaseDelay = 0.05
+        let note = queuedNote("Note", url: url)
+
+        await setup.service.followLanguageSetting()
+        #expect(setup.loads() == 0)
+        #expect(setup.service.isReadyToTranscribe())
+        #expect(setup.service.waitReason(for: note) != .waitingForModel)
+
+        await setup.service.processPendingTranscriptions(notes: [note])
+        #expect(note.transcription == "qwen")
+        #expect(setup.loads() == 1)
+        #expect(try await eventually { !setup.manager.isModelLoaded() })
+    }
+
+    @Test @MainActor func onTheMacQwenStaysThroughAnAutoDetectRecording() async throws {
+        let setup = englishSettingService(parakeetWords: [])
+        setup.service.languageSettingKey = { "auto" }
+        setup.service.keepsQwenLoaded = false
+        setup.service.idleQwenReleaseDelay = 0.02
+        let recording = UUID()
+        setup.service.beginLocalRecording(noteID: recording)
+        _ = await setup.service.loadSpeechModel()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(setup.manager.isModelLoaded())
+
+        setup.service.endLocalRecording(noteID: recording)
+        #expect(try await eventually { !setup.manager.isModelLoaded() })
+    }
+
     @Test @MainActor func autoDetectSettingKeepsQwenLoaded() async throws {
         let setup = englishSettingService(parakeetWords: [])
         setup.service.idleQwenReleaseDelay = 0.02

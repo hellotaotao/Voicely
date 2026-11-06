@@ -59,6 +59,15 @@ struct FirstLaunchOnboardingTests {
         #expect(ready.detail == nil)
         #expect(ready.progress == nil)
 
+        let checking = FirstLaunchOnboarding.modelSetupStatus(for: .unloaded, progress: 0, errorMessage: nil)
+        #expect(checking.visualState == .idle)
+
+        // On the Mac the model loads when work needs it.
+        let loadsWhenNeeded = FirstLaunchOnboarding.modelSetupStatus(
+            for: .unloaded, progress: 0, errorMessage: nil, loadsWhenNeeded: true)
+        #expect(loadsWhenNeeded.visualState == .ready)
+        #expect(loadsWhenNeeded.title == "Ready · works offline")
+
         let failed = FirstLaunchOnboarding.modelSetupStatus(
             for: .loading,
             progress: 0.4,

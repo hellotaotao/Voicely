@@ -170,10 +170,10 @@ struct SettingsView: View {
         }
     }
 
-    /// With English as the language Parakeet transcribes, and the model is
-    /// left unloaded until something needs it.
+    /// On the Mac, or with English as the language, the model is left
+    /// unloaded until something needs it.
     private var waitsForWork: Bool {
-        EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguage)) == .english
+        TranscriptionService.loadsQwenOnDemand(selectedLanguageKey: selectedLanguage)
             && modelManager.errorMessage == nil
     }
 

@@ -135,16 +135,38 @@ class TranscriptionService: ObservableObject {
         EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID)) == .english
     }
 
-    /// English is the setting, so Parakeet takes the work and Qwen3-ASR is not
-    /// kept loaded: a decode that needs it loads it.
-    var loadsQwenOnDemand: Bool {
-        EnglishStretchRouting.Mode(
-            languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: languageSettingKey())) == .english
+    /// Whether this kind of device keeps Qwen3-ASR loaded while idle. The Mac
+    /// loads it in 2–3 s, so it loads there when work needs it. iPhone and
+    /// iPad keep it until its load time there is measured on a device.
+    nonisolated static let keepsQwenLoadedOnThisDevice: Bool = {
+        #if targetEnvironment(macCatalyst)
+        false
+        #else
+        true
+        #endif
+    }()
+
+    /// Qwen3-ASR is not kept loaded with this setting on this device: a decode
+    /// that needs it loads it. True on the Mac, and with English as the
+    /// setting, where Parakeet takes the work.
+    nonisolated static func loadsQwenOnDemand(selectedLanguageKey key: String?, keepsQwenLoaded: Bool = keepsQwenLoadedOnThisDevice) -> Bool {
+        !keepsQwenLoaded
+            || EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)) == .english
     }
 
-    /// The language setting changed: any other language than English needs
-    /// Qwen3-ASR loaded, and loading it resumes the work that waited. With
-    /// English, a loaded Qwen3-ASR is let go once idle.
+    /// Whether Qwen3-ASR stays loaded while idle with a setting other than
+    /// English. Tests keep it, as on iPhone, unless they set otherwise.
+    var keepsQwenLoaded = TranscriptionService.keepsQwenLoadedOnThisDevice || AppRuntime.isRunningTests
+
+    /// Qwen3-ASR is not kept loaded: a decode that needs it loads it, and it
+    /// is let go once idle.
+    var loadsQwenOnDemand: Bool {
+        Self.loadsQwenOnDemand(selectedLanguageKey: languageSettingKey(), keepsQwenLoaded: keepsQwenLoaded)
+    }
+
+    /// The language setting changed: a setting that keeps Qwen3-ASR loaded
+    /// loads it now, which resumes the work that waited. Otherwise a loaded
+    /// Qwen3-ASR is let go once idle.
     func followLanguageSetting() async {
         if loadsQwenOnDemand {
             scheduleIdleQwenRelease()
@@ -156,13 +178,13 @@ class TranscriptionService: ObservableObject {
 
     // MARK: Letting go of Qwen3-ASR loaded on demand
 
-    /// With English as the setting, how long Qwen3-ASR stays loaded after the
+    /// When Qwen3-ASR loads on demand, how long it stays loaded after the
     /// last work that needed it. Tests shorten it.
     var idleQwenReleaseDelay: TimeInterval = 60
     private var idleQwenRelease: Task<Void, Never>?
     private var isReleasingIdleQwen = false
 
-    /// With English as the setting nothing keeps Qwen3-ASR loaded: once it has
+    /// When Qwen3-ASR loads on demand nothing keeps it loaded: once it has
     /// sat idle for `idleQwenReleaseDelay`, it is unloaded, as at launch.
     /// Each load and each decode's end starts the wait again.
     func scheduleIdleQwenRelease() {
@@ -294,7 +316,7 @@ class TranscriptionService: ObservableObject {
 
     /// Whether work can start: Qwen3-ASR is loaded, a recording with English
     /// chosen keeps it unloaded and Parakeet takes what it can meanwhile, or
-    /// English is the setting and Qwen3-ASR loads when a decode needs it.
+    /// it loads on demand when a decode needs it.
     func isReadyToTranscribe() -> Bool {
         isEngineAvailable() || isRecordingEnglish || loadsQwenOnDemand
     }
@@ -872,7 +894,7 @@ class TranscriptionService: ObservableObject {
         updateEngineStatus()
         await holdQwenForDecode()
         defer { scheduleIdleQwenRelease() }
-        // With English as the setting Qwen3-ASR loads when a decode needs it;
+        // When Qwen3-ASR loads on demand, a decode that needs it loads it;
         // a load already under way, such as the one a switch to Auto Detect
         // starts, is waited for instead of failing the decode.
         if !isEngineLoaded, !isRecordingEnglish, loadsQwenOnDemand || modelManager?.isLoading == true {

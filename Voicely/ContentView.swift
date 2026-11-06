@@ -212,7 +212,8 @@ struct ContentView: View {
         FirstLaunchOnboarding.modelSetupStatus(
             for: modelManager.modelState,
             progress: modelManager.loadingProgressValue,
-            errorMessage: modelManager.errorMessage
+            errorMessage: modelManager.errorMessage,
+            loadsWhenNeeded: transcriptionService.loadsQwenOnDemand
         )
     }
 
@@ -1383,7 +1384,9 @@ struct RecordingControls: View {
         switch modelManager.modelState {
         case .loaded: return .green
         case .loading, .prewarming: return .orange
-        case .unloaded: return .secondary
+        case .unloaded:
+            // A model that loads when needed is ready all the same.
+            return transcriptionService.loadsQwenOnDemand && modelManager.errorMessage == nil ? .green : .secondary
         }
     }
 

@@ -72,10 +72,13 @@ enum FirstLaunchOnboarding {
         defaults.set(true, forKey: completionKey)
     }
 
+    /// `loadsWhenNeeded`: the model is not loaded ahead of work, as on the
+    /// Mac, so being unloaded is ready too.
     static func modelSetupStatus(
         for modelState: ModelState,
         progress: Float,
-        errorMessage: String?
+        errorMessage: String?,
+        loadsWhenNeeded: Bool = false
     ) -> FirstLaunchModelSetupStatus {
         if let errorMessage, !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return FirstLaunchModelSetupStatus(
@@ -87,7 +90,7 @@ enum FirstLaunchOnboarding {
         }
 
         switch modelState {
-        case .unloaded:
+        case .unloaded where !loadsWhenNeeded:
             return FirstLaunchModelSetupStatus(
                 visualState: .idle,
                 title: "Checking speech model",
@@ -101,7 +104,7 @@ enum FirstLaunchOnboarding {
                 detail: nil,
                 progress: clampedProgress(progress)
             )
-        case .loaded:
+        case .loaded, .unloaded:
             return FirstLaunchModelSetupStatus(
                 visualState: .ready,
                 title: "Ready · works offline",

@@ -328,7 +328,8 @@ final class RecordingSession: ObservableObject {
             transcriptionService.beginEnglishRecording(noteID: note.id)
         } else {
             transcriptionService.endEnglishRecordings()
-            // With English as the setting Qwen3-ASR is not loaded yet.
+            // Qwen3-ASR loaded on demand starts loading now, while the
+            // first slice is still being recorded.
             if transcriptionService.loadsQwenOnDemand && !isModelLoaded && !isModelLoading {
                 Task { _ = await transcriptionService.loadSpeechModel() }
             }

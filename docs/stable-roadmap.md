@@ -14,8 +14,9 @@
 
 ### 版本
 
-当前版本 **0.33.0**（以 `Config/Version.xcconfig` 为准）。到现在都只发过内部 TestFlight，没有公开上架过。
+当前版本 **0.33.1**（以 `Config/Version.xcconfig` 为准）。到现在都只发过内部 TestFlight，没有公开上架过。
 
+- **0.33.1（2026-11-07）**：把笔记拖到文件夹时，鼠标或手指下的那个文件夹整格放大到 1.35 倍、铺满文件夹色、文字变白，原来只把图标放大 1.18 倍、几乎看不出；拖动时跟着走的不再是整条半透明的笔记（会盖住文件夹栏），换成 200pt 宽的缩小版笔记卡片（标题、时长、日期）；被拖起的那条在列表原位变淡并加灰色虚线框，松手或取消就恢复（要 iOS 27 / macOS 26 的拖拽会话接口，更早的 iOS 上没有这个标记）。录音按钮旁的语言选 English 时不再显示成警告橙色，状态方块显示负责转写的模型是否就绪。Mac 上已实拖验证，iPhone 未测。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight（两个包同时上传，iOS 29 分钟、Mac 30 分钟，含各 5 分钟打包，都没有遇到凭证失效）。
 - **0.33.0（2026-11-07）**：Mac 上千问不再开机加载、常驻约 1.1 GB，选 Auto Detect 时也按需加载（Mac 上加载 2–3 秒）：开始录音时边录第一片边加载，导入和队列转写时加载，空闲 10 秒卸载，录音中不卸载；设置页显示 "Loads when needed"。iPhone 和 iPad 仍常驻，等实测加载时间再说（见发布前 iPhone 清单）。锁屏和灵动岛的暂停按钮改成 Toggle，按下当场翻转图标，不再等约 0.4 秒；intent 改成带目标值，连点不会把状态搞反（iPhone 17 Pro 已实测）。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight（两个包同时上传，iOS 27.5 分钟、Mac 27.5 分钟，都没有遇到凭证失效）。
 
 - **0.32.1（2026-11-06）**：设置是 English 时，千问因为某次转写临时加载以后，空闲 60 秒就卸载，不再留到 app 退出（录音中切回 Auto Detect、Parakeet 没听出字退回千问、导入时选 Auto Detect、把设置从 Auto Detect 改成 English，都会让千问加载）；速度卡片和笔记的算力标签写实际干活的模型，全部由 Parakeet 转写的笔记只显示 Parakeet（P-7）；`UIBackgroundModes` 去掉 `processing`，iOS 26 锁屏续转是否仍被系统接受要在真机上确认（见发布前 iPhone 清单）；麦克风权限说明改写；Release 包里 `CloudStorageManager` 不再打日志。没有新增 `@Model` 存储字段，不需要部署 CloudKit Prod schema。iOS 和 Mac 包都已传上 TestFlight（两个包同时上传，iOS 27 分钟、Mac 28.5 分钟，都没有遇到凭证失效）。

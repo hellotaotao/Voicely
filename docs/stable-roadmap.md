@@ -71,7 +71,7 @@
    - 没测：结束前提醒通知上的三个按钮。电脑操作工具截图时会把 Voicely 切到前台，而 app 在前台时本来就不弹这条提醒；按钮走的处理路径有单元测试覆盖，iPhone 锁屏时的提醒和按钮在发布前 iPhone 清单里。
    - 笔记库里留下一条测试录音 "Voice Note 17:08"（2026-11-07），会同步到其他设备，要删由用户删。
 8. ✅ 版本号改成 1.0.0（`00306d6`），从这个提交的干净源码打 iOS 和 Mac 两个包（build 1），2026-11-07 并行传上 TestFlight：打包约 13 分钟，上传 iOS 26 分钟、Mac 26.5 分钟，没有遇到凭证失效。还没打 `v1.0.0` tag：验收要是改了代码，提交审核的会是 1.0.0 的下一个 build，等定下提交哪个包再打。
-   - build 2（2026-11-07）：build 1 的日志里没有千问的加载时间，也没有内存，第 10、12 条在真机上量不出数字。build 2 加了 `Memory` 日志类别（`MemoryFootprint.swift`），千问加载完、卸载后、每转完一片（CoreML），都记下用时和内存（`footprintMB` 是当前占用，`peakMB` 是这次启动以来的最高值，iOS 按这个数判断是否杀掉 app）；Parakeet 原有的 `loaded` 和 `stretch` 两行也带上这两个数。验收时按步骤正常用，最后 `sudo log collect --device` 抓一次日志，数字从里面读。
+   - build 2（2026-11-07）：build 1 的日志里没有千问的加载时间，也没有内存，第 10、12 条在真机上量不出数字。build 2 加了 `Memory` 日志类别（`MemoryFootprint.swift`），千问加载完、卸载后、每转完一片（CoreML），都记下用时和内存（`footprintMB` 是当前占用，`peakMB` 是这次启动以来的最高值，iOS 按这个数判断是否杀掉 app）；Parakeet 原有的 `loaded` 和 `stretch` 两行也带上这两个数。验收时按步骤正常用，最后 `sudo log collect --device` 抓一次日志，数字从里面读。从 `b66ffbe` 的干净源码打包，iOS 和 Mac 当天 19:28 都传上 TestFlight（打包 4.5 分钟，上传各约 26 分钟）。真机验收用这个包。
 
 **第三步：在候选包上做 iPhone 真机验收**（逐条见"发布前 iPhone 清单"）
 

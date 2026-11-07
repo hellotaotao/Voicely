@@ -2,8 +2,9 @@
 //  NoteFolderBar.swift
 //  Voicely
 //
-//  The row above the note list: All, Unfiled and the four folder slots.
-//  Tapping one filters the list; dropping a dragged note on one files it.
+//  The row above the note list: All, No Folder, the folders and one "+".
+//  Tapping one filters the list, tapping the selected folder edits it, and
+//  dropping a dragged note on one files it.
 //
 
 import SwiftUI
@@ -19,9 +20,11 @@ struct NoteFolderBar: View {
     @State private var targetedItem: NoteFolderFilter?
     @State private var dropCount = 0
 
-    private var items: [NoteFolderFilter] {
-        [.all, .unfiled] + NoteFolderSlots.all.map { .folder($0) }
-    }
+    /// All, No Folder and four folders. Fewer items still take one column each,
+    /// so items keep their place as folders are added.
+    private static let columnCount = 2 + NoteFolderSlots.all.count
+
+    private var items: [NoteFolderFilter] { folders.barItems }
 
     var body: some View {
         HStack(alignment: .top, spacing: 2) {
@@ -30,7 +33,12 @@ struct NoteFolderBar: View {
                     .frame(maxWidth: .infinity)
                     .zIndex(targetedItem == item ? 1 : 0)
             }
+            ForEach(items.count..<Self.columnCount, id: \.self) { _ in
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: 1)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: items)
         .sensoryFeedback(.selection, trigger: targetedItem) { _, newValue in newValue != nil }
         .padding(.horizontal, 6)
         .padding(.top, 6)
@@ -46,7 +54,9 @@ struct NoteFolderBar: View {
         let isSelected = filter == item
         let isTargeted = targetedItem == item
         let button = Button {
-            if case .folder(let slot) = item, folders.folder(forSlot: slot) == nil {
+            // An empty slot opens the editor to create a folder; a folder that is
+            // already selected opens it to rename, recolor or remove.
+            if case .folder(let slot) = item, folders.folder(forSlot: slot) == nil || isSelected {
                 onEditSlot(slot)
             } else {
                 filter = item
@@ -160,7 +170,7 @@ struct NoteFolderBar: View {
     private func label(for item: NoteFolderFilter) -> String {
         switch item {
         case .all: return "All"
-        case .unfiled: return "Unfiled"
+        case .unfiled: return NoteFolderCopy.noFolder
         case .folder(let slot): return folders.folder(forSlot: slot)?.name ?? "New"
         }
     }
@@ -173,7 +183,7 @@ struct NoteFolderBar: View {
     private func accessibilityLabel(for item: NoteFolderFilter) -> String {
         switch item {
         case .all: return "All recordings"
-        case .unfiled: return "Unfiled recordings"
+        case .unfiled: return "Recordings not in a folder"
         case .folder(let slot):
             if let folder = folders.folder(forSlot: slot) { return "Folder \(folder.name)" }
             return "New folder"

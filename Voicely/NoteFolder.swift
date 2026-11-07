@@ -76,6 +76,37 @@ struct NoteFolderSet {
     func color(forSlot slot: Int) -> Color? {
         bySlot[slot].map { NoteFolderPalette.color(at: $0.colorIndex) }
     }
+
+    /// The lowest slot without a folder, where the next new folder goes.
+    var firstEmptySlot: Int? {
+        NoteFolderSlots.all.first { bySlot[$0] == nil }
+    }
+
+    /// What the folder bar shows. "No Folder" appears only once a folder exists,
+    /// because before that it lists exactly what All lists. After the folders
+    /// comes a single "+" for the next empty slot, until all four are taken.
+    var barItems: [NoteFolderFilter] {
+        var items: [NoteFolderFilter] = [.all]
+        if !bySlot.isEmpty { items.append(.unfiled) }
+        items += folders.map { .folder($0.slot) }
+        if let slot = firstEmptySlot { items.append(.folder(slot)) }
+        return items
+    }
+}
+
+/// User-facing wording shared by the folder bar, the editor and menus.
+enum NoteFolderCopy {
+    static let noFolder = "No Folder"
+
+    static func removalTitle(folderName: String) -> String {
+        "Remove “\(folderName)”?"
+    }
+
+    static func removalMessage(noteCount: Int) -> String {
+        noteCount == 1
+            ? "Its recording stays, just outside any folder."
+            : "Its \(noteCount) recordings stay, just outside any folder."
+    }
 }
 
 /// Which part of the library the list shows.

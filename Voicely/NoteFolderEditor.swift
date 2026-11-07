@@ -9,17 +9,29 @@ import SwiftUI
 struct NoteFolderEditor: View {
     let slot: Int
     let isExisting: Bool
+    private let savedName: String
+    /// Recordings in the folder; removing a non-empty folder asks first.
+    let noteCount: Int
     let onSave: (String, Int) -> Void
     let onRemove: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var colorIndex: Int
+    @State private var confirmingRemoval = false
     @FocusState private var nameFocused: Bool
 
-    init(slot: Int, folder: NoteFolder?, onSave: @escaping (String, Int) -> Void, onRemove: @escaping () -> Void) {
+    init(
+        slot: Int,
+        folder: NoteFolder?,
+        noteCount: Int,
+        onSave: @escaping (String, Int) -> Void,
+        onRemove: @escaping () -> Void
+    ) {
         self.slot = slot
         self.isExisting = folder != nil
+        self.savedName = folder?.name ?? ""
+        self.noteCount = noteCount
         self.onSave = onSave
         self.onRemove = onRemove
         _name = State(initialValue: folder?.name ?? "")
@@ -39,7 +51,9 @@ struct NoteFolderEditor: View {
                         .submitLabel(.done)
                         .onSubmit(save)
                 } footer: {
-                    Text("Short names fit the folder bar best.")
+                    Text(isExisting
+                        ? "Short names fit the folder bar best."
+                        : "You can have up to \(NoteFolderSlots.all.count) folders. Short names fit the folder bar best.")
                 }
 
                 Section("Color") {
@@ -70,11 +84,23 @@ struct NoteFolderEditor: View {
                 if isExisting {
                     Section {
                         Button("Remove Folder", role: .destructive) {
-                            onRemove()
-                            dismiss()
+                            if noteCount == 0 {
+                                remove()
+                            } else {
+                                confirmingRemoval = true
+                            }
+                        }
+                        .confirmationDialog(
+                            NoteFolderCopy.removalTitle(folderName: savedName),
+                            isPresented: $confirmingRemoval,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Remove Folder", role: .destructive, action: remove)
+                        } message: {
+                            Text(NoteFolderCopy.removalMessage(noteCount: noteCount))
                         }
                     } footer: {
-                        Text("Recordings in this folder move to Unfiled.")
+                        Text("Recordings in this folder stay, just outside any folder.")
                     }
                 }
             }
@@ -92,6 +118,11 @@ struct NoteFolderEditor: View {
             .onAppear { nameFocused = !isExisting }
         }
         .presentationDetents([.medium])
+    }
+
+    private func remove() {
+        onRemove()
+        dismiss()
     }
 
     private func save() {

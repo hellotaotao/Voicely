@@ -60,6 +60,30 @@ struct NoteFolderTests {
         #expect(set.color(forSlot: 2) == nil)
     }
 
+    @Test func barShowsOnePlusAndNoFolderOnlyOnceAFolderExists() {
+        func folder(_ slot: Int) -> NoteFolder { NoteFolder(slot: slot, name: "F\(slot)", colorIndex: 0) }
+
+        let empty = NoteFolderSet([])
+        #expect(empty.barItems == [.all, .folder(1)])
+
+        let one = NoteFolderSet([folder(1)])
+        #expect(one.barItems == [.all, .unfiled, .folder(1), .folder(2)])
+
+        // After a removal leaves a gap, the "+" fills the gap but stays last.
+        let gap = NoteFolderSet([folder(1), folder(3)])
+        #expect(gap.firstEmptySlot == 2)
+        #expect(gap.barItems == [.all, .unfiled, .folder(1), .folder(3), .folder(2)])
+
+        let full = NoteFolderSet([folder(4), folder(2), folder(1), folder(3)])
+        #expect(full.firstEmptySlot == nil)
+        #expect(full.barItems == [.all, .unfiled, .folder(1), .folder(2), .folder(3), .folder(4)])
+    }
+
+    @Test func removalMessageCountsRecordings() {
+        #expect(NoteFolderCopy.removalMessage(noteCount: 1) == "Its recording stays, just outside any folder.")
+        #expect(NoteFolderCopy.removalMessage(noteCount: 12) == "Its 12 recordings stay, just outside any folder.")
+    }
+
     @Test func dragPayloadRoundTripsOnlyNoteIDs() {
         let id = UUID()
         #expect(NoteDragPayload.noteID(from: NoteDragPayload.string(for: id)) == id)

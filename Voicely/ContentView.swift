@@ -46,6 +46,7 @@ struct ContentView: View {
     @State private var searchText = ""
     @AppStorage(Qwen3ASRDefaults.selectedLanguageKey) private var languageSetting = "auto"
     @State private var editingFolderSlot: FolderEditRequest?
+    @State private var pendingFolderRemoval: FolderEditRequest?
 
     init() {
         let audioService = AudioRecordingService()
@@ -198,16 +199,36 @@ struct ContentView: View {
             if case .folder(let slot) = folderFilter, folders.folder(forSlot: slot) == nil {
                 folderFilter = .all
             }
+            // "No Folder" leaves the bar with the last folder.
+            if folderFilter == .unfiled, folders.folders.isEmpty {
+                folderFilter = .all
+            }
         }
         .sheet(item: $editingFolderSlot) { request in
             NoteFolderEditor(
                 slot: request.slot,
                 folder: folders.folder(forSlot: request.slot),
+                noteCount: noteCount(inSlot: request.slot),
                 onSave: { name, colorIndex in
                     saveFolder(slot: request.slot, name: name, colorIndex: colorIndex)
                 },
                 onRemove: { removeFolder(slot: request.slot) }
             )
+        }
+        .confirmationDialog(
+            NoteFolderCopy.removalTitle(folderName: pendingFolderRemoval.flatMap { folders.folder(forSlot: $0.slot)?.name } ?? ""),
+            isPresented: Binding(
+                get: { pendingFolderRemoval != nil },
+                set: { if !$0 { pendingFolderRemoval = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingFolderRemoval
+        ) { request in
+            Button("Remove Folder", role: .destructive) {
+                removeFolder(slot: request.slot)
+            }
+        } message: { request in
+            Text(NoteFolderCopy.removalMessage(noteCount: noteCount(inSlot: request.slot)))
         }
     }
 
@@ -456,8 +477,21 @@ struct ContentView: View {
             filter: $folderFilter,
             onDropNote: { noteID, slot in moveNote(noteID, toSlot: slot) },
             onEditSlot: { editingFolderSlot = FolderEditRequest(slot: $0) },
-            onRemoveSlot: removeFolder(slot:)
+            onRemoveSlot: requestFolderRemoval(slot:)
         )
+    }
+
+    private func noteCount(inSlot slot: Int) -> Int {
+        voiceNotes.reduce(0) { $0 + ($1.folderSlot == slot ? 1 : 0) }
+    }
+
+    /// An empty folder goes at once; one holding recordings asks first.
+    private func requestFolderRemoval(slot: Int) {
+        if noteCount(inSlot: slot) == 0 {
+            removeFolder(slot: slot)
+        } else {
+            pendingFolderRemoval = FolderEditRequest(slot: slot)
+        }
     }
 
     /// The note this device is transcribing outside a live recording.
@@ -1040,7 +1074,7 @@ struct ContentView: View {
                 Button {
                     _ = moveNote(note.id, toSlot: NoteFolderSlots.unfiled)
                 } label: {
-                    Label("Unfiled", systemImage: NoteFolderSlots.isFolder(note.folderSlot) ? "tray" : "checkmark")
+                    Label(NoteFolderCopy.noFolder, systemImage: NoteFolderSlots.isFolder(note.folderSlot) ? "tray" : "checkmark")
                 }
             } label: {
                 Label("Move to", systemImage: "folder")

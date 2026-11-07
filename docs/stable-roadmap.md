@@ -72,6 +72,7 @@
    - 笔记库里留下一条测试录音 "Voice Note 17:08"（2026-11-07），会同步到其他设备，要删由用户删。
 8. ✅ 版本号改成 1.0.0（`00306d6`），从这个提交的干净源码打 iOS 和 Mac 两个包（build 1），2026-11-07 并行传上 TestFlight：打包约 13 分钟，上传 iOS 26 分钟、Mac 26.5 分钟，没有遇到凭证失效。还没打 `v1.0.0` tag：验收要是改了代码，提交审核的会是 1.0.0 的下一个 build，等定下提交哪个包再打。
    - build 2（2026-11-07）：build 1 的日志里没有千问的加载时间，也没有内存，第 10、12 条在真机上量不出数字。build 2 加了 `Memory` 日志类别（`MemoryFootprint.swift`），千问加载完、卸载后、每转完一片（CoreML），都记下用时和内存（`footprintMB` 是当前占用，`peakMB` 是这次启动以来的最高值，iOS 按这个数判断是否杀掉 app）；Parakeet 原有的 `loaded` 和 `stretch` 两行也带上这两个数。验收时按步骤正常用，最后 `sudo log collect --device` 抓一次日志，数字从里面读。从 `b66ffbe` 的干净源码打包，iOS 和 Mac 当天 19:28 都传上 TestFlight（打包 4.5 分钟，上传各约 26 分钟）。真机验收用这个包。
+   - build 3（2026-11-08）：多了两处只影响显示的改动。文件夹栏：没有文件夹时只显示 All 和一个"+"，有了第一个文件夹才出现 No Folder（原来叫 Unfiled）；"+"始终只有一个，新建页写明最多 4 个；点已选中的文件夹打开编辑；删除有录音的文件夹先确认。设置页：选 English 时 Active Model 和 Speech Engine 显示 Parakeet，模型名不再折行。没有新增 `@Model` 字段，不用 deploy CloudKit Prod schema。从 `1baa59d` 的干净源码打包（各约 4.7 分钟）；第一次上传因 Xcode 账号凭证失效失败，重新登录后 09:41 重传，iOS 10:00、Mac 10:11 传完。真机验收改用这个包，build 2 加的内存日志它也有。
 
 **第三步：在候选包上做 iPhone 真机验收**（逐条见"发布前 iPhone 清单"）
 
@@ -91,7 +92,7 @@
 
 这一步改了代码就打新包，只重测受影响的那几项。
 
-已在 dev、还没进包（2026-11-08，只影响显示，下一个 build 一起带上）：设置页的 Active Model 卡片和 Speech Engine 一行跟着语言走，选 English 时显示 Parakeet TDT 0.6B v2 / Parakeet (CoreML)，以前不管选什么都显示千问；模型名在 iPhone 上不再折成两行。模拟器上两种语言都看过。
+已进 build 3（2026-11-08，只影响显示）：设置页的 Active Model 卡片和 Speech Engine 一行跟着语言走，选 English 时显示 Parakeet TDT 0.6B v2 / Parakeet (CoreML)，以前不管选什么都显示千问；模型名在 iPhone 上不再折成两行。模拟器上两种语言都看过。文件夹栏的改动也在 build 3 里，单元测试通过、四种状态的渲染看过，点选中文件夹打开编辑和删除确认框还没在运行的 app 里点过，真机验收时顺带看。
 
 **第四步：提交**
 

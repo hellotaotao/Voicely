@@ -93,16 +93,23 @@ struct SettingsView: View {
                             .tracking(0.9)
                             .foregroundStyle(.secondary)
                             .textCase(.uppercase)
-                        Text(ModelManager.displayName(for: modelManager.selectedModel))
+                        Text(activeModelName)
                             .font(.title3.weight(.semibold))
                             .lineLimit(2)
                             .minimumScaleFactor(0.8)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 6) {
-                            modelStateBadge
+                            if usesEnglishEngine {
+                                PillBadge(text: "Loads when needed", systemImage: "circle", variant: .neutral)
+                            } else {
+                                modelStateBadge
+                            }
                             PillBadge(text: "On-device", systemImage: "iphone", variant: .accent)
                         }
                     }
+                    // Without the priority the row splits its width with the
+                    // spacer and a short model name wraps onto two lines.
+                    .layoutPriority(1)
                     Spacer(minLength: 0)
                     ZStack {
                         Circle()
@@ -114,7 +121,7 @@ struct SettingsView: View {
                     }
                 }
 
-                if let errorMessage = modelManager.errorMessage {
+                if !usesEnglishEngine, let errorMessage = modelManager.errorMessage {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
@@ -128,7 +135,7 @@ struct SettingsView: View {
                     .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: VoicelyTheme.cornerSmall, style: .continuous))
                 }
 
-                if modelManager.loadingProgressValue > 0 && modelManager.loadingProgressValue < 1.0 {
+                if !usesEnglishEngine && modelManager.loadingProgressValue > 0 && modelManager.loadingProgressValue < 1.0 {
                     VStack(alignment: .leading, spacing: 6) {
                         ProgressView(value: modelManager.loadingProgressValue, total: 1.0)
                             .tint(VoicelyTheme.accent)
@@ -148,6 +155,23 @@ struct SettingsView: View {
             }
         }
         .accessibilityIdentifier(AccessibilityIdentifiers.Settings.activeModelCard)
+    }
+
+    /// With English chosen every recording is transcribed by Parakeet, so the
+    /// card names it instead of Qwen3-ASR, which then only waits unloaded.
+    private var usesEnglishEngine: Bool {
+        EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguage)) == .english
+    }
+
+    private var activeModelName: String {
+        usesEnglishEngine
+            ? SpeechModelKind.parakeet.displayName
+            : ModelManager.displayName(for: modelManager.selectedModel)
+    }
+
+    private var speechEngineLabel: String {
+        if usesEnglishEngine { return "Parakeet (CoreML)" }
+        return modelManager.backend == .mlx ? "Qwen3-ASR (MLX)" : "Qwen3-ASR (CoreML)"
     }
 
     private var modelStateBadge: some View {
@@ -269,7 +293,7 @@ struct SettingsView: View {
             Divider().background(VoicelyTheme.hairline)
             infoRow(label: "Device", value: DeviceIdentity.hardwareModel)
             Divider().background(VoicelyTheme.hairline)
-            infoRow(label: "Speech Engine", value: modelManager.backend == .mlx ? "Qwen3-ASR (MLX)" : "Qwen3-ASR (CoreML)")
+            infoRow(label: "Speech Engine", value: speechEngineLabel)
             Divider().background(VoicelyTheme.hairline)
             NavigationLink {
                 AcknowledgementsView()

@@ -91,6 +91,8 @@
 
 这一步改了代码就打新包，只重测受影响的那几项。
 
+已在 dev、还没进包（2026-11-08，只影响显示，下一个 build 一起带上）：设置页的 Active Model 卡片和 Speech Engine 一行跟着语言走，选 English 时显示 Parakeet TDT 0.6B v2 / Parakeet (CoreML)，以前不管选什么都显示千问；模型名在 iPhone 上不再折成两行。模拟器上两种语言都看过。
+
 **第四步：提交**
 
 17. CloudKit Prod schema：部署前确认只在 Debug 跑过的 `alternateTranscriptData` 不会从 Development 带进 Prod。

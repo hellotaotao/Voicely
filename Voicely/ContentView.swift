@@ -1305,6 +1305,8 @@ struct VoiceNoteRow: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
+        // A lifted row fades in place, like a gap the dragged card came out of.
+        .opacity(isBeingDragged ? 0.4 : 1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -1314,9 +1316,10 @@ struct VoiceNoteRow: View {
         )
         .overlay {
             // Marks the row a drag lifted, so it stays clear which note is moving.
+            // Neutral grey keeps it apart from the accent used for selection.
             if isBeingDragged {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(VoicelyTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
             }
         }
         .shadow(color: Color.black.opacity(isSelected ? 0.07 : 0.035), radius: isSelected ? 8 : 4, x: 0, y: 2)
@@ -1331,9 +1334,7 @@ struct VoiceNoteRow: View {
 
     private var rowBackground: some View {
         Group {
-            if isBeingDragged {
-                VoicelyTheme.accent.opacity(0.2)
-            } else if isSelected {
+            if isSelected {
                 VoicelyTheme.accent.opacity(0.12)
             } else {
                 VoicelyTheme.surface.opacity(0.72)

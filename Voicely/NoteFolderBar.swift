@@ -181,25 +181,47 @@ struct NoteFolderBar: View {
     }
 }
 
-/// The small chip that follows the pointer while a note is dragged. The default
-/// preview is the whole translucent row, which covers the folder bar and hides
-/// the highlight on the folder under it.
+/// A shrunken copy of the note's row that follows the pointer while a note is
+/// dragged. The default preview is the whole translucent row, which covers the
+/// folder bar and hides the highlight on the folder under it; a bare chip is
+/// too small to read as the note that was picked up.
 struct NoteDragPreview: View {
     let title: String
+    let timestamp: Date
+    let duration: TimeInterval?
 
     var body: some View {
-        Label {
+        VStack(alignment: .leading, spacing: 3) {
             Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
-        } icon: {
-            Image(systemName: "waveform")
+            HStack(spacing: 6) {
+                if let duration {
+                    Label(
+                        Duration.seconds(duration.rounded()).formatted(.time(pattern: .minuteSecond)),
+                        systemImage: "waveform"
+                    )
+                    .labelStyle(.titleAndIcon)
+                    .monospacedDigit()
+                }
+                Text(timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.white)
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(maxWidth: 160)
-        .background(Capsule().fill(VoicelyTheme.accent))
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 8)
+        .frame(width: 180, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(VoicelyTheme.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(VoicelyTheme.accent.opacity(0.45), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.18), radius: 8, y: 3)
     }
 }

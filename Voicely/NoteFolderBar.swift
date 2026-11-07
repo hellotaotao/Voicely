@@ -213,7 +213,7 @@ struct NoteDragPreview: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .frame(width: 180, alignment: .leading)
+        .frame(width: 200, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(VoicelyTheme.surface)
@@ -223,5 +223,28 @@ struct NoteDragPreview: View {
                 .stroke(VoicelyTheme.accent.opacity(0.45), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.18), radius: 8, y: 3)
+    }
+}
+
+/// Records which note a drag lifted, from the moment the drag starts until it
+/// ends or is cancelled. Drag-session updates need iOS 27 / macOS 26; earlier
+/// systems drag the same way, just without the in-list mark.
+struct NoteDragSourceTracking: ViewModifier {
+    let noteID: UUID
+    @Binding var draggingNoteID: UUID?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, *) {
+            content.onDragSessionUpdated { session in
+                switch session.phase {
+                case .initial, .active:
+                    if draggingNoteID != noteID { draggingNoteID = noteID }
+                default:
+                    if draggingNoteID == noteID { draggingNoteID = nil }
+                }
+            }
+        } else {
+            content
+        }
     }
 }

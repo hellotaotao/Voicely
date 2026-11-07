@@ -25,6 +25,8 @@ struct ContentView: View {
     @ObservedObject private var cloudManager = CloudStorageManager.shared
     @EnvironmentObject private var syncMonitor: CloudKitSyncMonitor
     @State private var selectedNoteID: UUID?
+    /// The note being dragged toward a folder, marked in place in the list.
+    @State private var draggingNoteID: UUID?
     @State private var showingSettings = false
     @State private var didSetupServices = false
     @State private var startRecordingQuickActionID = UUID()
@@ -589,6 +591,7 @@ struct ContentView: View {
                         .draggable(NoteDragPayload.string(for: note.id)) {
                             NoteDragPreview(title: note.title, timestamp: note.timestamp, duration: note.knownDuration)
                         }
+                        .modifier(NoteDragSourceTracking(noteID: note.id, draggingNoteID: $draggingNoteID))
                         .contextMenu {
                             moveToFolderMenu(for: note)
 
@@ -647,6 +650,7 @@ struct ContentView: View {
             localProgress: transcriptionService.localProgress(for: note),
             isRecordingPaused: isRecordingPaused(note),
             isSelected: selectedNoteID == note.id,
+            isBeingDragged: draggingNoteID == note.id,
             // Inside a folder every row would show the same dot.
             folderColor: folderFilter == .all ? folders.color(forSlot: note.folderSlot) : nil,
             searchQuery: NoteSearch.query(searchText)
@@ -1134,6 +1138,7 @@ struct VoiceNoteRow: View {
     let localProgress: Float
     let isRecordingPaused: Bool
     var isSelected = false
+    var isBeingDragged = false
     var folderColor: Color? = nil
     /// Trimmed; empty when the library is not being searched.
     var searchQuery = ""
@@ -1307,9 +1312,17 @@ struct VoiceNoteRow: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(rowBorderColor, lineWidth: 1)
         )
+        .overlay {
+            // Marks the row a drag lifted, so it stays clear which note is moving.
+            if isBeingDragged {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(VoicelyTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            }
+        }
         .shadow(color: Color.black.opacity(isSelected ? 0.07 : 0.035), radius: isSelected ? 8 : 4, x: 0, y: 2)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .animation(.easeOut(duration: 0.12), value: isSelected)
+        .animation(.easeOut(duration: 0.15), value: isBeingDragged)
     }
 
     private var rowBorderColor: Color {
@@ -1318,7 +1331,9 @@ struct VoiceNoteRow: View {
 
     private var rowBackground: some View {
         Group {
-            if isSelected {
+            if isBeingDragged {
+                VoicelyTheme.accent.opacity(0.2)
+            } else if isSelected {
                 VoicelyTheme.accent.opacity(0.12)
             } else {
                 VoicelyTheme.surface.opacity(0.72)

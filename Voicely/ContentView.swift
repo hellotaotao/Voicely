@@ -586,7 +586,9 @@ struct ContentView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .id(note.id)
-                        .draggable(NoteDragPayload.string(for: note.id))
+                        .draggable(NoteDragPayload.string(for: note.id)) {
+                            NoteDragPreview(title: note.title)
+                        }
                         .contextMenu {
                             moveToFolderMenu(for: note)
 

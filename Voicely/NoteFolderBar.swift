@@ -28,8 +28,10 @@ struct NoteFolderBar: View {
             ForEach(items, id: \.self) { item in
                 itemView(item)
                     .frame(maxWidth: .infinity)
+                    .zIndex(targetedItem == item ? 1 : 0)
             }
         }
+        .sensoryFeedback(.selection, trigger: targetedItem) { _, newValue in newValue != nil }
         .padding(.horizontal, 6)
         .padding(.top, 6)
         .padding(.bottom, 6)
@@ -50,12 +52,14 @@ struct NoteFolderBar: View {
                 filter = item
             }
         } label: {
+            // While a dragged note hovers here, the whole item grows, fills with the
+            // folder colour and gets an outline, so it still reads as "targeted" when
+            // the drag preview and the finger cover most of the icon.
             VStack(spacing: 3) {
-                icon(for: item, isSelected: isSelected)
-                    .scaleEffect(isTargeted ? 1.18 : 1)
+                icon(for: item, isSelected: isSelected || isTargeted)
                 Text(label(for: item))
-                    .font(.caption2.weight(isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .font(.caption2.weight(isSelected || isTargeted ? .semibold : .regular))
+                    .foregroundStyle(isTargeted ? Color.white : (isSelected ? Color.primary : Color.secondary))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
@@ -64,8 +68,14 @@ struct NoteFolderBar: View {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isTargeted ? tint(for: item).opacity(0.18) : Color.clear)
+                    .fill(isTargeted ? tint(for: item).opacity(0.85) : Color.clear)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(isTargeted ? tint(for: item) : Color.clear, lineWidth: 2)
+            )
+            .shadow(color: isTargeted ? tint(for: item).opacity(0.45) : .clear, radius: 8, y: 2)
+            .scaleEffect(isTargeted ? 1.35 : 1)
             .contentShape(Rectangle())
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isTargeted)
         }
@@ -168,5 +178,28 @@ struct NoteFolderBar: View {
             if let folder = folders.folder(forSlot: slot) { return "Folder \(folder.name)" }
             return "New folder"
         }
+    }
+}
+
+/// The small chip that follows the pointer while a note is dragged. The default
+/// preview is the whole translucent row, which covers the folder bar and hides
+/// the highlight on the folder under it.
+struct NoteDragPreview: View {
+    let title: String
+
+    var body: some View {
+        Label {
+            Text(title)
+                .lineLimit(1)
+        } icon: {
+            Image(systemName: "waveform")
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: 160)
+        .background(Capsule().fill(VoicelyTheme.accent))
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

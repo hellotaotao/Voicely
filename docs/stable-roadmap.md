@@ -97,6 +97,7 @@
 18. 装一份干净的包，开飞行模式、关 iCloud，录一条能转出来。
 19. App Store Connect：DSA 交易者声明（不声明就不能在欧盟上架；声明是交易者，地址、电话、邮箱会公开显示在商店页上）、App Privacy、年龄分级、出口合规、Mac 只限 Apple 芯片、价格和销售范围、审核说明、截图和文案、版权人。
 20. 用户批准后点 Submit for Review。
+21. 审核通过、商店页能打开以后，把 App Store 链接填进网站：`hellotaotao/Voicely-web` 的 `src/productMessaging.ts` 里的 `appStoreUrl`（现在是 `null`），推到 main 由 Vercel 自动部署。填之前网站上所有下载按钮都显示 "Coming soon to the App Store"。
 
 ### 上架后的顺序
 
@@ -163,7 +164,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 **首次公开提交前**（先后顺序见本节开头"上架 1.0 的顺序"）
 
-- 原第 8 项"上架文档"剩下的部分：支持页和隐私政策页上线；截图（iPhone、iPad 13 寸、Mac 三套，iPhone/iPad 的在真机验收时一起拍）；版权人确认。版本号已定为 **1.0.0**（2026-11-05），打提交审核的包时改 `Config/Version.xcconfig`。
+- 原第 8 项"上架文档"剩下的部分：截图（iPhone、iPad 13 寸、Mac 三套，iPhone/iPad 的在真机验收时一起拍）；版权人确认。版本号已定为 **1.0.0**（2026-11-05），打提交审核的包时改 `Config/Version.xcconfig`。
 - 上架范围包括 iPad（`TARGETED_DEVICE_FAMILY = 1,2`），至少在 iPad 模拟器上看一遍布局。
 - 下面的发布前 iPhone 清单全部过一遍。
 

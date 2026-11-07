@@ -63,7 +63,7 @@
 
 **第二步：冻结代码**
 
-5. 设置里加 Acknowledgements 页。Parakeet TDT v2 是 CC-BY-4.0，要求注明出处；千问（原版、MLX 8-bit、CoreML 三个版本）和 speech-swift 是 Apache 2.0，要附许可文本；mlx-swift、swift-transformers 一并列出。许可是 2026-11-07 在 Hugging Face 上查的，app 里目前没有任何致谢页。
+5. ✅ 设置里加 Acknowledgements 页（2026-11-07，`AcknowledgementsView.swift`）：设置页 About 最后一行进去，列出千问（注明 MLX 8-bit 和 CoreML 两个转换版本）、Parakeet（CC BY 4.0，注明 NVIDIA 原作和 FluidInference 的 CoreML 转换）、Silero VAD（MIT）、speech-swift、FluidAudio、MLX Swift、swift-transformers、Jinja、Swift Collections、Swift Numerics，点进每一项看作者、链接和许可全文（Apache 2.0 全文随包，`Voicely/Licenses/Apache-2.0.txt`）。许可在 Hugging Face 和 GitHub 上逐个核对过。单元测试通过；没在 app 里亲眼看过，因为 TestFlight 版正开着，Debug 版和它同一个 bundle id。
 6. 在 iPad 模拟器上看一遍布局。这一步可能要改界面，所以放在冻结前。
 7. Mac 上的小验证：搜索跳转后的位置会不会被吸顶播放器挡住（2d）；定时停止的 "+5 min" 用真鼠标连点复测，通知上的三个按钮手动点一次（③）。
 8. 版本号改成 1.0.0，打候选包，传 TestFlight。

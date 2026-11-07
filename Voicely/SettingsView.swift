@@ -270,6 +270,22 @@ struct SettingsView: View {
             infoRow(label: "Device", value: DeviceIdentity.hardwareModel)
             Divider().background(VoicelyTheme.hairline)
             infoRow(label: "Speech Engine", value: modelManager.backend == .mlx ? "Qwen3-ASR (MLX)" : "Qwen3-ASR (CoreML)")
+            Divider().background(VoicelyTheme.hairline)
+            NavigationLink {
+                AcknowledgementsView()
+            } label: {
+                HStack {
+                    Text("Acknowledgements")
+                        .font(.subheadline)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.acknowledgementsLink)
         }
     }
 

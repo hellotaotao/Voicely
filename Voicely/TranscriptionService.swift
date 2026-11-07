@@ -1850,7 +1850,7 @@ extension TranscriptionService {
                 counter.withLock { $0 &+= 1 }
             }
             let endReason = pass.reachedTokenLimit ? "tokenLimit" : "endOfTurn"
-            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passEnded seconds=\(ProcessInfo.processInfo.systemUptime - passStart) audioSeconds=\(Double(end - offset) / 16_000) tokens=\(pass.tokenCount) endReason=\(endReason, privacy: .public)")
+            Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=passEnded seconds=\(ProcessInfo.processInfo.systemUptime - passStart) audioSeconds=\(Double(end - offset) / 16_000) tokens=\(pass.tokenCount) endReason=\(endReason, privacy: .public) \(MemoryFootprint.summary, privacy: .public)")
             if pass.reachedTokenLimit {
                 debugLog("⚠️ [TranscriptionService] A \(Double(end - offset) / 16_000) s pass hit the \(Qwen3ASRDefaults.maxTokens)-token cap; its text is cut short")
             }

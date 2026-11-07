@@ -252,6 +252,12 @@ actor Qwen3ASRModelStore {
                 language: result.language)
         }
         guard let coreMLModel else { throw StoreError.modelMissing(modelDirectory) }
+        let started = ProcessInfo.processInfo.systemUptime
+        defer {
+            MemoryFootprint.record(
+                "qwenSlice audioSeconds=\(samples.count / 16_000)",
+                seconds: ProcessInfo.processInfo.systemUptime - started)
+        }
         // Each slice creates an MLState and several IOSurface-backed arrays;
         // without a pool they pile up until CoreML cannot allocate another one,
         // about 200 slices into a recording.
@@ -278,8 +284,10 @@ actor Qwen3ASRModelStore {
             mlxModel.unload()
             Memory.clearCache()
         }
+        let wasLoaded = isModelLoaded
         mlxModel = nil
         coreMLModel = nil
+        if wasLoaded { MemoryFootprint.record("qwenUnloaded") }
     }
 
     private func load(progressHandler: ProgressHandler?) async throws {
@@ -295,12 +303,14 @@ actor Qwen3ASRModelStore {
         }
 
         let task = Task {
+            let started = ProcessInfo.processInfo.systemUptime
             switch backend {
             case .mlx:
                 self.mlxModel = try await Self.loadMLX(directory: directory, progressHandler: progressHandler)
             case .coreML:
                 self.coreMLModel = try Self.loadCoreML(directory: directory, progressHandler: progressHandler)
             }
+            MemoryFootprint.record("qwenLoaded", seconds: ProcessInfo.processInfo.systemUptime - started)
             progressHandler?(1.0, "Ready")
         }
         loadTask = task

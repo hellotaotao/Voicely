@@ -137,7 +137,7 @@ actor ParakeetEnglishEngine {
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let result = try await manager.transcribe(stretchURL, decoderState: &state)
         let seconds = Double(endFrame - startFrame) / sampleRate
-        Self.log.notice("stretch audioSeconds=\(seconds) seconds=\(ProcessInfo.processInfo.systemUptime - started) tokens=\(result.tokenTimings?.count ?? 0)")
+        Self.log.notice("stretch audioSeconds=\(seconds) seconds=\(ProcessInfo.processInfo.systemUptime - started) tokens=\(result.tokenTimings?.count ?? 0) \(MemoryFootprint.summary, privacy: .public)")
         onProgress(1)
         return buildWordTimings(from: result.tokenTimings ?? []).map {
             TimedWord(text: $0.word, start: $0.startTime + offset, end: $0.endTime + offset)
@@ -164,7 +164,7 @@ actor ParakeetEnglishEngine {
         let models = try AsrModels.loadLocal(from: directory, version: .v2)
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
-        Self.log.notice("loaded seconds=\(ProcessInfo.processInfo.systemUptime - started)")
+        Self.log.notice("loaded seconds=\(ProcessInfo.processInfo.systemUptime - started) \(MemoryFootprint.summary, privacy: .public)")
         self.manager = manager
         return manager
     }

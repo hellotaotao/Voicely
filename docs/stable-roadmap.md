@@ -71,6 +71,7 @@
    - 没测：结束前提醒通知上的三个按钮。电脑操作工具截图时会把 Voicely 切到前台，而 app 在前台时本来就不弹这条提醒；按钮走的处理路径有单元测试覆盖，iPhone 锁屏时的提醒和按钮在发布前 iPhone 清单里。
    - 笔记库里留下一条测试录音 "Voice Note 17:08"（2026-11-07），会同步到其他设备，要删由用户删。
 8. ✅ 版本号改成 1.0.0（`00306d6`），从这个提交的干净源码打 iOS 和 Mac 两个包（build 1），2026-11-07 并行传上 TestFlight：打包约 13 分钟，上传 iOS 26 分钟、Mac 26.5 分钟，没有遇到凭证失效。还没打 `v1.0.0` tag：验收要是改了代码，提交审核的会是 1.0.0 的下一个 build，等定下提交哪个包再打。
+   - build 2（2026-11-07）：build 1 的日志里没有千问的加载时间，也没有内存，第 10、12 条在真机上量不出数字。build 2 加了 `Memory` 日志类别（`MemoryFootprint.swift`），千问加载完、卸载后、每转完一片（CoreML），都记下用时和内存（`footprintMB` 是当前占用，`peakMB` 是这次启动以来的最高值，iOS 按这个数判断是否杀掉 app）；Parakeet 原有的 `loaded` 和 `stretch` 两行也带上这两个数。验收时按步骤正常用，最后 `sudo log collect --device` 抓一次日志，数字从里面读。
 
 **第三步：在候选包上做 iPhone 真机验收**（逐条见"发布前 iPhone 清单"）
 
@@ -78,7 +79,7 @@
 
 9. 去掉 `processing` 后台模式以后，iOS 26 锁屏续转系统还接不接受。
 10. 千问 CoreML 的加载时间和峰值内存，决定 iPhone 要不要也改成用到时才加载。
-11. 锁屏收尾、锁屏重转、自动恢复，再加一条 60–90 分钟的会议从头到尾跑完。
+11. 锁屏收尾、锁屏重转、自动恢复。60–90 分钟会议那一条不再专门测（2026-11-07 用户定）：用户最近的会议都用 iPhone 录，半小时左右，长录音这条路日常已经在跑。
 12. Parakeet 第一次加载时锁屏能不能撑住；它和千问同时在内存里的峰值。
 13. 语音门控：真实噪声不被编成句子，远处小声的"同意""No"不被丢掉。
 
@@ -172,7 +173,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 **转录主流程**
 
-- 千问 CoreML：一台最低支持的设备加一台较新的设备，前台和锁屏各录一条并转完；至少一条 60–90 分钟的完整流程，记录模型加载峰值内存、后半程速度、最长进度上报间隔（Mac 上 CoreML 最长 1.09 s，iOS 约 30 s 没有进度就判停滞）、停止到文字落定的时间。最低支持 iOS 18，锁屏续跑（continued processing）依赖 iOS 26，两条路径分别验。（原第 6 项、④、5c）
+- 千问 CoreML：一台最低支持的设备加一台较新的设备，前台和锁屏各录一条并转完；长录音靠用户日常半小时左右的会议覆盖（60–90 分钟的专项 2026-11-07 取消），记录模型加载峰值内存、后半程速度、最长进度上报间隔（Mac 上 CoreML 最长 1.09 s，iOS 约 30 s 没有进度就判停滞）、停止到文字落定的时间。最低支持 iOS 18，锁屏续跑（continued processing）依赖 iOS 26，两条路径分别验。（原第 6 项、④、5c）
 - 千问 CoreML 的加载时间：装好后第一次（要为神经引擎编译）和之后每次各要多久，锁屏时在后台能否加载成功。Mac 上千问已经改成用到时才加载、空闲 10 秒卸载（2026-11-06），iPhone 和 iPad 还是启动就加载、一直留着，等这项数字出来再决定要不要跟 Mac 一样。（见"六"）
 - 去掉 `processing` 后台模式之后（2026-11-05 起的包）：iOS 26 上停止录音或点 Re-transcribe 后锁屏，Console 里 `ContinuedProcessing` 类别要出现 `event=submissionAccepted`。出现 `submissionRejected` 且 `code=3`（不允许），就把 `processing` 加回 `UIBackgroundModes`。依据：WWDC25 讲 continued processing 时只要求在 `BGTaskSchedulerPermittedIdentifiers` 登记标识符，没提后台模式；`processing` 是 `BGProcessingTask` 要的，app 没用它。
 - 锁屏收尾：锁屏录 5 分钟以上的会议，解锁、停止、立刻再锁屏。回来时文字完整、没有整篇重转；详情页显示 "Finalizing transcription…" 而不是 "Recording"，而且只持续尾段解码的时间；出现 `[… transcription unavailable]` 就记下是哪段、什么内容。（P-0、P-0g）

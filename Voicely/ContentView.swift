@@ -36,7 +36,11 @@ struct ContentView: View {
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
-    @State private var splitColumnVisibility: NavigationSplitViewVisibility = .automatic
+    // An iPad in portrait would otherwise open on the empty detail pane, with the
+    // note list and the record button folded behind the sidebar button.
+    @State private var splitColumnVisibility: NavigationSplitViewVisibility =
+        UIDevice.current.userInterfaceIdiom == .pad && !ProcessInfo.processInfo.isMacCatalystApp
+        ? .all : .automatic
     @State private var isDropTargeted = false
     @State private var folderFilter: NoteFolderFilter = .all
     @State private var searchText = ""
@@ -1269,24 +1273,27 @@ struct VoiceNoteRow: View {
                                 .font(.caption)
                                 .monospacedDigit()
                         }
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Color(UIColor.tertiaryLabel))
                     }
                 }
 
+                // Fixed label colors rather than .secondary/.tertiary: an iPad sidebar
+                // turns hierarchical styles white on the selected row, which then
+                // vanishes against the row's light accent fill.
                 Text(note.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color(UIColor.tertiaryLabel))
 
                 if let searchSnippet {
                     Text(searchSnippet)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(UIColor.secondaryLabel))
                         .lineLimit(2)
                         .padding(.top, 2)
                 } else if let previewText {
                     Text(previewText)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(UIColor.secondaryLabel))
                         .lineLimit(2)
                         .padding(.top, 2)
                 }

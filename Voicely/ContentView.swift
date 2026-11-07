@@ -109,7 +109,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newValue in
-            guard !AppRuntime.isRunningTests else { return }
+            guard !AppRuntime.isIsolatedFromUserData else { return }
             if newValue == .background { transcriptionService.savedTranscriptionsDidEnterBackground() }
             if newValue == .active {
                 // The user may have changed microphone access in Settings.
@@ -779,7 +779,7 @@ struct ContentView: View {
         guard !didSetupServices else { return }
         didSetupServices = true
 
-        guard !AppRuntime.isRunningTests else {
+        guard !AppRuntime.isIsolatedFromUserData else {
             transcriptionService.setModelManager(modelManager)
             consumePendingStartRecordingQuickActionIfNeeded()
             return
@@ -809,7 +809,7 @@ struct ContentView: View {
     }
 
     private func resumeWaitingWork() {
-        if !AppRuntime.isRunningTests { resumePendingImports() }
+        if !AppRuntime.isIsolatedFromUserData { resumePendingImports() }
         Task { @MainActor in
             await processQueuedTranscriptionsIfReady()
         }

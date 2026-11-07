@@ -20,4 +20,20 @@ enum AppRuntime {
             || injectedLibraries.contains("libXCTestBundleInject")
             || NSClassFromString("XCTestCase") != nil
     }
+
+    /// Debug-only launch for screenshots: an in-memory library of invented
+    /// notes read from `VOICELY_DEMO_DIR` (built by scripts/demo-library).
+    static var isDemoMode: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["VOICELY_DEMO_DIR"] != nil
+        #else
+        false
+        #endif
+    }
+
+    /// Tests and demo mode keep the library in memory and never touch the
+    /// user's notes, audio files or iCloud.
+    static var isIsolatedFromUserData: Bool {
+        isRunningTests || isDemoMode
+    }
 }

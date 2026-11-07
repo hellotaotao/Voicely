@@ -61,7 +61,7 @@ class CloudStorageManager: ObservableObject {
     
     private init() {
         setupLocalContainer()
-        guard !AppRuntime.isRunningTests else { return }
+        guard !AppRuntime.isIsolatedFromUserData else { return }
         setupCloudContainer()
         setupMetadataQuery()
         NotificationCenter.default.addObserver(

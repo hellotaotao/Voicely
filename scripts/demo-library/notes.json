@@ -1,0 +1,88 @@
+{
+  "folders": [
+    { "slot": 1, "name": "Work", "colorIndex": 5 },
+    { "slot": 2, "name": "Clients", "colorIndex": 3 }
+  ],
+  "notes": [
+    {
+      "id": "product-sync",
+      "title": "Product Sync",
+      "hoursAgo": 1,
+      "folderSlot": 1,
+      "engine": "mixed",
+      "sentences": [
+        { "voice": "Daniel", "text": "Okay, let's get started. The main thing today is the launch date for the iPad version." },
+        { "voice": "Karen", "text": "Design is done, but QA found two crashes on the older iPads, so I'd rather move it to next Thursday." },
+        { "voice": "Daniel", "text": "Next Thursday works for me. Does anyone see a problem with that?" },
+        { "voice": "Flo (Chinese (China mainland))", "text": "我这边没问题。那我把 release checklist 更新一下，下午发到群里。" },
+        { "voice": "Karen", "text": "Great. Who's taking the App Store screenshots this time?" },
+        { "voice": "Flo (Chinese (China mainland))", "text": "截图我来做，周二之前给大家看初稿。" },
+        { "voice": "Daniel", "text": "Perfect. Next, the pricing page. I think we should keep it to one plan with no tiers." },
+        { "voice": "Karen", "text": "Agreed. Every extra option just turns into another support email." },
+        { "voice": "Flo (Chinese (China mainland))", "text": "同意，定价页先别搞复杂。还有一个问题，客服邮件现在是谁在回？" },
+        { "voice": "Karen", "text": "I'll take support this week, and I'll write up the five questions people ask most." },
+        { "voice": "Daniel", "text": "Good. Last item: the onboarding numbers. About a third of people stop at the microphone permission screen." },
+        { "voice": "Flo (Chinese (China mainland))", "text": "那个页面的说明太长了，我建议改成一句话，再加一个示意图。" },
+        { "voice": "Karen", "text": "I can mock that up tomorrow and we can test it with five people before the launch." },
+        { "voice": "Daniel", "text": "Let's do that. Do we have anyone lined up for the test yet?" },
+        { "voice": "Flo (Chinese (China mainland))", "text": "上次报名的还有八个人没约，我今天发邮件问一下他们周四有没有空。" },
+        { "voice": "Karen", "text": "Perfect. If at least five say yes, we test on Thursday morning and ship the change Friday." },
+        { "voice": "Daniel", "text": "One more thing before we wrap up. The release notes for the iPad version still need a final read." },
+        { "voice": "Flo (Chinese (China mainland))", "text": "release notes 我已经写了初稿，就在共享文档里，大家有空帮忙看一下。" },
+        { "voice": "Karen", "text": "I'll read it tonight and leave comments in the doc." },
+        { "voice": "Daniel", "text": "Great. So, launch next Thursday, screenshots by Tuesday, and the onboarding test on Thursday morning." },
+        { "voice": "Flo (Chinese (China mainland))", "text": "对，我会议纪要发群里。" },
+        { "voice": "Daniel", "text": "Sounds like a plan. Let's check in again on Monday." }
+      ]
+    },
+    {
+      "id": "quarterly-planning",
+      "title": "季度规划会",
+      "hoursAgo": 26,
+      "durationSeconds": 4320,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "sentences": [
+        { "text": "这个季度我们主要做三件事：iPad 版上线、改进新用户引导，还有把客服的回复时间压到一天以内。" },
+        { "text": "第一件事最紧，日期定在下周四，QA 那边还有两个崩溃要修。" },
+        { "text": "第二件事先做小范围测试，月底之前出结论。" }
+      ]
+    },
+    {
+      "id": "vendor-review",
+      "title": "Q3 Vendor Review",
+      "hoursAgo": 50,
+      "durationSeconds": 3140,
+      "folderSlot": 2,
+      "engine": "parakeet",
+      "sentences": [
+        { "text": "Thanks for joining. We want to go through the Q3 delivery numbers first and then talk about the renewal." },
+        { "text": "Overall on-time delivery was ninety four percent, up from eighty nine last quarter." }
+      ]
+    },
+    {
+      "id": "hiring-debrief",
+      "title": "Hiring Debrief",
+      "hoursAgo": 74,
+      "durationSeconds": 1460,
+      "folderSlot": 1,
+      "engine": "mixed",
+      "sentences": [
+        { "text": "Let's go around the room. Overall I'd say strong yes on the technical side." },
+        { "text": "沟通方面我觉得也不错，就是 system design 那一轮稍微有点赶。" }
+      ]
+    },
+    {
+      "id": "client-call",
+      "title": "Client Call: Onboarding Plan",
+      "hoursAgo": 122,
+      "durationSeconds": 2290,
+      "folderSlot": 2,
+      "engine": "parakeet",
+      "sentences": [
+        { "text": "We'd like to roll this out to two teams first, about forty people, and then the rest of the office in January." },
+        { "text": "That works. We'll send over a short setup guide and check in after the first week." }
+      ]
+    }
+  ]
+}

@@ -55,10 +55,10 @@ struct VoicelyApp: App {
             VoiceNote.self,
             NoteFolder.self
         ])
-        let cloudKitDatabase: ModelConfiguration.CloudKitDatabase = AppRuntime.isRunningTests ? .none : .automatic
+        let cloudKitDatabase: ModelConfiguration.CloudKitDatabase = AppRuntime.isIsolatedFromUserData ? .none : .automatic
         let modelConfiguration = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: AppRuntime.isRunningTests,
+            isStoredInMemoryOnly: AppRuntime.isIsolatedFromUserData,
             cloudKitDatabase: cloudKitDatabase
         )
 
@@ -92,13 +92,17 @@ struct VoicelyApp: App {
 
                     if AppRuntime.isRunningTests {
                         seedUITestNoteIfNeeded()
+                    } else if AppRuntime.isDemoMode {
+                        #if DEBUG
+                        DemoLibrary.seed(into: sharedModelContainer.mainContext)
+                        #endif
                     } else {
                         syncMonitor.setModelContainer(sharedModelContainer)
                         await syncMonitor.checkCloudKitAccountStatus()
                     }
                 }
                 .onChange(of: scenePhase) { _, newValue in
-                    guard newValue == .active, !AppRuntime.isRunningTests else { return }
+                    guard newValue == .active, !AppRuntime.isIsolatedFromUserData else { return }
                     Task {
                         await syncMonitor.checkCloudKitAccountStatus()
                     }
@@ -188,7 +192,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             QuickAction.markPendingStartRecording()
         }
 
-        guard !AppRuntime.isRunningTests else {
+        guard !AppRuntime.isIsolatedFromUserData else {
             return true
         }
 

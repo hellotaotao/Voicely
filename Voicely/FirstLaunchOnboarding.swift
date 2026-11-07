@@ -60,7 +60,7 @@ enum FirstLaunchOnboarding {
 
     static func shouldPresent(
         defaults: UserDefaults = .standard,
-        isRunningTests: Bool = AppRuntime.isRunningTests
+        isRunningTests: Bool = AppRuntime.isIsolatedFromUserData
     ) -> Bool {
         guard !isRunningTests else {
             return false

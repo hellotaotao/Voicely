@@ -97,6 +97,34 @@ struct NetworkWaitTests {
         #expect(note.transcription == "Old text.")
     }
 
+    /// Audio iCloud has not put on this device at all, online: no background
+    /// task is submitted and ended as failed while the note waits for it;
+    /// the task starts once the audio is here.
+    @Test func audioNotOnTheDeviceGetsABackgroundTaskOnlyOnceItArrives() async {
+        let service = makeService()
+        let driver = RecordingProgressDriver()
+        service.continuedProcessingDriver = driver
+        var absent = true
+        service.audioIsAbsentFromDevice = { _ in absent }
+        service.prepareAudioFileForReading = { absent ? nil : URL(fileURLWithPath: $0) }
+        service.isAudioPermanentlyMissing = { _ in false }
+        service.transcribeImpl = { _, _ in "New text." }
+        let note = makeTranscribedNote()
+
+        _ = await service.requestTranscription(for: note, force: true)
+
+        #expect(driver.submissions == 0)
+        #expect(service.waitReason(for: note) == .waitingForAudio)
+        #expect(note.transcription == "Old text.")
+
+        absent = false
+        await service.processPendingTranscriptions(notes: [note])
+
+        #expect(driver.submissions == 1)
+        #expect(note.transcription == "New text.")
+        #expect(service.waitReason(for: note) == nil)
+    }
+
     @Test func cancellingANoteWaitingForTheNetworkStopsTheWait() async {
         let service = makeService()
         service.audioWaitsForNetwork = { _ in true }

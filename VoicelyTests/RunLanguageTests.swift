@@ -62,6 +62,41 @@ struct RunLanguageTests {
             == Entry(key: "english", source: .setting))
         #expect(TranscriptionService.noteLanguage(transcriptionModelIdentifier: "openai_whisper-large-v3", settingKey: nil)
             == Entry(key: "auto", source: .setting))
+        // Text that reads as English goes to English whoever wrote it; other text to Auto Detect.
+        #expect(TranscriptionService.noteLanguage(
+            transcriptionModelIdentifier: "qwen3-asr-0.6b-coreml" + EnglishStretchRouting.parakeetModelSuffix,
+            transcriptReadsAsEnglish: true, settingKey: "auto")
+            == Entry(key: "english", source: .noteLanguage))
+        #expect(TranscriptionService.noteLanguage(
+            transcriptionModelIdentifier: "openai_whisper-small", transcriptReadsAsEnglish: false, settingKey: "english")
+            == Entry(key: "auto", source: .noteLanguage))
+        // All Parakeet stays English even when its text does not read as English.
+        #expect(TranscriptionService.noteLanguage(
+            transcriptionModelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier,
+            transcriptReadsAsEnglish: false, settingKey: "auto")
+            == Entry(key: "english", source: .noteLanguage))
+    }
+
+    /// An English meeting Qwen3-ASR once wrote re-runs in English once its
+    /// text has been read, instead of through Qwen3-ASR first.
+    @Test func anEnglishNoteQwenWroteReRunsInEnglishOnceItsTextIsRead() async {
+        let service = TranscriptionService()
+        service.languageSettingKey = { "auto" }
+        var reads = 0
+        service.transcriptLanguageReader = { _ in reads += 1; return true }
+        let note = VoiceNote(title: "Standup", audioFilePath: "standup.m4a")
+        note.transcription = "So I think we should move the launch to next week."
+        note.transcriptionModelIdentifier = "qwen3-asr-0.6b-coreml"
+
+        #expect(service.noteLanguage(for: note).key == "auto")
+        #expect(await service.readTranscriptLanguage(of: note) == true)
+        #expect(service.noteLanguage(for: note) == .init(key: "english", source: .noteLanguage))
+        // Read once per text.
+        await service.readTranscriptLanguage(of: note)
+        #expect(reads == 1)
+        // Edited text has to be read again.
+        note.transcription += " One more thing."
+        #expect(service.noteLanguage(for: note).key == "auto")
     }
 
     /// Today's case: a Chinese note Qwen3-ASR transcribed, re-transcribed

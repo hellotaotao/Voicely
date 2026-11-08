@@ -194,8 +194,7 @@ struct SettingsView: View {
         }
     }
 
-    /// On the Mac, or with English as the language, the model is left
-    /// unloaded until something needs it.
+    /// The model is left unloaded until something needs it.
     private var waitsForWork: Bool {
         TranscriptionService.loadsQwenOnDemand(selectedLanguageKey: selectedLanguage)
             && modelManager.errorMessage == nil

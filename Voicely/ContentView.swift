@@ -1842,6 +1842,9 @@ struct VoiceNoteDetailView: View {
     /// to the transcript that stays in place until the new one completes.
     @State private var showsCurrentTranscriptDuringRetranscription = false
     @State private var showingRetranscribeConfirmation = false
+    /// Whether the note's text reads as English, which picks the language a
+    /// re-transcription offers first. Read off the main actor on opening.
+    @State private var transcriptReadsAsEnglish: Bool?
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @State private var copyConfirmVisible = false
@@ -1965,7 +1968,13 @@ struct VoiceNoteDetailView: View {
     /// The language a re-run uses unless the user picks the other one: the
     /// note's own, which `TranscriptionService.noteLanguage(for:)` reads.
     private var retranscribeLanguage: RunLanguageStore.Entry {
-        transcriptionService.noteLanguage(for: note)
+        transcriptionService.noteLanguage(for: note, transcriptReadsAsEnglish: transcriptReadsAsEnglish)
+    }
+
+    /// Changes when the text to read does; empty while it is still being
+    /// written, so a running transcription does not set off a read per slice.
+    private var transcriptLanguageReadID: [String] {
+        isLocallyTranscribing || isRemoteTranscribing ? [] : [note.id.uuidString, note.transcription]
     }
 
     static func retranscribeButtonTitle(languageKey: String) -> String {
@@ -2140,6 +2149,11 @@ struct VoiceNoteDetailView: View {
                 transcriptionService.telemetryState.update(.inactive(modelName: "Unrelated model"), noteID: UUID())
             }
             #endif
+        }
+        .task(id: transcriptLanguageReadID) {
+            transcriptReadsAsEnglish = nil
+            guard !transcriptLanguageReadID.isEmpty else { return }
+            transcriptReadsAsEnglish = await transcriptionService.readTranscriptLanguage(of: note)
         }
         .onChange(of: isLocallyTranscribing) { _, active in
             if !active { refreshRetainedAttempts() }

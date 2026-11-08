@@ -178,6 +178,41 @@ enum EnglishStretchRouting {
         }
     }
 
+    /// A whole transcript still reads as English with up to this share of its
+    /// checked sentences, by characters, given to another language. Across
+    /// the Latin-only notes on the Mac (2026-11-08) the recognizer misread
+    /// one English sentence in a few long English notes (0.06–0.31%), while
+    /// notes with real foreign passages ran 4% and up.
+    static let foreignShareForEnglishTranscript = 0.01
+
+    /// Whether a note's whole transcript reads as English, which picks the
+    /// language a re-transcription uses. Any letter outside the Latin alphabet
+    /// rules it out, as in `readsAsEnglish(_:)`; sentences of another language
+    /// rule it out only above `foreignShareForEnglishTranscript`, because one
+    /// misread sentence in an hour of English is not a second language.
+    static func transcriptReadsAsEnglish(_ text: String) -> Bool {
+        guard !hasNonLatinLetters(text) else { return false }
+        let text = text.replacingOccurrences(
+            of: fillerPattern, with: "", options: [.regularExpression, .caseInsensitive])
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = text
+        var checked = 0
+        var foreign = 0
+        for range in tokenizer.tokens(for: text.startIndex..<text.endIndex) {
+            let sentence = text[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isChecked(sentence) else { continue }
+            checked += sentence.count
+            if isGivenToAnotherLanguage(sentence) { foreign += sentence.count }
+        }
+        return Double(foreign) <= Double(checked) * foreignShareForEnglishTranscript
+    }
+
+    private static func isChecked(_ sentence: String) -> Bool {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = sentence
+        return tokenizer.tokens(for: sentence.startIndex..<sentence.endIndex).count >= minimumCheckedSentenceWords
+    }
+
     private static func hasNonLatinLetters(_ text: String) -> Bool {
         text.unicodeScalars.contains { scalar in
             !scalar.isASCII && scalar.properties.isAlphabetic
@@ -186,11 +221,11 @@ enum EnglishStretchRouting {
     }
 
     private static func isInAnotherLanguage(_ sentence: String) -> Bool {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = sentence
-        guard tokenizer.tokens(for: sentence.startIndex..<sentence.endIndex).count >= minimumCheckedSentenceWords else {
-            return false
-        }
+        guard isChecked(sentence) else { return false }
+        return isGivenToAnotherLanguage(sentence)
+    }
+
+    private static func isGivenToAnotherLanguage(_ sentence: String) -> Bool {
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(sentence)
         guard let language = recognizer.dominantLanguage, language != .english, language != .undetermined else {

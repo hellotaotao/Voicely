@@ -75,6 +75,33 @@ struct EnglishStretchRoutingTests {
         #expect(!EnglishStretchRouting.readsAsEnglish(text))
     }
 
+    private static let englishMeeting = Array(repeating: [
+        "So I think we should move the launch to next week and see how the numbers look.",
+        "The design review went well and most of the comments were about the onboarding.",
+        "We still need someone to own the migration before the end of the quarter.",
+        "Let me share my screen so everyone can see the dashboard we built last month.",
+        "If nobody objects, we will keep the current pricing for the first release.",
+    ].joined(separator: " "), count: 30).joined(separator: " ")
+    private static let frenchSentence = "Je ne sais pas si nous pouvons terminer ce travail avant la fin de la semaine."
+
+    /// One foreign sentence in a long English transcript is a misreading or
+    /// an aside, not a second language; the note still re-runs in English.
+    @Test func aLongEnglishTranscriptWithOneForeignSentenceReadsAsEnglish() {
+        let text = Self.englishMeeting + " " + Self.frenchSentence
+        #expect(EnglishStretchRouting.transcriptReadsAsEnglish(Self.englishMeeting))
+        #expect(EnglishStretchRouting.transcriptReadsAsEnglish(text))
+        // The per-slice check, which decides what Parakeet re-does, stays strict.
+        #expect(!EnglishStretchRouting.readsAsEnglish(text))
+    }
+
+    @Test(arguments: [
+        "Thanks everyone. " + String(repeating: frenchSentence + " ", count: 10),
+        englishMeeting + " 我们下周再看一下数字。",
+    ])
+    func transcriptsInAnotherLanguageOrWithChineseDoNotReadAsEnglish(text: String) {
+        #expect(!EnglishStretchRouting.transcriptReadsAsEnglish(text))
+    }
+
     /// Keeps a background task alive while Parakeet loads and converts audio,
     /// and stops when the model takes over reporting.
     @Test func preparationHeartbeatBeatsUntilCancelled() async throws {

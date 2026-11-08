@@ -154,13 +154,22 @@ class TranscriptionService: ObservableObject {
 
     /// The language a new run of `note` uses unless the user picks another:
     /// the one it was last transcribed in, so a Chinese meeting is not run
-    /// through Parakeet because English is the setting now. A note with no
-    /// transcript, or one from before Qwen3-ASR, follows the setting.
+    /// through Parakeet because English is the setting now. Text all
+    /// Parakeet wrote is English. Other text that reads as English (see
+    /// `EnglishStretchRouting.transcriptReadsAsEnglish(_:)`) goes to English,
+    /// so an English meeting Qwen3-ASR once wrote is not run through it again
+    /// only to be handed to Parakeet; other text goes to Auto Detect.
+    /// `transcriptReadsAsEnglish` is nil when that is not known (no text, or
+    /// not read yet): then Qwen3-ASR's notes go to Auto Detect and the rest
+    /// follow the setting.
     nonisolated static func noteLanguage(
-        transcriptionModelIdentifier: String?, settingKey: String?
+        transcriptionModelIdentifier: String?, transcriptReadsAsEnglish: Bool? = nil, settingKey: String?
     ) -> RunLanguageStore.Entry {
         if transcriptionModelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier {
             return .init(key: "english", source: .noteLanguage)
+        }
+        if let transcriptReadsAsEnglish {
+            return .init(key: transcriptReadsAsEnglish ? "english" : "auto", source: .noteLanguage)
         }
         if transcriptionModelIdentifier?.hasPrefix("qwen3-asr") == true {
             return .init(key: "auto", source: .noteLanguage)
@@ -168,8 +177,46 @@ class TranscriptionService: ObservableObject {
         return .init(key: Qwen3ASRDefaults.languageKey(settingKey), source: .setting)
     }
 
-    func noteLanguage(for note: VoiceNote) -> RunLanguageStore.Entry {
-        Self.noteLanguage(transcriptionModelIdentifier: note.transcriptionModelIdentifier, settingKey: languageSettingKey())
+    /// `noteLanguage(transcriptionModelIdentifier:transcriptReadsAsEnglish:settingKey:)`
+    /// for `note`, with its text as last read by `readTranscriptLanguage(of:)`
+    /// unless the caller has the answer.
+    func noteLanguage(for note: VoiceNote, transcriptReadsAsEnglish: Bool? = nil) -> RunLanguageStore.Entry {
+        Self.noteLanguage(
+            transcriptionModelIdentifier: note.transcriptionModelIdentifier,
+            transcriptReadsAsEnglish: transcriptReadsAsEnglish ?? cachedTranscriptLanguage(for: note),
+            settingKey: languageSettingKey())
+    }
+
+    /// Whether each note's text reads as English, with the text it was read
+    /// from; nil for no text.
+    private var transcriptLanguageByNoteID: [UUID: (text: String, english: Bool?)] = [:]
+
+    /// Reads whether a transcript is English, off the main actor: an hour of
+    /// text takes about half a second on the Mac. Nil for no text. Tests
+    /// replace it; by default they read nothing.
+    var transcriptLanguageReader: (String) async -> Bool? = { text in
+        guard !AppRuntime.isRunningTests,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            EnglishStretchRouting.transcriptReadsAsEnglish(text)
+        }.value
+    }
+
+    func cachedTranscriptLanguage(for note: VoiceNote) -> Bool? {
+        guard let cached = transcriptLanguageByNoteID[note.id], cached.text == note.transcription else { return nil }
+        return cached.english
+    }
+
+    /// Reads whether `note`'s text is English and keeps the answer until the
+    /// text changes. A note's detail view reads it on opening, before the
+    /// user can ask for a re-transcription.
+    @discardableResult
+    func readTranscriptLanguage(of note: VoiceNote) async -> Bool? {
+        let text = note.transcription
+        if let cached = transcriptLanguageByNoteID[note.id], cached.text == text { return cached.english }
+        let english = await transcriptLanguageReader(text)
+        transcriptLanguageByNoteID[note.id] = (text, english)
+        return english
     }
 
     /// Logs the language a transcription of `noteID` uses, where that came
@@ -193,27 +240,22 @@ class TranscriptionService: ObservableObject {
         EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID)) == .english
     }
 
-    /// Whether this kind of device keeps Qwen3-ASR loaded while idle. The Mac
-    /// loads it in 2–3 s, so it loads there when work needs it. iPhone and
-    /// iPad keep it until its load time there is measured on a device.
-    nonisolated static let keepsQwenLoadedOnThisDevice: Bool = {
-        #if targetEnvironment(macCatalyst)
-        false
-        #else
-        true
-        #endif
-    }()
+    /// Whether this kind of device keeps Qwen3-ASR loaded while idle. No
+    /// device does: the Mac loads it in 2–3 s, and an iPhone 17 Pro loads the
+    /// compiled CoreML model in 0.76–0.79 s, also right after a relaunch
+    /// (2026-11-08), while it holds about 1.16 GB.
+    nonisolated static let keepsQwenLoadedOnThisDevice = false
 
     /// Qwen3-ASR is not kept loaded with this setting on this device: a decode
-    /// that needs it loads it. True on the Mac, and with English as the
-    /// setting, where Parakeet takes the work.
+    /// that needs it loads it. True on every device, and with English as the
+    /// setting wherever it is kept, as Parakeet takes the work.
     nonisolated static func loadsQwenOnDemand(selectedLanguageKey key: String?, keepsQwenLoaded: Bool = keepsQwenLoadedOnThisDevice) -> Bool {
         !keepsQwenLoaded
             || EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)) == .english
     }
 
     /// Whether Qwen3-ASR stays loaded while idle with a setting other than
-    /// English. Tests keep it, as on iPhone, unless they set otherwise.
+    /// English. Tests keep it unless they set otherwise.
     var keepsQwenLoaded = TranscriptionService.keepsQwenLoadedOnThisDevice || AppRuntime.isRunningTests
 
     /// Qwen3-ASR is not kept loaded: a decode that needs it loads it, and it
@@ -425,6 +467,12 @@ class TranscriptionService: ObservableObject {
     var audioWaitsForNetwork: @MainActor (String) -> Bool = { path in
         guard !AppRuntime.isRunningTests else { return false }
         return NetworkReachability.shared.isKnownOffline && CloudStorageManager.shared.audioNeedsDownload(at: path)
+    }
+    /// Whether this device has nothing of the audio yet, not even iCloud's
+    /// placeholder, so a background task could only wait. Tests replace it.
+    var audioIsAbsentFromDevice: @MainActor (String) -> Bool = { path in
+        guard !AppRuntime.isRunningTests else { return false }
+        return CloudStorageManager.shared.audioIsAbsentFromDevice(at: path)
     }
     /// Whether the voice detector is sure the file holds no speech, checked
     /// before Qwen3-ASR loads for it. Files not on this device count as
@@ -791,6 +839,12 @@ class TranscriptionService: ObservableObject {
         // stalled and reported as failed; the note waits for the network instead.
         if waitsForNetwork(note) {
             Self.savedJobLog.notice("event=savedContinuationSkipped note=\(note.id.uuidString, privacy: .public) reason=waitingForNetwork")
+            return
+        }
+        // Same for audio iCloud has not put on this device at all: the task
+        // starts once the audio is here (see transcribeClaimedNote).
+        if !note.audioFilePath.isEmpty, audioIsAbsentFromDevice(note.audioFilePath) {
+            Self.savedJobLog.notice("event=savedContinuationSkipped note=\(note.id.uuidString, privacy: .public) reason=audioNotOnDevice")
             return
         }
         let supportsBackground = modelManager?.loadedModelSupportsBackgroundTranscription ?? true
@@ -1606,6 +1660,11 @@ private extension TranscriptionService {
         if audioWaitNoteIDs.contains(note.id) { audioWaitNoteIDs.remove(note.id) }
         audioRetryWindowStartByNoteID.removeValue(forKey: note.id)
         guard stillOwnsAttempt() else { return }
+        // A job that started without its audio has no background task yet.
+        if requiresBackgroundExecution, savedContinuations[note.id] == nil {
+            beginSavedContinuation(for: note)
+            guard !isPausedForBackground(noteID: note.id) else { return }
+        }
         let resolvedDuration = await audioDurationProvider(url.path)
         Self.transcriptionLog.notice("attempt=\(attemptID, privacy: .public) stage=filePreparationFinished seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
         guard stillOwnsAttempt() else { return }

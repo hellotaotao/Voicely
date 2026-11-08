@@ -487,11 +487,13 @@ class CloudStorageManager: ObservableObject {
         isFileReadyForReading(url)
     }
 
-    /// The audio is in iCloud but not downloaded to this device yet, so
-    /// reading it needs the network.
+    /// The audio is in iCloud but not readable on this device yet, so reading
+    /// it needs the network. That includes a file iCloud has not announced
+    /// here yet, not even as a placeholder: the note's text syncs through
+    /// CloudKit and can arrive before its audio does.
     func audioNeedsDownload(at path: String) -> Bool {
         guard let url = getFileURL(for: path), isCloudManagedURL(url) else { return false }
-        return !isAudioFileMissing(at: url) && !isFileReadyForReading(url)
+        return !isFileReadyForReading(url)
     }
 
     func isAudioFileMissing(at url: URL) -> Bool {

@@ -119,6 +119,7 @@ struct ContentView: View {
                     await transcriptionService.resumeSavedTranscriptionsInForeground()
                     await processQueuedTranscriptionsIfReady()
                     resumePendingImports()
+                    startModelWarmUp()
                 }
             }
         }
@@ -840,6 +841,16 @@ struct ContentView: View {
         } else {
             await processQueuedTranscriptionsIfReady()
         }
+        startModelWarmUp()
+    }
+
+    /// After an app or system update, loads each model once while the app is
+    /// idle, from the first launch's onboarding on.
+    private func startModelWarmUp() {
+        let session = recordingSession
+        ModelWarmUpRunner.shared.start(transcriptionService: transcriptionService) {
+            session.currentRecordingNote != nil || session.isStartingRecording
+        }
     }
 
     private func resumeWaitingWork() {
@@ -875,7 +886,7 @@ struct ContentView: View {
             return
         }
 
-        let languageKey = recordingSession.takePendingLanguageKey()
+        let languageKey = Qwen3ASRDefaults.languageKey(transcriptionService.languageSettingKey())
         Task { @MainActor in
             await importIncomingAudio(from: url, languageKey: languageKey)
         }
@@ -890,9 +901,9 @@ struct ContentView: View {
         }
     }
 
-    /// `languageKey` is the choice made on the recording screen for this
-    /// import; nil follows the setting.
-    private func importIncomingAudio(from url: URL, languageKey: String?) async {
+    /// `languageKey` is the Speech Language setting when the file came in,
+    /// which the import keeps even if the setting changes meanwhile.
+    private func importIncomingAudio(from url: URL, languageKey: String) async {
         transcriptionService.setModelManager(modelManager)
         guard CloudStorageManager.isSupportedImportedAudioURL(url) else {
             inboundAudioImportError = "Unsupported audio file type."
@@ -934,7 +945,8 @@ struct ContentView: View {
                 _ = await transcriptionService.loadSpeechModel()
             }
             guard transcriptionService.isReadyToTranscribe() else { return }
-            transcriptionService.setLanguageKey(languageKey, for: note.id)
+            transcriptionService.setLanguageKey(languageKey, for: note.id, source: .setting)
+            transcriptionService.logLanguageDecision(noteID: note.id, trigger: "import")
             await runImportTranscription { await $0.transcribe(note: note, sourceURL: workingCopy) }
         } catch {
             if let unpublishedWorkingCopy {
@@ -959,7 +971,7 @@ struct ContentView: View {
             $0.hasItemConformingToTypeIdentifier(UTType.audio.identifier)
         }
         guard !audioProviders.isEmpty else { return false }
-        let languageKey = recordingSession.takePendingLanguageKey()
+        let languageKey = Qwen3ASRDefaults.languageKey(transcriptionService.languageSettingKey())
         for provider in audioProviders {
             provider.loadFileRepresentation(forTypeIdentifier: UTType.audio.identifier) { tempURL, _ in
                 guard let tempURL else { return }
@@ -1535,9 +1547,9 @@ struct RecordingControls: View {
             )
     }
 
-    /// The language the next recording uses: its own choice, else the setting.
+    /// The Speech Language setting, which this menu and Settings both change.
     private var nextRecordingLanguageKey: String {
-        Qwen3ASRDefaults.languageKey(session.pendingLanguageKey ?? selectedLanguage)
+        Qwen3ASRDefaults.languageKey(selectedLanguage)
     }
 
     private var nextRecordingLanguageName: String? {
@@ -1548,18 +1560,17 @@ struct RecordingControls: View {
         Qwen3ASRDefaults.languageKey(key) == "english" ? "English" : "Auto Detect"
     }
 
-    /// A choice equal to the setting is no choice of its own.
     private var languageChoice: Binding<String> {
         Binding(
             get: { nextRecordingLanguageKey },
-            set: { session.pendingLanguageKey = $0 == Qwen3ASRDefaults.languageKey(selectedLanguage) ? nil : $0 }
+            set: { selectedLanguage = $0 }
         )
     }
 
     private var idleLayout: some View {
         HStack(spacing: 10) {
             Menu {
-                Picker("Language for the Next Recording or Import", selection: languageChoice) {
+                Picker("Speech Language", selection: languageChoice) {
                     ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { key in
                         Text(languageLabel(for: key)).tag(key)
                     }
@@ -1575,7 +1586,7 @@ struct RecordingControls: View {
                         .fill(statusTint)
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(session.pendingLanguageKey == nil ? "Language" : "Next only")
+                        Text("Language")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                         Text(languageLabel(for: nextRecordingLanguageKey))
@@ -1603,7 +1614,7 @@ struct RecordingControls: View {
             .menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
-            .accessibilityLabel("Speech language for the next recording: \(languageLabel(for: nextRecordingLanguageKey))")
+            .accessibilityLabel("Speech language: \(languageLabel(for: nextRecordingLanguageKey))")
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.recordingModelPickerButton)
 
             timerMenu(isRecording: false)
@@ -1844,13 +1855,6 @@ struct VoiceNoteDetailView: View {
     @State private var currentSearchMatch = 0
     @State private var searchJump = 0
 
-    private var selectedModelDisplayName: String? {
-        guard let selectedModel = transcriptionService.modelManager?.selectedModel, !selectedModel.isEmpty else {
-            return nil
-        }
-        return ModelManager.displayName(for: selectedModel)
-    }
-
     private var isLocallyTranscribing: Bool {
         transcriptionService.isLocallyTranscribing(note)
     }
@@ -1941,36 +1945,43 @@ struct VoiceNoteDetailView: View {
         ProcessInfo.processInfo.isMacCatalystApp ? 1100 : .infinity
     }
 
-    /// Shown under the transcription header when re-running would switch
-    /// models — the "I picked a better model, now re-do it" case. nil when a
-    /// re-run would reuse the model already applied, or there's nothing to
-    /// re-transcribe yet, or transcription is currently running.
+    /// Shown under the transcription header when re-running would use
+    /// another engine than the one that wrote the text, such as a note from
+    /// before Qwen3-ASR. nil when a re-run uses the same engine, there's
+    /// nothing to re-transcribe yet, or transcription is currently running.
     private var retranscribeModelHint: String? {
         guard !note.transcription.isEmpty,
               !shouldShowTakeOverAction,
               !isTranscribingHere,
               !isRemoteTranscribing,
-              let next = selectedModelDisplayName,
-              let current = note.transcriptionModelDisplayName,
-              next != current else {
+              let current = note.transcriptionModelDisplayName else {
             return nil
         }
+        let next = Self.engineDisplayName(languageKey: retranscribeLanguage.key)
+        guard next != current else { return nil }
         return "Re-transcribe will use \(next)"
     }
 
+    /// The language a re-run uses unless the user picks the other one: the
+    /// note's own, which `TranscriptionService.noteLanguage(for:)` reads.
+    private var retranscribeLanguage: RunLanguageStore.Entry {
+        transcriptionService.noteLanguage(for: note)
+    }
+
+    static func retranscribeButtonTitle(languageKey: String) -> String {
+        languageKey == "english" ? "Re-transcribe in English" : "Re-transcribe with Auto Detect"
+    }
+
+    /// The engine that writes the text for `languageKey`.
+    static func engineDisplayName(languageKey: String) -> String {
+        languageKey == "english" ? SpeechModelKind.parakeet.displayName : Qwen3ASRDefaults.modelDisplayName
+    }
+
     private var retranscribeConfirmationMessage: String {
-        let nextModel = selectedModelDisplayName ?? "the currently selected model"
-
-        if let currentModel = note.transcriptionModelDisplayName,
-           currentModel != nextModel {
-            return "This note currently uses \(currentModel). Re-transcribing will use \(nextModel) and replace the current transcript."
-        }
-
-        if let currentModel = note.transcriptionModelDisplayName {
-            return "This will run transcription again using \(currentModel) and replace the current transcript."
-        }
-
-        return "This will run transcription again using \(nextModel) and replace the current transcript."
+        let engines = retranscribeLanguage.key == "english"
+            ? "English uses \(SpeechModelKind.parakeet.displayName)."
+            : "Auto Detect uses \(Qwen3ASRDefaults.modelDisplayName); English passages go to \(SpeechModelKind.parakeet.displayName)."
+        return "\(engines) The new text replaces the current transcript."
     }
 
     private var durationLabel: String {
@@ -2073,7 +2084,17 @@ struct VoiceNoteDetailView: View {
             isPresented: $showingRetranscribeConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Re-transcribe") { requestTranscription(force: true) }
+            let language = retranscribeLanguage
+            Button(Self.retranscribeButtonTitle(languageKey: language.key)) {
+                requestTranscription(force: true, language: language)
+            }
+            // English that was the wrong choice only makes it worse on a rerun;
+            // Auto Detect also hands English passages to Parakeet, so it is the way out.
+            if language.key == "english" {
+                Button(Self.retranscribeButtonTitle(languageKey: "auto")) {
+                    requestTranscription(force: true, language: .init(key: "auto", source: .userChoice))
+                }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(retranscribeConfirmationMessage)
@@ -2931,7 +2952,7 @@ struct VoiceNoteDetailView: View {
         showingShareSheet = true
     }
 
-    private func requestTranscription(force: Bool = false, takeOver: Bool = false) {
+    private func requestTranscription(force: Bool = false, takeOver: Bool = false, language: RunLanguageStore.Entry? = nil) {
         guard !note.audioFilePath.isEmpty
                 || transcriptionService.segmentProgressStore.existingWorkingCopyURL(for: note.id) != nil else { return }
         guard transcriptionService.isReadyToTranscribe() else {
@@ -2942,7 +2963,8 @@ struct VoiceNoteDetailView: View {
             let didStart = await transcriptionService.requestTranscription(
                 for: note,
                 force: force,
-                takeOver: takeOver
+                takeOver: takeOver,
+                language: language
             )
             refreshRetainedAttempts()
             if !didStart, let message = note.transcriptionLastErrorMessage {
@@ -2980,7 +3002,7 @@ struct VoiceNoteDetailView: View {
             .buttonStyle(.bordered)
             .accessibilityIdentifier(AccessibilityIdentifiers.Detail.cancelTranscriptionButton)
             // Without the audio on this device a manual start can only fail.
-            if waitReason != .waitingForAudio {
+            if waitReason != .waitingForAudio && waitReason != .waitingForNetwork {
                 Button(action: { requestTranscription() }) {
                     Label("Transcribe Now", systemImage: "wand.and.stars")
                 }

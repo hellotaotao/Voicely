@@ -458,7 +458,8 @@ struct EnglishStretchTranscriptionTests {
         savedFrame: Int64? = nil,
         savedAuthors: (parakeet: Bool, qwen: Bool)? = nil,
         parakeet: @escaping () throws -> [TimedWord]
-    ) async throws -> (note: VoiceNote, service: TranscriptionService, stretches: [(Int64, Int64)], qwenCalls: Int, released: Bool) {
+    ) async throws -> (note: VoiceNote, service: TranscriptionService, stretches: [(Int64, Int64)], qwenCalls: Int, released: Bool,
+                       qwenCallsAtFirstRelease: Int?) {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: seconds)
         defer { try? FileManager.default.removeItem(at: url) }
         let service = TranscriptionService()
@@ -476,7 +477,11 @@ struct EnglishStretchTranscriptionTests {
             return try parakeet()
         }
         var released = false
-        transcriber.releaseEnglishEngine = { released = true }
+        var qwenCallsAtFirstRelease: Int?
+        transcriber.releaseEnglishEngine = {
+            released = true
+            if qwenCallsAtFirstRelease == nil { qwenCallsAtFirstRelease = qwenCalls }
+        }
         let note = VoiceNote(title: "Import", audioFilePath: "")
         service.setLanguageKey("english", for: note.id)
         if let savedFrame {
@@ -486,7 +491,7 @@ struct EnglishStretchTranscriptionTests {
         }
 
         await transcriber.transcribe(note: note, sourceURL: url)
-        return (note, service, stretches, qwenCalls, released)
+        return (note, service, stretches, qwenCalls, released, qwenCallsAtFirstRelease)
     }
 
     private static let wordsAt4And20And40 = [
@@ -557,6 +562,8 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(!run.note.usedParakeetForEnglish)
         #expect(run.released)
+        // Parakeet is let go before Qwen3-ASR loads, so the two are never in memory together.
+        #expect(run.qwenCallsAtFirstRelease == 0)
     }
 
     @Test @MainActor func englishChoiceFindsNoSpeechWhenNeitherEngineHearsAny() async throws {

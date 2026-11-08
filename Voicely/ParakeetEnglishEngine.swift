@@ -115,10 +115,12 @@ actor ParakeetEnglishEngine {
         ahead: Bool = false,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> [TimedWord] {
-        await acquire(ahead: ahead)
-        defer { release() }
+        // Beats while it waits its turn too: a call queued behind a warm-up
+        // load must not go quiet long enough for iOS to end its background task.
         let preparing = Self.preparationHeartbeat { onProgress(0) }
         defer { preparing.cancel() }
+        await acquire(ahead: ahead)
+        defer { release() }
         let manager = try await loadedManager()
         let sampleRate = try Self.sampleRate(of: fileURL)
         let offset = Double(startFrame) / sampleRate
@@ -155,6 +157,23 @@ actor ParakeetEnglishEngine {
         manager = nil
     }
 
+    /// Loads the model once, outside any transcription, so the Neural Engine
+    /// compiles it while the app is open: the first load after an app or
+    /// system update takes 14 s in the foreground on an iPhone 17 Pro and
+    /// about 100 s locked. Waits its turn behind real work, and a call that
+    /// comes after it uses the loaded model. Lets the model go afterwards
+    /// unless a recording holds it.
+    func warmUp() async {
+        await acquire()
+        do {
+            _ = try await loadedManager()
+        } catch {
+            Self.log.error("warmUp failed: \(error.localizedDescription, privacy: .public)")
+        }
+        release()
+        await unload()
+    }
+
     private func loadedManager() async throws -> AsrManager {
         if let manager { return manager }
         guard let directory = Self.defaultModelDirectory(), Self.isComplete(directory) else {
@@ -165,6 +184,7 @@ actor ParakeetEnglishEngine {
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         Self.log.notice("loaded seconds=\(ProcessInfo.processInfo.systemUptime - started) \(MemoryFootprint.summary, privacy: .public)")
+        ModelWarmUp.markLoaded(.parakeet)
         self.manager = manager
         return manager
     }

@@ -62,6 +62,8 @@ enum TranscriptionWaitReason: Equatable {
     case waitingForModel
     /// The audio has not reached this device yet.
     case waitingForAudio
+    /// The audio is in iCloud and the device is offline.
+    case waitingForNetwork
     /// Recorded on another device, which transcribes it; this one only starts on request.
     case waitingForOtherDevice
     case pausedInBackground
@@ -86,6 +88,13 @@ class TranscriptionService: ObservableObject {
     @Published private(set) var localQueueOrder: [UUID] = []
     /// Waiting notes whose audio is not on this device yet.
     @Published private(set) var audioWaitNoteIDs: Set<UUID> = []
+    /// Waiting notes whose audio is in iCloud while the device is offline:
+    /// they start once it is online, without a background task meanwhile.
+    @Published private(set) var networkWaitNoteIDs: Set<UUID> = []
+    /// When a note's wait for its audio download starts over: on leaving a
+    /// wait for the network, so offline time does not use up the retry window.
+    private var audioRetryWindowStartByNoteID: [UUID: Date] = [:]
+    private var networkObserver: NSObjectProtocol?
     // Frequent clock updates belong to the telemetry card, not every service subscriber.
     let telemetryState = TranscriptionTelemetryState()
     private(set) var transcriptionTelemetry: TranscriptionTelemetrySnapshot {
@@ -105,9 +114,14 @@ class TranscriptionService: ObservableObject {
     /// `transcribeImpl` sets it to stand in for the engine.
     var decodedLanguage: String?
 
-    /// Language choice for the decodes of one recording, keyed like the
-    /// "selectedLanguage" setting; nil follows the setting.
-    private var languageKeyByNoteID: [UUID: String] = [:]
+    /// The language each unfinished run uses, fixed when it was requested;
+    /// a note without one follows the setting.
+    private var languageByNoteID: [UUID: RunLanguageStore.Entry]
+    /// Keeps `languageByNoteID` across launches. Tests replace it.
+    var runLanguageStore: RunLanguageStore = .live {
+        didSet { languageByNoteID = runLanguageStore.load() }
+    }
+    nonisolated private static let languageLog = Logger(subsystem: "com.hellotaotao.Voicely", category: "Language")
 
     /// Tests never follow the developer's own setting: with English chosen
     /// there, a test could load the real model.
@@ -118,15 +132,59 @@ class TranscriptionService: ObservableObject {
         TranscriptionService.followsLanguageSetting ? UserDefaults.standard.string(forKey: Qwen3ASRDefaults.selectedLanguageKey) : nil
     }
 
-    func setLanguageKey(_ key: String?, for noteID: UUID) {
-        languageKeyByNoteID[noteID] = key
+    /// Fixes the language of `noteID`'s run; nil lets it follow the setting again.
+    func setLanguageKey(_ key: String?, for noteID: UUID, source: RunLanguageSource = .userChoice) {
+        let entry = key.map { RunLanguageStore.Entry(key: Qwen3ASRDefaults.languageKey($0), source: source) }
+        guard languageByNoteID[noteID] != entry else { return }
+        languageByNoteID[noteID] = entry
+        runLanguageStore.save(languageByNoteID)
     }
 
-    /// The language hint for a decode of `noteID`'s audio: the recording's own
-    /// choice, else the setting. Nil is auto-detect.
+    /// The language fixed for `noteID`'s run, if any.
+    func fixedLanguage(for noteID: UUID) -> RunLanguageStore.Entry? {
+        languageByNoteID[noteID]
+    }
+
+    /// The language hint for a decode of `noteID`'s audio: the run's own
+    /// language, else the setting. Nil is auto-detect.
     func languageHint(for noteID: UUID?) -> String? {
-        let key = noteID.flatMap { languageKeyByNoteID[$0] } ?? languageSettingKey()
+        let key = noteID.flatMap { languageByNoteID[$0]?.key } ?? languageSettingKey()
         return Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)
+    }
+
+    /// The language a new run of `note` uses unless the user picks another:
+    /// the one it was last transcribed in, so a Chinese meeting is not run
+    /// through Parakeet because English is the setting now. A note with no
+    /// transcript, or one from before Qwen3-ASR, follows the setting.
+    nonisolated static func noteLanguage(
+        transcriptionModelIdentifier: String?, settingKey: String?
+    ) -> RunLanguageStore.Entry {
+        if transcriptionModelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier {
+            return .init(key: "english", source: .noteLanguage)
+        }
+        if transcriptionModelIdentifier?.hasPrefix("qwen3-asr") == true {
+            return .init(key: "auto", source: .noteLanguage)
+        }
+        return .init(key: Qwen3ASRDefaults.languageKey(settingKey), source: .setting)
+    }
+
+    func noteLanguage(for note: VoiceNote) -> RunLanguageStore.Entry {
+        Self.noteLanguage(transcriptionModelIdentifier: note.transcriptionModelIdentifier, settingKey: languageSettingKey())
+    }
+
+    /// Logs the language a transcription of `noteID` uses, where that came
+    /// from and which engine goes first, read from what the run will use.
+    func logLanguageDecision(noteID: UUID, trigger: String) {
+        let entry = languageByNoteID[noteID]
+        let key = entry?.key ?? Qwen3ASRDefaults.languageKey(languageSettingKey())
+        let source = entry?.source.rawValue ?? "liveSetting"
+        let engine = key == "english" ? "parakeet" : "qwen3"
+        Self.languageLog.notice("event=languageDecision note=\(noteID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public) language=\(key, privacy: .public) source=\(source, privacy: .public) firstEngine=\(engine, privacy: .public)")
+    }
+
+    /// Logs why Qwen3-ASR takes over a run that English sent to Parakeet.
+    func logParakeetFallback(noteID: UUID?, reason: String) {
+        Self.languageLog.notice("event=parakeetFallback note=\(noteID?.uuidString ?? "-", privacy: .public) reason=\(reason, privacy: .public)")
     }
 
     /// English is chosen for `noteID`'s audio, so Parakeet transcribes it and
@@ -288,7 +346,8 @@ class TranscriptionService: ObservableObject {
     /// The recording with English chosen turns out not to be English only:
     /// from here it is Auto Detect, and Qwen3-ASR loads now for its slices.
     func switchRecordingToAutoDetect(noteID: UUID) {
-        setLanguageKey("auto", for: noteID)
+        setLanguageKey("auto", for: noteID, source: .recordingSwitch)
+        logLanguageDecision(noteID: noteID, trigger: "recordingSwitch")
         endEnglishRecording(noteID: noteID)
         if !isEngineLoaded {
             Task { _ = await loadSpeechModel() }
@@ -361,6 +420,27 @@ class TranscriptionService: ObservableObject {
     var isAudioPermanentlyMissing: (String) -> Bool = { path in
         CloudStorageManager.shared.isAudioPermanentlyMissing(at: path)
     }
+    /// Whether reading the audio at the path needs a download while the
+    /// device is offline. Tests replace it.
+    var audioWaitsForNetwork: @MainActor (String) -> Bool = { path in
+        guard !AppRuntime.isRunningTests else { return false }
+        return NetworkReachability.shared.isKnownOffline && CloudStorageManager.shared.audioNeedsDownload(at: path)
+    }
+    /// Whether the voice detector is sure the file holds no speech, checked
+    /// before Qwen3-ASR loads for it. Files not on this device count as
+    /// not silent. Tests replace it.
+    var isConfidentSilence: (String) async -> Bool = { path in
+        guard !AppRuntime.isRunningTests else { return false }
+        let localURL: URL? = await MainActor.run {
+            let storage = CloudStorageManager.shared
+            guard let url = storage.getFileURL(for: path), storage.isFileReadyForPlayback(at: url) else { return nil }
+            return url
+        }
+        guard let url = localURL else { return false }
+        return await Task.detached(priority: .utility) {
+            NeuralSpeechAnalyzer.safelySpeechPresence(at: url) == .silence
+        }.value
+    }
     /// How often this device's notes blocked outside the queue (audio still syncing) are checked again.
     var waitingRecheckInterval: TimeInterval = 30
     var audioAvailabilityRetryWindow: TimeInterval = 5 * 60
@@ -401,6 +481,7 @@ class TranscriptionService: ObservableObject {
          segmentProgressStore: SegmentProgressStore = SegmentProgressStore()) {
         self.modelManager = modelManager
         self.segmentProgressStore = segmentProgressStore
+        self.languageByNoteID = RunLanguageStore.live.load()
         self.transcribeImpl = { [weak self] filePath, progressCallback in
             guard let self else { return .cancelled }
             return await self.transcribeWithQwen(
@@ -414,6 +495,55 @@ class TranscriptionService: ObservableObject {
                 counter.withLock { $0 &+= 1 }
             }
         }
+        // Starts watching the network now, so its state is known by the time
+        // a transcription asks.
+        if !AppRuntime.isRunningTests { _ = NetworkReachability.shared }
+        networkObserver = NotificationCenter.default.addObserver(
+            forName: .networkBecameAvailable, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.networkBecameAvailable() }
+        }
+    }
+
+    /// Nothing records, transcribes, waits in the queue or loads Qwen3-ASR,
+    /// so a warm-up load (`ModelWarmUpRunner`) takes nothing from real work.
+    var isIdleForWarmUp: Bool {
+        !isTranscribing && activeNoteID == nil && !isProcessingPendingTranscriptions
+            && pendingTranscriptionQueue.isEmpty && localRecordingNoteIDs.isEmpty
+            && !isRecordingEnglish && modelManager?.isLoading != true
+    }
+
+    /// Loads Qwen3-ASR once so CoreML compiles it while the app is open.
+    /// With English chosen it is let go again once idle, as after any load.
+    func warmUpQwen() async {
+        if isEngineLoaded {
+            ModelWarmUp.markLoaded(.qwen3)
+            return
+        }
+        _ = await loadSpeechModel()
+    }
+
+    /// Notes that waited for the network try again at once instead of at
+    /// the next recheck.
+    func networkBecameAvailable() async {
+        guard !networkWaitNoteIDs.isEmpty else { return }
+        await processPendingTranscriptions(notes: Array(waitingNotes.values))
+    }
+
+    private func waitsForNetwork(_ note: VoiceNote) -> Bool {
+        !note.audioFilePath.isEmpty && audioWaitsForNetwork(note.audioFilePath)
+    }
+
+    /// The note's audio needs a download the device cannot make now: it waits
+    /// outside the queue, keeping this device's claim on a note taken over
+    /// from another, and starts once the network is back.
+    private func holdForNetwork(_ note: VoiceNote) {
+        if networkWaitNoteIDs.insert(note.id).inserted {
+            Self.savedJobLog.notice("event=waitingForNetwork note=\(note.id.uuidString, privacy: .public)")
+            holdOrQueue(note, queuedAt: note.transcriptionQueuedAt ?? nowProvider())
+        }
+        waitingNotes[note.id] = note
+        scheduleWaitingRecheck()
     }
 
     func setModelManager(_ manager: ModelManager) {
@@ -533,6 +663,13 @@ class TranscriptionService: ObservableObject {
                 guard let action = processingAction(for: note, now: nowProvider()) else {
                     continue
                 }
+                if waitsForNetwork(note) {
+                    holdForNetwork(note)
+                    continue
+                }
+                if networkWaitNoteIDs.remove(note.id) != nil {
+                    audioRetryWindowStartByNoteID[note.id] = nowProvider()
+                }
 
                 switch action {
                 case .claimNew(let attemptID, let queuedAt):
@@ -560,10 +697,13 @@ class TranscriptionService: ObservableObject {
         } while needsReprocessing
     }
 
+    /// `language` is the user's pick for this run; nil keeps a language the
+    /// run already has, else uses the note's own (`noteLanguage(for:)`).
     func requestTranscription(
         for note: VoiceNote,
         force: Bool = false,
-        takeOver: Bool = false
+        takeOver: Bool = false,
+        language: RunLanguageStore.Entry? = nil
     ) async -> Bool {
         let workingCopy = segmentProgressStore.existingWorkingCopyURL(for: note.id)
         guard isReadyToTranscribe(), !note.audioFilePath.isEmpty || workingCopy != nil,
@@ -607,6 +747,15 @@ class TranscriptionService: ObservableObject {
                 return false
             }
         }
+        // Fixed now, before anything waits, so the queue, a relaunch or a
+        // change of the setting cannot switch the language of this run.
+        if let language {
+            setLanguageKey(language.key, for: note.id, source: language.source)
+        } else if fixedLanguage(for: note.id) == nil {
+            let language = noteLanguage(for: note)
+            setLanguageKey(language.key, for: note.id, source: language.source)
+        }
+        logLanguageDecision(noteID: note.id, trigger: force ? "retranscribe" : takeOver ? "takeOver" : "request")
         note.resumeCancelledTranscription(at: nowProvider())
         savedTranscriptionNotes[note.id] = note
         Self.savedJobLog.notice("event=savedJobRegistered note=\(note.id.uuidString, privacy: .public) source=explicitRequest")
@@ -638,6 +787,12 @@ class TranscriptionService: ObservableObject {
             return
         }
         guard savedContinuations[note.id] == nil, !backgroundPausedNoteIDs.contains(note.id) else { return }
+        // A task that can only wait for a download would be ended by iOS as
+        // stalled and reported as failed; the note waits for the network instead.
+        if waitsForNetwork(note) {
+            Self.savedJobLog.notice("event=savedContinuationSkipped note=\(note.id.uuidString, privacy: .public) reason=waitingForNetwork")
+            return
+        }
         let supportsBackground = modelManager?.loadedModelSupportsBackgroundTranscription ?? true
         Self.savedJobLog.notice("event=savedContinuationRequested note=\(note.id.uuidString, privacy: .public) foreground=\(self.savedJobsAreInForeground) supportedCompute=\(supportsBackground)")
         let continuation = SavedTranscriptionContinuation(
@@ -705,7 +860,8 @@ class TranscriptionService: ObservableObject {
     func savedTranscriptionsDidEnterBackground() {
         savedJobsAreInForeground = false
         guard requiresBackgroundExecution else { return }
-        for note in Array(savedTranscriptionNotes.values) where savedContinuations[note.id]?.isAvailable != true {
+        for note in Array(savedTranscriptionNotes.values)
+        where savedContinuations[note.id]?.isAvailable != true && !networkWaitNoteIDs.contains(note.id) {
             pauseSavedTranscriptionForBackground(note)
         }
     }
@@ -754,6 +910,7 @@ class TranscriptionService: ObservableObject {
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         waitingNotes.removeValue(forKey: note.id)
         audioWaitNoteIDs.remove(note.id)
+        networkWaitNoteIDs.remove(note.id)
         // The loop may already hold it while the decoder is busy; it skips the note on its own.
         if nextUpNoteID == note.id { nextUpNoteID = nil }
         publishQueueOrder()
@@ -780,11 +937,13 @@ class TranscriptionService: ObservableObject {
     func isDiscarded(noteID: UUID) -> Bool { discardedNoteIDs.contains(noteID) }
     func discardTranscription(for note: VoiceNote) {
         discardedNoteIDs.insert(note.id)
+        setLanguageKey(nil, for: note.id)
         finishSavedContinuation(for: note, remove: true)
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         pendingTranscriptionQueue.removeValue(forKey: note.id)
         waitingNotes.removeValue(forKey: note.id)
         audioWaitNoteIDs.remove(note.id)
+        networkWaitNoteIDs.remove(note.id)
         // The loop may already hold it while the decoder is busy; it skips the note on its own.
         if nextUpNoteID == note.id { nextUpNoteID = nil }
         publishQueueOrder()
@@ -900,6 +1059,13 @@ class TranscriptionService: ObservableObject {
         // a load already under way, such as the one a switch to Auto Detect
         // starts, is waited for instead of failing the decode.
         if !isEngineLoaded, !isRecordingEnglish, loadsQwenOnDemand || modelManager?.isLoading == true {
+            // Audio the voice detector is sure holds no speech never reaches
+            // Qwen3-ASR, so it is not loaded for it.
+            if modelManager?.isLoading != true, await isConfidentSilence(filePath) {
+                Self.transcriptionLog.notice("stage=silenceBeforeLoad presence=silence")
+                progressCallback(1)
+                return .noSpeech
+            }
             _ = await loadSpeechModel()
         }
 
@@ -1184,6 +1350,7 @@ extension TranscriptionService {
             return nil
         }
         if isPausedForBackground(noteID: note.id) { return .pausedInBackground }
+        if networkWaitNoteIDs.contains(note.id) { return .waitingForNetwork }
         if !isEngineLoaded, !loadsQwenOnDemand { return .waitingForModel }
         if let index = localQueueOrder.firstIndex(of: note.id) { return .inLine(position: index + 1) }
         if audioWaitNoteIDs.contains(note.id) { return .waitingForAudio }
@@ -1349,6 +1516,8 @@ private extension TranscriptionService {
         }
         let audioWaits = audioWaitNoteIDs.filter { waitingNotes[$0] != nil || pendingTranscriptionQueue[$0] != nil }
         if audioWaits != audioWaitNoteIDs { audioWaitNoteIDs = audioWaits }
+        let networkWaits = networkWaitNoteIDs.filter { waitingNotes[$0] != nil || pendingTranscriptionQueue[$0] != nil }
+        if networkWaits != networkWaitNoteIDs { networkWaitNoteIDs = networkWaits }
 
         guard !waitingNotes.isEmpty else {
             waitingRecheckTask?.cancel()
@@ -1435,6 +1604,7 @@ private extension TranscriptionService {
             return
         }
         if audioWaitNoteIDs.contains(note.id) { audioWaitNoteIDs.remove(note.id) }
+        audioRetryWindowStartByNoteID.removeValue(forKey: note.id)
         guard stillOwnsAttempt() else { return }
         let resolvedDuration = await audioDurationProvider(url.path)
         Self.transcriptionLog.notice("attempt=\(attemptID, privacy: .public) stage=filePreparationFinished seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
@@ -1472,6 +1642,7 @@ private extension TranscriptionService {
             self?.reportExternalProgress(value, for: noteID)
         }
 
+        logLanguageDecision(noteID: noteID, trigger: "run")
         let mode = EnglishStretchRouting.Mode(languageHint: languageHint(for: noteID))
         var outcome: TranscriptionOutcome
         var english: (text: String, spans: [TranscriptSpan]?)?
@@ -1484,6 +1655,7 @@ private extension TranscriptionService {
                 text: parakeet.text, duration: nowProvider().timeIntervalSince(parakeetStarted),
                 modelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier))
         } else {
+            if mode == .english { logParakeetFallback(noteID: noteID, reason: "parakeetEmptyOrFailed") }
             outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
 
             // An aborted decode is often transient — retry once before giving up.
@@ -1627,9 +1799,10 @@ private extension TranscriptionService {
 
     private func handleUnavailableAudio(for note: VoiceNote) {
         let queuedAt = note.transcriptionQueuedAt ?? nowProvider()
+        let windowStart = max(queuedAt, audioRetryWindowStartByNoteID[note.id] ?? queuedAt)
         let permanentlyMissing = isAudioPermanentlyMissing(note.audioFilePath)
         if !permanentlyMissing,
-           nowProvider().timeIntervalSince(queuedAt) < audioAvailabilityRetryWindow {
+           nowProvider().timeIntervalSince(windowStart) < audioAvailabilityRetryWindow {
             // Keep the persisted first queue time so repeated cloud failures cannot
             // restart the retry window indefinitely, including after app relaunch.
             audioWaitNoteIDs.insert(note.id)
@@ -1637,6 +1810,7 @@ private extension TranscriptionService {
             return
         }
         audioWaitNoteIDs.remove(note.id)
+        audioRetryWindowStartByNoteID.removeValue(forKey: note.id)
         // Timeout means unavailable, not proven missing. Both outcomes preserve
         // prior text and recovery checkpoints and allow an explicit later retry.
         note.completeTranscription()

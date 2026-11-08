@@ -96,6 +96,7 @@ final class SegmentedAudioTranscriber {
     }
 
     func transcribe(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession? = nil) async {
+        transcriptionService.logLanguageDecision(noteID: note.id, trigger: "run")
         parakeetFirst = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id)) == .english
         await run(note: note, sourceURL: sourceURL, telemetrySession: suppliedSession)
         if parakeetFirst { await releaseEnglishEngine() }
@@ -569,9 +570,14 @@ final class SegmentedAudioTranscriber {
             let words = try await transcribeEnglish(sourceURL, start, end)
             if !words.isEmpty { parakeetWords = words.sorted { $0.start < $1.start }[...] }
             parakeetSeconds = nowProvider().timeIntervalSince(started)
+            if words.isEmpty { transcriptionService.logParakeetFallback(noteID: telemetrySession?.noteID, reason: "parakeetEmpty") }
         } catch {
             debugLog("⚠️ [SegmentedAudioTranscriber] Parakeet failed on frames \(start)–\(end): \(error)")
+            transcriptionService.logParakeetFallback(noteID: telemetrySession?.noteID, reason: "parakeetError")
         }
+        // Qwen3-ASR takes the slices next: free Parakeet first, so the two
+        // models are not in memory together.
+        if parakeetWords == nil { await releaseEnglishEngine() }
     }
 
     /// Runs Parakeet on the English stretches of the slices Qwen3-ASR wrote,

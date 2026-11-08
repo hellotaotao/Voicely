@@ -98,6 +98,9 @@ class ModelManager: ObservableObject {
                     }
                 }
                 self.loadingProgressValue = 1
+                if self.injectedLoader == nil, self.backend == .coreML {
+                    ModelWarmUp.markLoaded(.qwen3)
+                }
                 self.modelState = .loaded
             } catch {
                 self.errorMessage = error is CancellationError

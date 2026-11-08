@@ -487,6 +487,13 @@ class CloudStorageManager: ObservableObject {
         isFileReadyForReading(url)
     }
 
+    /// The audio is in iCloud but not downloaded to this device yet, so
+    /// reading it needs the network.
+    func audioNeedsDownload(at path: String) -> Bool {
+        guard let url = getFileURL(for: path), isCloudManagedURL(url) else { return false }
+        return !isAudioFileMissing(at: url) && !isFileReadyForReading(url)
+    }
+
     func isAudioFileMissing(at url: URL) -> Bool {
         if fileManager.fileExists(atPath: url.path) {
             return false

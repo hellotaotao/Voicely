@@ -160,18 +160,6 @@ final class RecordingSession: ObservableObject {
 
     /// The stop the user picked before starting; applied when the next recording begins.
     @Published var pendingStopPlan: RecordingStopPlan?
-    /// Language for the next recording, keyed like the "selectedLanguage"
-    /// setting ("auto", "english", …); nil follows the setting. Applied when
-    /// the recording begins, then cleared.
-    @Published var pendingLanguageKey: String?
-
-    /// Hands the language chosen on the recording screen to what comes next
-    /// instead of a recording: the choice applies once.
-    func takePendingLanguageKey() -> String? {
-        defer { pendingLanguageKey = nil }
-        return pendingLanguageKey
-    }
-
     /// The recording in progress has English chosen, so Parakeet transcribes it.
     @Published private(set) var recordingUsesParakeet = false
 
@@ -291,7 +279,7 @@ final class RecordingSession: ObservableObject {
         guard !audioService.isRecording, !isStartingRecording else { return }
 
         // A recording with English chosen runs on Parakeet alone.
-        let key = pendingLanguageKey ?? UserDefaults.standard.string(forKey: Qwen3ASRDefaults.selectedLanguageKey)
+        let key = transcriptionService.languageSettingKey()
         let needsQwen = EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)) != .english
         if needsQwen && !isModelLoaded && !isModelLoading {
             Task {
@@ -319,8 +307,10 @@ final class RecordingSession: ObservableObject {
 
         let note = makeRecordingNote(filePath: filePath)
         transcriptionService.configureNewNote(note, shouldStartImmediately: true)
-        transcriptionService.setLanguageKey(pendingLanguageKey, for: note.id)
-        pendingLanguageKey = nil
+        // The setting at the start holds for the whole recording.
+        transcriptionService.setLanguageKey(
+            Qwen3ASRDefaults.languageKey(transcriptionService.languageSettingKey()), for: note.id, source: .setting)
+        transcriptionService.logLanguageDecision(noteID: note.id, trigger: "recording")
         // With English chosen Parakeet transcribes the recording and Qwen3-ASR
         // is unloaded until it ends; any other recording needs Qwen3-ASR back.
         let transcribesWithParakeet = transcriptionService.transcribesWithParakeet(note.id)

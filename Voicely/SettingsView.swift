@@ -230,7 +230,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Speech Language")
                     .font(.subheadline.weight(.medium))
-                Text("Auto Detect handles every language, including Chinese mixed with English. Choose English only when your recordings are all in English: they are then transcribed faster and with less battery. While English is chosen, the recording screen shows it.")
+                Text("Choose English only if all your recordings are in English.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

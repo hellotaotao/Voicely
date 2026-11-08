@@ -105,22 +105,23 @@ struct RecordingSessionTests {
         return (session, audio, collector)
     }
 
-    @Test func languageChosenOnTheRecordingScreenAppliesToTheNextRecordingOnly() async throws {
+    @Test func languageSettingAtTheStartHoldsForTheWholeRecording() async throws {
         let audio = MockRecordingAudio()
         audio.currentPCMFileURL = TestTemporaryDirectory.fileURL(prefix: "voicely_test_", extension: "caf")
         let transcription = TranscriptionService()
         transcription.keepEnglishEngineLoaded = { _ in }
+        transcription.languageSettingKey = { "english" }
         let session = RecordingSession(audioService: audio, transcriptionService: transcription)
         let collector = NoteCollector()
         session.onRecordingComplete = { collector.append($0) }
-        session.pendingLanguageKey = "english"
 
         session.startRecording()
         try await waitUntil { session.currentRecordingNote != nil }
         let note = try #require(collector.notes.first)
+        transcription.languageSettingKey = { "auto" }
 
         #expect(transcription.languageHint(for: note.id) == "English")
-        #expect(session.pendingLanguageKey == nil)
+        #expect(transcription.fixedLanguage(for: note.id)?.source == .setting)
         transcription.setLanguageKey(nil, for: note.id)
     }
 
@@ -150,7 +151,7 @@ struct RecordingSessionTests {
             coordinator = created
             return created
         }
-        session.pendingLanguageKey = "english"
+        transcription.languageSettingKey = { "english" }
 
         session.startRecording()
         try await waitUntil { session.currentRecordingNote != nil }
@@ -179,7 +180,7 @@ struct RecordingSessionTests {
         session.onRecordingComplete = { collector.append($0) }
         transcription.keepEnglishEngineLoaded = { _ in }
         transcription.beginEnglishRecording(noteID: UUID())
-        session.pendingLanguageKey = "auto"
+        transcription.languageSettingKey = { "auto" }
 
         session.startRecording()
         try await waitUntil { session.currentRecordingNote != nil }
@@ -216,7 +217,7 @@ struct RecordingSessionTests {
             coordinator.releaseEnglishEngine = {}
             return coordinator
         }
-        session.pendingLanguageKey = "english"
+        transcription.languageSettingKey = { "english" }
         session.startRecording()
         try await waitUntil { session.currentRecordingNote != nil }
         let note = try #require(collector.notes.first)
@@ -233,14 +234,6 @@ struct RecordingSessionTests {
             #expect(note.transcriptionState == .completed)
             #expect(transcription.languageHint(for: note.id) == transcription.languageHint(for: nil))
         }
-    }
-
-    @Test func languageChosenOnTheRecordingScreenCanGoToAnImportOnce() {
-        let session = RecordingSession(audioService: MockRecordingAudio(), transcriptionService: TranscriptionService())
-        session.pendingLanguageKey = "english"
-
-        #expect(session.takePendingLanguageKey() == "english")
-        #expect(session.takePendingLanguageKey() == nil)
     }
 
     @Test func defensiveStopNoteHasLocalOriginAndIsImmediatelyEligible() async {

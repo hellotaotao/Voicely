@@ -50,6 +50,8 @@ class CloudStorageManager: ObservableObject {
     private var localContainerURL: URL?
     private var metadataQuery: NSMetadataQuery?
     private var syncStatusUpdateTask: Task<Void, Never>?
+    /// Holds the migration flag; tests pass their own.
+    private let defaults: UserDefaults
     
     enum SyncStatus: Equatable {
         case idle
@@ -60,6 +62,7 @@ class CloudStorageManager: ObservableObject {
     }
     
     private init() {
+        defaults = .standard
         setupLocalContainer()
         guard !AppRuntime.isIsolatedFromUserData else { return }
         setupCloudContainer()
@@ -83,7 +86,7 @@ class CloudStorageManager: ObservableObject {
             } else if !isCloudEnabled && wasEnabled {
                 tearDownMetadataQuery()
                 cloudContainerURL = nil
-                UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
+                defaults.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
             }
         }
     }
@@ -92,8 +95,10 @@ class CloudStorageManager: ObservableObject {
     init(
         testLocalContainerURL: URL,
         testCloudContainerURL: URL? = nil,
-        testCloudEnabled: Bool = false
+        testCloudEnabled: Bool = false,
+        testDefaults: UserDefaults = UserDefaults(suiteName: "CloudStorageManagerTests")!
     ) {
+        defaults = testDefaults
         localContainerURL = testLocalContainerURL
         cloudContainerURL = testCloudContainerURL
         isCloudEnabled = testCloudEnabled
@@ -101,17 +106,46 @@ class CloudStorageManager: ObservableObject {
 #endif
 
     private func setupLocalContainer() {
+        // Tests run inside the app's own sandbox. Audio they record in its
+        // Documents folder would be moved into the user's iCloud by the next
+        // launch's migration, so each test process records into a scratch folder.
+        if AppRuntime.isRunningTests {
+            localContainerURL = Self.makeTestAudioDirectory(
+                in: fileManager.temporaryDirectory.appendingPathComponent("VoicelyTestAudio", isDirectory: true)
+            )
+            return
+        }
         let localURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         localContainerURL = localURL
-        if !AppRuntime.isRunningTests {
-            debugLog("Local audio directory: \(localURL.path)")
+        debugLog("Local audio directory: \(localURL.path)")
+    }
+
+    /// Makes a new folder for one test process under `root`. Folders not
+    /// touched for a day are left over from earlier runs and are deleted;
+    /// younger ones may belong to a run still going in another process.
+    nonisolated static func makeTestAudioDirectory(in root: URL, now: Date = Date()) -> URL {
+        let fileManager = FileManager.default
+        let staleBefore = now.addingTimeInterval(-24 * 60 * 60)
+        let leftovers = (try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        )) ?? []
+        for folder in leftovers {
+            let modified = (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            if modified < staleBefore {
+                try? fileManager.removeItem(at: folder)
+            }
         }
+        let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
     
     private func setupCloudContainer() {
         guard syncAudioFiles else {
             isCloudEnabled = false
-            UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
+            defaults.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
             debugLog("iCloud audio sync disabled - using local storage only")
             return
         }
@@ -141,7 +175,7 @@ class CloudStorageManager: ObservableObject {
             debugLog("iCloud Documents not available - check entitlements and Apple ID")
             isCloudEnabled = false
             cloudContainerURL = nil
-            UserDefaults.standard.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
+            defaults.removeObject(forKey: Self.localToCloudMigrationDefaultsKey)
         }
     }
     
@@ -326,7 +360,7 @@ class CloudStorageManager: ObservableObject {
     func migrateLocalFilesToCloudIfNeeded() async {
         guard syncAudioFiles, isCloudEnabled, let cloudURL = cloudContainerURL else { return }
 
-        if UserDefaults.standard.bool(forKey: Self.localToCloudMigrationDefaultsKey) {
+        if defaults.bool(forKey: Self.localToCloudMigrationDefaultsKey) {
             return
         }
 
@@ -337,7 +371,7 @@ class CloudStorageManager: ObservableObject {
                 try Self.performLocalToCloudMigration(localURL: localURL, cloudURL: cloudURL)
             }.value
 
-            UserDefaults.standard.set(true, forKey: Self.localToCloudMigrationDefaultsKey)
+            defaults.set(true, forKey: Self.localToCloudMigrationDefaultsKey)
 
             if report.migratedCount > 0 {
                 debugLog("Migrated \(report.migratedCount) legacy local file(s) to iCloud")

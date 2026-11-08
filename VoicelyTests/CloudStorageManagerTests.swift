@@ -19,16 +19,18 @@ struct CloudStorageManagerTests {
         let cloudURL = rootURL.appendingPathComponent("cloud", isDirectory: true)
         try fileManager.createDirectory(at: localURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: cloudURL, withIntermediateDirectories: true)
-        let migrationKey = "VoicelyLocalToCloudMigrationV1"
-        UserDefaults.standard.removeObject(forKey: migrationKey)
+        // The app's own defaults hold the user's real migration flag.
+        let suiteName = "CloudStorageManagerTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
         defer {
-            UserDefaults.standard.removeObject(forKey: migrationKey)
+            defaults.removePersistentDomain(forName: suiteName)
             try? fileManager.removeItem(at: rootURL)
         }
         let manager = CloudStorageManager(
             testLocalContainerURL: localURL,
             testCloudContainerURL: cloudURL,
-            testCloudEnabled: true
+            testCloudEnabled: true,
+            testDefaults: defaults
         )
 
         try Data([1]).write(to: localURL.appendingPathComponent("first.m4a"))
@@ -40,6 +42,37 @@ struct CloudStorageManagerTests {
         await manager.migrateLocalFilesToCloudIfNeeded()
         #expect(!fileManager.fileExists(atPath: cloudURL.appendingPathComponent("second.m4a").path))
         #expect(fileManager.fileExists(atPath: localURL.appendingPathComponent("second.m4a").path))
+        #expect(defaults.bool(forKey: "VoicelyLocalToCloudMigrationV1"))
+    }
+
+    // Tests share the app's sandbox: audio recorded into its Documents folder
+    // would reach the user's iCloud on the next launch.
+    @Test @MainActor func testsRecordOutsideTheAppDocumentsFolder() {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let recording = CloudStorageManager.shared.generateAudioFilename()
+        #expect(!recording.standardizedFileURL.path.hasPrefix(documents.standardizedFileURL.path))
+        #expect(recording.standardizedFileURL.path.hasPrefix(
+            FileManager.default.temporaryDirectory.standardizedFileURL.path))
+    }
+
+    @Test func testAudioDirectoryDeletesOnlyDayOldLeftovers() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? fileManager.removeItem(at: root) }
+        let now = Date()
+        let old = root.appendingPathComponent("old", isDirectory: true)
+        let running = root.appendingPathComponent("running", isDirectory: true)
+        try fileManager.createDirectory(at: old, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: running, withIntermediateDirectories: true)
+        try fileManager.setAttributes([.modificationDate: now.addingTimeInterval(-25 * 60 * 60)], ofItemAtPath: old.path)
+        try fileManager.setAttributes([.modificationDate: now.addingTimeInterval(-60 * 60)], ofItemAtPath: running.path)
+
+        let directory = CloudStorageManager.makeTestAudioDirectory(in: root, now: now)
+
+        #expect(!fileManager.fileExists(atPath: old.path))
+        #expect(fileManager.fileExists(atPath: running.path))
+        #expect(fileManager.fileExists(atPath: directory.path))
+        #expect(directory.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL)
     }
 
     @Test @MainActor func deleteFileRemovesMatchingLocalAndCloudCopies() async throws {

@@ -90,12 +90,13 @@ struct VoicelyApp: App {
                     await launchRecordingLiveActivityPreviewIfNeeded()
                     #endif
 
-                    if AppRuntime.isRunningTests {
-                        seedUITestNoteIfNeeded()
-                    } else if AppRuntime.isDemoMode {
+                    // Demo mode first: the screenshot UI test launches it too.
+                    if AppRuntime.isDemoMode {
                         #if DEBUG
                         DemoLibrary.seed(into: sharedModelContainer.mainContext)
                         #endif
+                    } else if AppRuntime.isRunningTests {
+                        seedUITestNoteIfNeeded()
                     } else {
                         syncMonitor.setModelContainer(sharedModelContainer)
                         await syncMonitor.checkCloudKitAccountStatus()

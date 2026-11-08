@@ -100,7 +100,7 @@
 - 第 10、12 项的数字：千问第一次加载（这个包装好后要为神经引擎编译）19.5 秒，加载完占用 1267 MB，边录边转时最高 1367 MB；编译过以后再加载 0.77 秒。Parakeet 第一次加载（同样要编译）14 秒。两个模型同时在内存里最高 1862 MB。iPhone 上千问要不要也改成用到时才加载，还差一个数：重新打开 app 后第一次加载要多久。
 - 发现的问题：开着飞行模式重转一条音频只在 iCloud 里的笔记，app 干等约 90 秒下载，锁屏后台任务 31 秒没有进度就被系统收走，只显示 "task failed"；首页语言菜单当时只管下一次录音，设置页还是 English，重转就按 English 走，中文被 Parakeet 转成了乱码英文；重转确认框不管用哪个引擎都写千问。
 
-build 4（2026-11-08，代码改动，待打包）针对这些：
+build 4（2026-11-08，从 `ef50820` 的干净源码打包，各约 5 分钟；iOS 17:50、Mac 17:51 传完 TestFlight，并行上传各约 27 分钟）针对这些：
 - 离线时音频只在 iCloud 里：不提交后台任务，笔记显示 "Waiting for internet"，联网后自动开始（`NetworkReachability.swift`）；等网络的时间不算进"5 分钟拿不到音频就停止自动重试"，进后台也不会被标成"被系统暂停"。
 - 语言改成一个全局设置：首页录音条的菜单和设置页的 Speech Language 是同一个值，去掉了"只管下一次录音"；设置页说明缩成一句。
 - 重转默认用这条笔记自己的语言（上次千问转的用 Auto Detect，全部是 Parakeet 转的用 English，没转过的按设置），确认框按钮写明 "Re-transcribe with Auto Detect" / "Re-transcribe in English"；笔记是 English 时多一个 "Re-transcribe with Auto Detect" 作为纠错的退路。请求那一刻就把语言定下来，存在本机（`RunLanguageStore.swift`），排队、改设置、app 被杀后恢复都不换语言。

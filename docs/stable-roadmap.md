@@ -121,12 +121,13 @@ build 4（2026-11-08，从 `ef50820` 的干净源码打包，各约 5 分钟；i
   - 40 分钟那条：千问锁屏时每秒处理 1.3–1.6 秒音频，中途点亮屏幕那 45 秒是 6–7 倍；转到 12 分钟时用户取消。按这个速度整条要 25 分钟以上，Parakeet 约 1 分钟。
   - 锁屏重转慢在 CPU：同一种 15 秒的片，检测语音那一步从前台 0.035 秒变成 0.33 秒，千问每一片慢 2–4 倍；Parakeet 主要算在神经引擎上，锁屏仍有 45 倍。下午 build 3 那条录音里，锁屏后边录边转的一片 15 秒音频 2.0 秒转完、检测语音 0.033 秒，没有变慢（只有一片，样本很少）。
   - 苹果声音分类器在锁屏重转时报错（`Sound classifier review failed`，SoundAnalysis Code=2），那一片按 Silero 的静音判断处理，和加这道复核之前一样。锁屏录音时能不能跑还没测。
-- build 5 的改动（2026-11-08 晚，未打包）：
+- build 5（从 `6694203` 的干净源码打包，各约 4 分钟；2026-11-09 00:51 iOS 和 Mac 都传完 TestFlight，并行上传各约 23 分钟）的改动：
   - 音频连 iCloud 的占位文件都不在本机时，不再提交后台任务（以前提交后 0.04 秒就以失败结束，系统记成一次失败）；音频到了、开始转的那一刻再提交。日志 `savedContinuationSkipped reason=audioNotOnDevice`。
   - iPhone 上千问也改成用到时才加载，空闲 10 秒卸载，和 Mac 一样。依据：编译过以后加载 0.76–0.79 秒，重开 app 后第一次也是 0.78 秒，空闲时占着约 1.16 GB。
   - 重转的默认语言加看已有文字：文字读起来是英文的（没有非拉丁字母，被认成别的语言的句子按字数不超过 1%），不管上次是谁转的，主按钮都是 "Re-transcribe in English"，下面留 "with Auto Detect"。只要有一句就算外语太严：一条 2 小时的英文笔记就因为一句被误认的话被判出局；Mac 上那些只有拉丁字母的笔记里，误认的句子占 0.06–0.31%，真有外语段落的占 4% 以上。整条检查一小时的文字在 Mac 上约 0.5 秒，打开笔记详情时在后台算好并按笔记缓存。
   - Auto Detect 下千问转完、把英文段落交给 Parakeet 之前，先卸载千问（重转长录音、录音停止后的收尾、短录音一次转完，三处都是）。以前两个模型同时在内存里，23:07 那次最高 1760 MB；千问单独转写时最高约 1.47 GB，Parakeet 单独约 0.6 GB。前提条件：千问是用到时才加载的；这一刻没有千问在解码，也没有在加载（比如刚开始的新录音会预加载）；除了这条笔记自己，没有别的录音在进行。卸载过程中如果有解码要开始，会先等卸载完再重新加载，不会用到半卸载的模型。日志 `event=qwenReleasedForParakeet`。
   - 验证：Mac 上 510 个单元测试通过（含：没有别的录音时卸载，有别的录音或千问常驻时不卸载）；iPhone 模拟器上千问转的英文笔记详情页写 "Re-transcribe will use Parakeet TDT 0.6B v2"，确认框是 English 加 Auto 两个按钮。
+  - 装上 build 5 后在真机上看：以前千问转的英文笔记，确认框主按钮是 "Re-transcribe in English"；锁屏时千问能在后台加载（`qwenLoaded`）；Auto 转英文录音时日志有 `qwenReleasedForParakeet`，峰值约 1.5 GB；锁屏开一次会，看边录边转每片要多久（目前只有一片样本：15 秒音频 2.0 秒）。
   - 声音分类器锁屏用不了的原因查清了：设备日志在报错前一行是 `Insufficient Permission (to submit GPU work from background)`。苹果内置的声音分类器在 iPhone 上有一部分在 GPU 上算，iOS 不让后台 app 用 GPU；分类器不让选算在哪个硬件上。iOS 26 的后台任务 GPU 权限按论坛反映目前只有 iPad 支持，而且锁屏录音用不上。1.0 不改，等锁屏会议的日志：每片的 `presence=silence` 和 `Sound classifier review failed` 已经够数出 Silero 判静音、没能复核的片有多少。
 - 上架后再做：English 转完用千问只读语种标签检查是不是真的英文（2026-11-08 实测，苹果的文字语言识别认不出 Parakeet 把中文转成的乱码英文，一条 8.5 分钟的中文录音转出的 248 个词被判为英文）；录音中途切到 Auto 后在录音过程中就补转前半段（现在要等停止后才补，切换前每录 10 分钟停止后多等约 70–85 秒）。
 
@@ -216,8 +217,8 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 **转录主流程**
 
 - 千问 CoreML：一台最低支持的设备加一台较新的设备，前台和锁屏各录一条并转完；长录音靠用户日常半小时左右的会议覆盖（60–90 分钟的专项 2026-11-07 取消），记录模型加载峰值内存、后半程速度、最长进度上报间隔（Mac 上 CoreML 最长 1.09 s，iOS 约 30 s 没有进度就判停滞）、停止到文字落定的时间。最低支持 iOS 18，锁屏续跑（continued processing）依赖 iOS 26，两条路径分别验。（原第 6 项、④、5c）
-- 千问 CoreML 的加载时间：装好后第一次（要为神经引擎编译）和之后每次各要多久，锁屏时在后台能否加载成功。Mac 上千问已经改成用到时才加载、空闲 10 秒卸载（2026-11-06），iPhone 和 iPad 还是启动就加载、一直留着，等这项数字出来再决定要不要跟 Mac 一样。（见"六"）
-- 去掉 `processing` 后台模式之后（2026-11-05 起的包）：iOS 26 上停止录音或点 Re-transcribe 后锁屏，Console 里 `ContinuedProcessing` 类别要出现 `event=submissionAccepted`。出现 `submissionRejected` 且 `code=3`（不允许），就把 `processing` 加回 `UIBackgroundModes`。依据：WWDC25 讲 continued processing 时只要求在 `BGTaskSchedulerPermittedIdentifiers` 登记标识符，没提后台模式；`processing` 是 `BGProcessingTask` 要的，app 没用它。
+- 千问 CoreML 的加载时间：✅ 已量（2026-11-08，iPhone 17 Pro）：装好后第一次 18.6–19.5 秒，之后 0.76–0.79 秒，划掉 app 重开后第一次 0.78 秒；build 5 起 iPhone 也改成用到时才加载。还剩一项：**锁屏时在后台加载千问能否成功**。今晚几次加载都发生在锁屏前一刻；build 5 加载得更频繁（交给 Parakeet 前会先卸载，队列里下一条要重新加载），装上后要在日志里看到一次锁屏期间的 `qwenLoaded`。（见"六"）
+- ✅ 去掉 `processing` 后台模式之后（2026-11-05 起的包）：build 3、build 4 的设备日志里，停止录音和重转后锁屏都是 `submissionAccepted`。原要求：iOS 26 上停止录音或点 Re-transcribe 后锁屏，Console 里 `ContinuedProcessing` 类别要出现 `event=submissionAccepted`。出现 `submissionRejected` 且 `code=3`（不允许），就把 `processing` 加回 `UIBackgroundModes`。依据：WWDC25 讲 continued processing 时只要求在 `BGTaskSchedulerPermittedIdentifiers` 登记标识符，没提后台模式；`processing` 是 `BGProcessingTask` 要的，app 没用它。
 - 锁屏收尾：锁屏录 5 分钟以上的会议，解锁、停止、立刻再锁屏。回来时文字完整、没有整篇重转；详情页显示 "Finalizing transcription…" 而不是 "Recording"，而且只持续尾段解码的时间；出现 `[… transcription unavailable]` 就记下是哪段、什么内容。（P-0、P-0g）
 - 锁屏重转：前台点 Re-transcribe 后锁屏，看能否在锁屏期间完成；被系统中断后解锁，从已保存的分段继续，全部成功才替换旧文字。锁屏重转一条 20 分钟以上的录音看能撑多久，被收走就拉设备日志看理由（系统给这类任务标的 `UserInitiated, 900s` 是否等于 15 分钟上限，还没确认）。（P-0a、P-0c、P-0d）
 - 自动恢复：留一个没转完的重转任务，重启 App 让它自动恢复，不点 Re-transcribe 直接锁屏，看后台任务是否获批、锁屏期间断点是否推进。（P-0e）
@@ -225,15 +226,15 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 
 **Parakeet（英文）**
 
-- 神经引擎上的速度、锁屏表现，以及和千问 CoreML 同时在内存里时的峰值。（3a）
-- 装 0.30.2 或更新的版本后，第一次就锁屏重转一条长英文录音，确认 Parakeet 首次加载期间后台任务不再被收走。（3a 待办 5）
+- ✅ 神经引擎上的速度、锁屏表现，以及和千问 CoreML 同时在内存里时的峰值：锁屏重转 270 秒英文 6 秒转完（约 45 倍），加载 1.07 秒；和千问同时在内存里最高 1760 MB，build 5 起交给 Parakeet 前先卸载千问。装上 build 5 后看日志里的 `qwenReleasedForParakeet` 和峰值是否降到 1.5 GB 左右。（3a）
+- ✅ 装 0.30.2 或更新的版本后，第一次就锁屏重转一条长英文录音，确认 Parakeet 首次加载期间后台任务不再被收走：build 4 起新版本打开时就预热，锁屏时加载只要 1.07 秒，不再有长时间没进度。（3a 待办 5）
 - 选 English 导入长文件：Parakeet 转完整个文件之前进度条不动，看要等多久；后台时间用完时这一步只能整段重来。（3a）
 - 选 English 的录音结束后，锁屏状态下在后台重新加载 CoreML 千问能否成功；失败的话回到前台会再加载。（3a）
 
 **语音门控**
 
 - 真实环境噪声（人声嘈杂、电视、音乐、关门）都落在"确定静音"一档，CoreML 不在噪声上编长句；反过来，远场小声的短回答（"不行""同意""No"这类决定会议结论的话）不被当成噪声丢掉。苹果声音分类器可能把电视、人声嘈杂、带人声的音乐判成有人说话，这类素材也要录。（原第 7 项、P-0o、4a）
-- 苹果声音分类器在锁屏时能不能跑：锁屏录音时让手机放一段 Silero 听不见的声音（4a 那段讲座录音主讲人部分，例如 12:22 起的 18 秒），在 Console 里看 `SpeechGate` 类别的日志（Release 包也会记）。出现 "Sound classifier review failed" 说明锁屏时跑不了；出现 "sound classifier heard speech"、并且这一片转出了文字，说明能用。（原第 7 项、4a）
+- 苹果声音分类器在锁屏时能不能跑：已有答案，不能（2026-11-08 锁屏重转时报错，原因是 iOS 不让后台 app 用 GPU，见上面 build 4 第二轮）。锁屏录音时 app 同样在后台，所以也跑不了，1.0 不改。剩下的事：下次锁屏开会后拉设备日志，数一下 `presence=silence`（Silero 判静音）和紧跟着的 "Sound classifier review failed" 各有多少片。很少就不管；多的话，上架后考虑换一个能在神经引擎上跑的分类模型，或者回到前台再补复核。（原第 7 项、4a）
 
 **录音与恢复**
 
@@ -241,6 +242,7 @@ re-transcribe / 整文件转录时这两个值出不来；live transcription 正
 - 定时停止：锁屏时一秒一次的计时检查照常运行，到点能停止并保存；锁屏通知上的"延长 10/30 分钟""立即停止"按钮；Live Activity 副标题显示 "Stops at"。（③）
 - 麦克风授权：全新安装走完引导点 "Allow Microphone"；点 "Not now" 跳过后第一次点录音当场弹窗、允许后直接开录；拒绝后点录音弹出"去设置"提示，改好回到 App 后按钮恢复。Mac 上三条路径 2026-10-26 已实测。（原第 6 项）
 - 从旧 TestFlight 版本升级后，旧笔记的音频和文字可读。（原 R0 验收）
+- 音频已经不存在的旧笔记点转写后不再重试（build 4，2026-11-08）：三条 2026-09-08 的笔记（Voice Note 21:39、21:55、13:10，音频在 Mac 的 iCloud 文件夹里也没有），点了以后各只尝试一次就拿不到音频，之后按设计应该每 30 秒重试、5 分钟后停止并提示 "Audio is still unavailable"，但日志里再没有任何记录，重开 app 后也没有。Mac 上用测试模拟同样情况（含"来自别的设备的笔记"）能正常重试，原因没查到。先看这三条现在显示什么；如果一直停在等待或排队，就在 build 5 上再点一次并拉日志。不丢数据，用户可以手动取消，不挡发布。
 
 **界面与系统入口**
 

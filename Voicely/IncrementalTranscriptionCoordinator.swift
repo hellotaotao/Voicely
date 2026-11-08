@@ -357,12 +357,13 @@ final class IncrementalTranscriptionCoordinator {
     /// true when anything was replaced, false when nothing was, Parakeet
     /// failed, or the recording needs the regular queue anyway. A stretch that
     /// fails keeps Qwen3-ASR's text.
-    func transcribeEnglishStretches(mode: EnglishStretchRouting.Mode) async -> Bool {
+    func transcribeEnglishStretches(mode: EnglishStretchRouting.Mode, noteID: UUID? = nil) async -> Bool {
         guard !requiresFullTranscription else { return false }
         let tagged = languageTaggedSlices
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: tagged, mode: mode)
         guard !stretches.isEmpty else { return false }
         if let telemetryNoteID { transcriptionService.recordModel(.parakeet, afterRunOf: telemetryNoteID) }
+        await transcriptionService.releaseQwenBeforeEnglishStretches(of: noteID ?? telemetryNoteID)
 
         let counter = transcriptionService.decodeWorkCounter
         let transcribeEnglish = self.transcribeEnglish

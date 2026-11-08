@@ -1071,6 +1071,42 @@ struct EnglishRecordingTests {
         #expect(try await eventually { !setup.manager.isModelLoaded() })
     }
 
+    /// Auto Detect hands English to Parakeet once Qwen3-ASR is done with the
+    /// note: Qwen3-ASR is unloaded first, unless another recording may need
+    /// it or it is kept loaded on this device.
+    @Test(arguments: [(false, false, false), (true, false, true), (false, true, true)] as [(Bool, Bool, Bool)])
+    @MainActor func qwenGoesBeforeParakeetTakesTheEnglishUnlessSomethingElseNeedsIt(
+        otherRecording: Bool, keepsQwenLoaded: Bool, qwenLoadedForParakeet: Bool
+    ) async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let setup = englishSettingService(parakeetWords: [])
+        let service = setup.service
+        service.languageSettingKey = { "auto" }
+        service.keepsQwenLoaded = keepsQwenLoaded
+        service.idleQwenReleaseDelay = 60
+        service.transcribeImpl = { [unowned service] _, _ in
+            service.decodedLanguage = "English"
+            return "qwen"
+        }
+        var loadedWhenParakeetRan: [Bool] = []
+        service.transcribeEnglish = { _, _, _ in
+            loadedWhenParakeetRan.append(setup.manager.isModelLoaded())
+            return [TimedWord(text: "parakeet", start: 4, end: 5)]
+        }
+        if otherRecording { service.beginLocalRecording(noteID: UUID()) }
+        // Kept loaded, it is loaded before any work, as at launch.
+        if keepsQwenLoaded { _ = await service.loadSpeechModel() }
+        let note = VoiceNote(title: "Standup", audioFilePath: url.path)
+        note.transcriptionOriginDeviceID = "this-device"
+
+        #expect(await service.requestTranscription(for: note, force: true))
+
+        #expect(setup.loads() == 1)
+        #expect(loadedWhenParakeetRan == [qwenLoadedForParakeet])
+        #expect(note.transcription == "parakeet")
+    }
+
     @Test @MainActor func autoDetectSettingKeepsQwenLoaded() async throws {
         let setup = englishSettingService(parakeetWords: [])
         setup.service.idleQwenReleaseDelay = 0.02

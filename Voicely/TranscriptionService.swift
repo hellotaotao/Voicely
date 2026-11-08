@@ -311,6 +311,27 @@ class TranscriptionService: ObservableObject {
             scheduleIdleQwenRelease()
             return
         }
+        await unloadQwen()
+    }
+
+    /// Auto Detect hands a note's English passages to Parakeet once Qwen3-ASR
+    /// is done with the note. Qwen3-ASR goes first, so the two are not in
+    /// memory together: 1.76 GB at the peak on an iPhone 17 Pro (2026-11-08),
+    /// against about 1.47 GB for Qwen3-ASR alone. Only when nothing else may
+    /// need it: it loads on demand, no Qwen3-ASR decode or load is under way,
+    /// and no recording other than `noteID`'s own is going on. Work that needs
+    /// it later loads it again, in under a second once compiled; a decode that
+    /// starts while it unloads waits for that and loads it (`holdQwenForDecode`).
+    func releaseQwenBeforeEnglishStretches(of noteID: UUID?) async {
+        let otherRecordings = localRecordingNoteIDs.subtracting(noteID.map { [$0] } ?? [])
+        guard loadsQwenOnDemand, isEngineLoaded, !isReleasingIdleQwen, !isTranscribing,
+              modelManager?.isLoading != true, otherRecordings.isEmpty else { return }
+        MemoryFootprint.log.notice("event=qwenReleasedForParakeet note=\(noteID?.uuidString ?? "-", privacy: .public)")
+        await unloadQwen()
+    }
+
+    private func unloadQwen() async {
+        idleQwenRelease?.cancel()
         isReleasingIdleQwen = true
         idleQwenRelease = Task { @MainActor [weak self] in
             await self?.modelManager?.unloadModel()
@@ -1825,6 +1846,7 @@ private extension TranscriptionService {
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
         guard !stretches.isEmpty else { return nil }
         recordModel(.parakeet, session: session)
+        await releaseQwenBeforeEnglishStretches(of: session.noteID)
         let routed = await EnglishStretchRouting.transcribeStretches(
             stretches, in: slices, fileURL: fileURL, sampleRate: info.sampleRate, transcribe: transcribeEnglish)
         await releaseEnglishEngine()

@@ -593,6 +593,7 @@ final class SegmentedAudioTranscriber {
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
         guard !stretches.isEmpty else { return nil }
         if let telemetrySession { transcriptionService.recordModel(.parakeet, session: telemetrySession) }
+        await transcriptionService.releaseQwenBeforeEnglishStretches(of: note.id)
         let transcribeEnglish = self.transcribeEnglish
         let routed = await EnglishStretchRouting.transcribeStretches(
             stretches, in: slices, fileURL: sourceURL, sampleRate: sampleRate, transcribe: transcribeEnglish)

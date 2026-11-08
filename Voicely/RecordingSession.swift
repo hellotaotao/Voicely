@@ -863,7 +863,7 @@ final class RecordingSession: ObservableObject {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
                 // Reads the raw recording, so it runs before that is cleaned up.
                 let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
-                parakeetReplacedText = await coord.transcribeEnglishStretches(mode: mode)
+                parakeetReplacedText = await coord.transcribeEnglishStretches(mode: mode, noteID: note.id)
                 if parakeetReplacedText { accumulatedTranscript = coord.accumulatedTranscript }
                 // That pass runs after the live clock stopped, so the note's badge
                 // learns of Parakeet only here.

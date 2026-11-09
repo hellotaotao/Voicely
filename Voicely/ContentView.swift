@@ -37,10 +37,12 @@ struct ContentView: View {
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
     // An iPad in portrait would otherwise open on the empty detail pane, with the
-    // note list and the record button folded behind the sidebar button.
+    // note list and the record button folded behind the sidebar button. The same
+    // holds for iPhone Duo's inner display held upright.
     @State private var splitColumnVisibility: NavigationSplitViewVisibility =
-        UIDevice.current.userInterfaceIdiom == .pad && !ProcessInfo.processInfo.isMacCatalystApp
-        ? .all : .automatic
+        ProcessInfo.processInfo.isMacCatalystApp ? .automatic : .all
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var isDropTargeted = false
     @State private var folderFilter: NoteFolderFilter = .all
     @State private var searchText = ""
@@ -63,6 +65,13 @@ struct ContentView: View {
 
     private var isPhoneDevice: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
+    }
+
+    /// The iPad's list-and-detail split: iPad and Mac, and a phone screen that
+    /// is regular in both directions, such as iPhone Duo's inner display. A
+    /// regular iPhone in landscape is regular only across, and keeps its own layout.
+    private var usesSplitLayout: Bool {
+        !isPhoneDevice || (horizontalSizeClass == .regular && verticalSizeClass == .regular)
     }
 
     private var selectedNote: VoiceNote? {
@@ -195,6 +204,16 @@ struct ContentView: View {
             }
             .background(VoicelyTheme.groupedBackground)
         }
+        .onChange(of: usesSplitLayout) { _, isSplit in
+            // Unfolding or folding iPhone Duo swaps the layouts: keep the open note on screen.
+            if isSplit {
+                if selectedNoteID == nil {
+                    selectedNoteID = compactNavigationPath.last ?? voiceNotes.first?.id
+                }
+            } else if let selectedNoteID, voiceNotes.contains(where: { $0.id == selectedNoteID }) {
+                compactNavigationPath = [selectedNoteID]
+            }
+        }
         .onChange(of: folderRecords.count) { _, _ in
             // Another device may have removed the folder this list shows.
             if case .folder(let slot) = folderFilter, folders.folder(forSlot: slot) == nil {
@@ -251,8 +270,14 @@ struct ContentView: View {
 
     private func shouldUseHorizontalLayout(geometry: GeometryProxy) -> Bool {
         return geometry.size.width > geometry.size.height
-            && UIDevice.current.userInterfaceIdiom == .phone
+            && geometry.size.width >= Self.minimumHorizontalLayoutWidth
+            && !usesSplitLayout
     }
+
+    /// The narrowest iPhone held sideways (812 pt, the mini) still leaves the
+    /// detail pane room for the transcript. iPhone Duo's outer display held
+    /// sideways is about 680 pt: its detail pane wrapped a letter per line.
+    private static let minimumHorizontalLayoutWidth: CGFloat = 720
 
     private func horizontalSplitView(geometry: GeometryProxy) -> some View {
         HStack(spacing: 0) {
@@ -278,10 +303,10 @@ struct ContentView: View {
 
     @ViewBuilder
     private var defaultNavigationView: some View {
-        if isPhoneDevice {
-            compactPhoneNavigationView
-        } else {
+        if usesSplitLayout {
             splitNavigationView
+        } else {
+            compactPhoneNavigationView
         }
     }
 
@@ -779,15 +804,15 @@ struct ContentView: View {
         #endif
 
         guard let selectedNoteID else {
-            if !isPhoneDevice {
+            if usesSplitLayout {
                 self.selectedNoteID = voiceNotes.first?.id
             }
             return
         }
 
         guard voiceNotes.contains(where: { $0.id == selectedNoteID }) else {
-            self.selectedNoteID = isPhoneDevice ? nil : voiceNotes.first?.id
-            if isPhoneDevice {
+            self.selectedNoteID = usesSplitLayout ? voiceNotes.first?.id : nil
+            if !usesSplitLayout {
                 compactNavigationPath = []
             }
             return
@@ -1152,11 +1177,11 @@ struct ContentView: View {
         }
 
         if selectedNoteID == note.id {
-            if isPhoneDevice {
+            if usesSplitLayout {
+                selectedNoteID = voiceNotes.first { $0.id != note.id }?.id
+            } else {
                 selectedNoteID = nil
                 compactNavigationPath = []
-            } else {
-                selectedNoteID = voiceNotes.first { $0.id != note.id }?.id
             }
         }
 

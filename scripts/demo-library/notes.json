@@ -39,13 +39,19 @@
       "id": "quarterly-planning",
       "title": "季度规划会",
       "hoursAgo": 26,
-      "durationSeconds": 4320,
       "folderSlot": 1,
       "engine": "qwen",
       "sentences": [
-        { "text": "这个季度我们主要做三件事：iPad 版上线、改进新用户引导，还有把客服的回复时间压到一天以内。" },
-        { "text": "第一件事最紧，日期定在下周四，QA 那边还有两个崩溃要修。" },
-        { "text": "第二件事先做小范围测试，月底之前出结论。" }
+        { "voice": "Flo (Chinese (China mainland))", "text": "这个季度我们主要做三件事：iPad 版上线、改进新用户引导，还有把客服的回复时间压到一天以内。" },
+        { "voice": "Eddy (Chinese (China mainland))", "text": "iPad 版的日期定在下周四，QA 那边还有两个 crash 要修，周二之前应该能修完。" },
+        { "voice": "Tingting (Chinese (China mainland))", "text": "新用户引导那块，我们看了 onboarding 的数据，大概三分之一的人停在麦克风权限那一页。" },
+        { "voice": "Flo (Chinese (China mainland))", "text": "那一页的说明太长了，我建议改成一句话，再加一张示意图。" },
+        { "voice": "Eddy (Chinese (China mainland))", "text": "可以，下周先找五个人做个 usability test，月底之前出结论。" },
+        { "voice": "Tingting (Chinese (China mainland))", "text": "客服这边，现在平均回复时间是两天，主要是邮件没人统一分配。" },
+        { "voice": "Flo (Chinese (China mainland))", "text": "那就每周轮一个人负责 support inbox，再把最常见的五个问题写成 FAQ。" },
+        { "voice": "Eddy (Chinese (China mainland))", "text": "好，我来排轮值表，今天下午发到群里。" },
+        { "voice": "Tingting (Chinese (China mainland))", "text": "最后一个问题，Q4 的 roadmap 什么时候定？" },
+        { "voice": "Flo (Chinese (China mainland))", "text": "下周一的会上定，大家这周把各自的 proposal 准备好。" }
       ]
     },
     {

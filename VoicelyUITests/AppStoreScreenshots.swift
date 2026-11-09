@@ -1,5 +1,9 @@
 import XCTest
 
+// Screenshots come from the iPhone and iPad simulators; XCUIDevice has no
+// hardware buttons on Mac Catalyst, where this would not compile.
+#if !targetEnvironment(macCatalyst)
+
 /// Captures App Store screenshots from the invented demo library
 /// (scripts/demo-library). Skipped unless the runner gets an output folder
 /// and the demo library:
@@ -104,3 +108,5 @@ final class AppStoreScreenshots: XCTestCase {
         XCTAssertNoThrow(try data.write(to: url))
     }
 }
+
+#endif

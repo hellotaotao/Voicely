@@ -69,6 +69,7 @@ enum AccessibilityIdentifiers {
         static let languageSection = "LanguageSettingsSection"
         static let aboutSection = "AboutSettingsSection"
         static let speechLanguagePicker = "SpeechLanguagePicker"
+        static let chineseScriptPicker = "ChineseScriptPicker"
         static let acknowledgementsLink = "AcknowledgementsLink"
     }
 }

@@ -32,7 +32,11 @@ struct SettingsView: View {
                         title: "Advanced",
                         identifier: AccessibilityIdentifiers.Settings.languageSection
                     ) {
-                        languageRow
+                        VStack(spacing: 14) {
+                            languageRow
+                            Divider()
+                            chineseScriptRow
+                        }
                     }
 
                     settingsSection(
@@ -246,6 +250,29 @@ struct SettingsView: View {
             .pickerStyle(.menu)
             .labelsHidden()
             .accessibilityIdentifier(AccessibilityIdentifiers.Settings.speechLanguagePicker)
+        }
+    }
+
+    private var chineseScriptRow: some View {
+        @Bindable var setting = ChineseScriptSetting.shared
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Chinese Characters")
+                    .font(.subheadline.weight(.medium))
+                Text("How Chinese transcripts are shown, copied and shared. Only the characters change, never the words.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Picker("", selection: $setting.script) {
+                ForEach(ChineseScript.allCases) { script in
+                    Text(script.label).tag(script)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.chineseScriptPicker)
         }
     }
 

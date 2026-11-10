@@ -63,6 +63,12 @@ struct Acknowledgement: Identifiable {
             url: URL(string: "https://github.com/FluidInference/FluidAudio")!
         ),
         Acknowledgement(
+            name: "OpenCC",
+            credit: "Simplified and Traditional Chinese conversion dictionaries by the OpenCC project. Voicely uses them with its own Swift implementation of OpenCC's matching.",
+            license: .apache2,
+            url: URL(string: "https://github.com/BYVoid/OpenCC")!
+        ),
+        Acknowledgement(
             name: "MLX Swift",
             credit: "Machine learning on Apple silicon GPUs, by ml-explore.",
             license: .mit(copyright: "Copyright (c) 2023 ml-explore"),

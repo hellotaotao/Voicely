@@ -533,7 +533,7 @@ struct ContentView: View {
         let waiting = voiceNotes
             .compactMap { note in
                 transcriptionService.waitReason(for: note).map {
-                    TranscriptionQueueBar.WaitingNote(id: note.id, title: note.title, reason: $0)
+                    TranscriptionQueueBar.WaitingNote(id: note.id, title: note.displayTitle, reason: $0)
                 }
             }
             .enumerated()
@@ -551,7 +551,7 @@ struct ContentView: View {
         if active != nil || !waiting.isEmpty {
             TranscriptionQueueBar(
                 activeNoteID: active?.id,
-                activeTitle: active?.title,
+                activeTitle: active?.displayTitle,
                 activeProgress: active.map { transcriptionService.localProgress(for: $0) } ?? 0,
                 waiting: waiting,
                 onSelect: onSelect
@@ -653,7 +653,7 @@ struct ContentView: View {
                         .listRowSeparator(.hidden)
                         .id(note.id)
                         .draggable(NoteDragPayload.string(for: note.id)) {
-                            NoteDragPreview(title: note.title, timestamp: note.timestamp, duration: note.knownDuration)
+                            NoteDragPreview(title: note.displayTitle, timestamp: note.timestamp, duration: note.knownDuration)
                         }
                         .modifier(NoteDragSourceTracking(noteID: note.id, draggingNoteID: $draggingNoteID))
                         .contextMenu {
@@ -759,7 +759,7 @@ struct ContentView: View {
             audioService: audioService,
             showingSettings: $showingSettings,
             isPreparingAudio: recordingSession.isPreparingAudio(note),
-            activeTranscriptionTitle: activeTranscriptionNote?.title,
+            activeTranscriptionTitle: activeTranscriptionNote?.displayTitle,
             sidebarIsHidden: splitColumnVisibility == .detailOnly,
             searchQuery: NoteSearch.query(searchText)
         )
@@ -1242,7 +1242,7 @@ struct VoiceNoteRow: View {
     private var isFinalizingTranscription: Bool { recordingPhase.isFinalizing }
 
     private var previewText: String? {
-        let trimmed = note.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = note.displayTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         if isLocallyTranscribing { return "Transcribing…" }
         if isRecordingPaused { return "Recording paused. Resume when you are ready." }
@@ -1258,12 +1258,13 @@ struct VoiceNoteRow: View {
     /// Where the transcript matches the search, in place of its opening lines.
     private var searchSnippet: AttributedString? {
         guard !searchQuery.isEmpty else { return nil }
-        return NoteSearch.snippet(of: note.transcription, matching: searchQuery)
+        return NoteSearch.snippet(of: note.displayTranscription, matching: searchQuery)
     }
 
     private var titleText: Text {
-        guard !searchQuery.isEmpty else { return Text(note.title) }
-        return Text(NoteSearch.highlighted(note.title, ranges: NoteSearch.ranges(of: searchQuery, in: note.title)))
+        let title = note.displayTitle
+        guard !searchQuery.isEmpty else { return Text(title) }
+        return Text(NoteSearch.highlighted(title, ranges: NoteSearch.ranges(of: searchQuery, in: title)))
     }
 
     private var statusBadge: PillBadge? {
@@ -2136,8 +2137,8 @@ struct VoiceNoteDetailView: View {
         .onAppear {
             refreshRetainedAttempts()
             loadAudioFile()
-            editedTitle = note.title
-            editedTranscription = note.transcription
+            editedTitle = note.displayTitle
+            editedTranscription = note.displayTranscription
             #if DEBUG
             if AppRuntime.isRunningTests,
                let text = ProcessInfo.processInfo.environment["VOICELY_UI_TEST_RETAINED_ATTEMPT"] {
@@ -2193,8 +2194,8 @@ struct VoiceNoteDetailView: View {
             showsCurrentTranscriptDuringRetranscription = false
             refreshRetainedAttempts()
             if isEditing { isEditing = false }
-            editedTitle = note.title
-            editedTranscription = note.transcription
+            editedTitle = note.displayTitle
+            editedTranscription = note.displayTranscription
         }
     }
 
@@ -2208,8 +2209,8 @@ struct VoiceNoteDetailView: View {
                         .accessibilityIdentifier(AccessibilityIdentifiers.Detail.title)
                 } else {
                     Text(searchQuery.isEmpty
-                         ? AttributedString(note.title)
-                         : NoteSearch.highlighted(note.title, ranges: NoteSearch.ranges(of: searchQuery, in: note.title)))
+                         ? AttributedString(note.displayTitle)
+                         : NoteSearch.highlighted(note.displayTitle, ranges: NoteSearch.ranges(of: searchQuery, in: note.displayTitle)))
                         .font(.title.weight(.bold))
                         .tracking(-0.5)
                         .lineLimit(2)
@@ -2303,7 +2304,7 @@ struct VoiceNoteDetailView: View {
     /// A new note or query starts at the first match; a transcript that grows
     /// while recording keeps the reader where they are.
     private func findSearchMatches(jumpToFirst: Bool) {
-        searchMatches = NoteSearch.ranges(of: searchQuery, in: note.transcription)
+        searchMatches = NoteSearch.ranges(of: searchQuery, in: note.displayTranscription)
         if jumpToFirst || currentSearchMatch >= searchMatches.count {
             currentSearchMatch = 0
         }
@@ -2695,10 +2696,10 @@ struct VoiceNoteDetailView: View {
         }
         .padding(.bottom, 4)
         if showsCurrentTranscriptDuringRetranscription {
-            SavedTranscriptText(text: note.transcription)
+            SavedTranscriptText(text: note.displayTranscription)
                 .equatable()
         } else if let preview = transcriptionService.transcriptionPreview(for: note.id), !preview.isEmpty {
-            Text(preview)
+            Text(ChineseScriptSetting.shared.display(preview))
                 .font(.body)
                 .lineSpacing(6)
                 .textSelection(.enabled)
@@ -2851,7 +2852,7 @@ struct VoiceNoteDetailView: View {
             Text("Partial transcript — transcription in progress")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(preview)
+            Text(ChineseScriptSetting.shared.display(preview))
                 .font(.body)
                 .lineSpacing(6)
                 .textSelection(.enabled)
@@ -2906,7 +2907,7 @@ struct VoiceNoteDetailView: View {
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptEditor)
         } else if shouldShowAudioPlayerCard, let spans = note.transcriptSpans {
             TappableTranscriptView(
-                text: note.transcription,
+                text: note.displayTranscription,
                 spans: spans,
                 currentTime: audioPlayer.isPlaying || audioPlayer.currentTime > 0 ? audioPlayer.currentTime : nil,
                 followsPlayback: !isScrubbingWaveform,
@@ -2922,7 +2923,7 @@ struct VoiceNoteDetailView: View {
         } else if !searchMatches.isEmpty {
             // Plain text has no way to mark or scroll to a match.
             TappableTranscriptView(
-                text: note.transcription,
+                text: note.displayTranscription,
                 spans: [],
                 searchRanges: searchMatches,
                 currentSearchIndex: currentSearchMatch,
@@ -2931,7 +2932,7 @@ struct VoiceNoteDetailView: View {
             )
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            SavedTranscriptText(text: note.transcription)
+            SavedTranscriptText(text: note.displayTranscription)
                 .equatable()
         }
     }
@@ -2956,18 +2957,24 @@ struct VoiceNoteDetailView: View {
 
     private func toggleEdit() {
         if isEditing {
-            let titleChanged = editedTitle != note.title
-            note.title = editedTitle
+            // The editors start from the text as shown; untouched text keeps
+            // the stored original instead of being saved converted.
+            let titleChanged = editedTitle != note.displayTitle
+            if titleChanged {
+                note.title = editedTitle
+            }
             if titleChanged, !editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.titleWasManuallyEdited = true
             }
-            note.applyEditedTranscript(editedTranscription)
+            if editedTranscription != note.displayTranscription {
+                note.applyEditedTranscript(editedTranscription)
+            }
             if editedTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 note.transcriptionModelIdentifier = nil
             }
         } else {
-            editedTitle = note.title
-            editedTranscription = note.transcription
+            editedTitle = note.displayTitle
+            editedTranscription = note.displayTranscription
         }
         isEditing.toggle()
     }
@@ -3010,17 +3017,17 @@ struct VoiceNoteDetailView: View {
                 transcriptionRequestError = message
             }
             if didStart, !isEditing {
-                editedTranscription = note.transcription
+                editedTranscription = note.displayTranscription
             }
         }
     }
 
     private func shareableTranscriptionText() -> String {
         guard note.lastTranscriptionDuration > 0 else {
-            return note.transcription
+            return note.displayTranscription
         }
         return transcriptionService.annotatedText(
-            text: note.transcription,
+            text: note.displayTranscription,
             duration: note.lastTranscriptionDuration
         )
     }

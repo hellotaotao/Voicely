@@ -23,9 +23,19 @@ enum NoteSearch {
         !ranges(of: query, in: text, limit: 1).isEmpty
     }
 
-    /// UTF-16 ranges, ready for TextKit.
+    /// UTF-16 ranges, ready for TextKit. A query with Chinese characters
+    /// matches in Simplified and Traditional alike: both sides are compared in
+    /// Simplified, and that conversion keeps every character in place, so the
+    /// ranges still apply to `text` as shown.
     static func ranges(of query: String, in text: String, limit: Int = matchLimit) -> [NSRange] {
         guard !query.isEmpty, !text.isEmpty else { return [] }
+        var query = query
+        var text = text
+        if ChineseScriptConverter.containsHan(query) {
+            let simplified = ChineseScriptConverter.simplified
+            query = simplified.convert(query)
+            text = simplified.convertKeepingLength(text)
+        }
         let string = text as NSString
         var ranges: [NSRange] = []
         var searchRange = NSRange(location: 0, length: string.length)

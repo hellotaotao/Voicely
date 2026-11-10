@@ -74,7 +74,39 @@ struct ChineseScriptTests {
         (["en-US", "ja-JP"], .simplified),
     ])
     func defaultFollowsTheFirstChineseSystemLanguage(languages: [String], expected: ChineseScript) {
-        #expect(ChineseScript.systemDefault(preferredLanguages: languages) == expected)
+        #expect(ChineseScript.defaultScript(preferredLanguages: languages, keyboardLanguages: [], region: nil) == expected)
+    }
+
+    @Test func systemLanguageOutranksKeyboardsAndRegion() {
+        let script = ChineseScript.defaultScript(
+            preferredLanguages: ["en-AU", "zh-Hans-AU"], keyboardLanguages: ["zh-Hant"], region: "TW")
+        #expect(script == .simplified)
+    }
+
+    // An English-only system: what the Chinese keyboards say decides.
+    @Test(arguments: [
+        (["en-US", "zh-Hant", "emoji"], ChineseScript.traditionalTaiwan),   // Zhuyin or Cangjie
+        (["en-US", "yue-Hant"], .traditionalHongKong),                      // Cantonese
+        (["en-US", "zh-Hant", "yue-Hant"], .traditionalHongKong),
+        (["en-US", "zh-Hans"], .simplified),                                // Pinyin
+        (["en-US", "yue-Hans"], .simplified),
+    ])
+    func keyboardsDecideWithoutAChineseSystemLanguage(keyboards: [String], expected: ChineseScript) {
+        #expect(ChineseScript.defaultScript(preferredLanguages: ["en-US"], keyboardLanguages: keyboards, region: "US") == expected)
+    }
+
+    @Test(arguments: [
+        ([String](), String?("TW"), ChineseScript.traditionalTaiwan),
+        ([], "HK", .traditionalHongKong),
+        ([], "MO", .traditionalHongKong),
+        ([], "AU", .simplified),
+        ([], nil, .simplified),
+        // Simplified and Traditional keyboards side by side say nothing.
+        (["zh-Hans", "zh-Hant"], "TW", .traditionalTaiwan),
+        (["zh-Hans", "zh-Hant"], "AU", .simplified),
+    ])
+    func regionDecidesWhenNothingElseDoes(keyboards: [String], region: String?, expected: ChineseScript) {
+        #expect(ChineseScript.defaultScript(preferredLanguages: ["en-US"], keyboardLanguages: keyboards, region: region) == expected)
     }
 
     @Test @MainActor func savedChoiceWinsOverTheSystemDefault() throws {

@@ -10,6 +10,7 @@
 
 import Foundation
 import Observation
+import UIKit
 
 enum ChineseScript: String, CaseIterable, Identifiable, Sendable {
     case simplified
@@ -35,18 +36,47 @@ enum ChineseScript: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Follows the first Chinese entry in the system's preferred languages:
-    /// Hong Kong and Macao get Hong Kong forms, any other Traditional Chinese
-    /// gets Taiwan forms, everything else Simplified.
-    static func systemDefault(preferredLanguages: [String] = Locale.preferredLanguages) -> ChineseScript {
+    /// The script for someone who has not picked one, from this device's
+    /// settings.
+    @MainActor
+    static func systemDefault() -> ChineseScript {
+        defaultScript(
+            preferredLanguages: Locale.preferredLanguages,
+            keyboardLanguages: UITextInputMode.activeInputModes.compactMap(\.primaryLanguage),
+            region: Locale.current.region?.identifier
+        )
+    }
+
+    /// In order of how much each signal says about the reader:
+    /// 1. the first Chinese entry in the system's preferred languages;
+    /// 2. the Chinese keyboards, when they all point the same way (Zhuyin and
+    ///    Cangjie report zh-Hant, Pinyin zh-Hans, Cantonese yue-Hant);
+    /// 3. the region, for Taiwan, Hong Kong and Macao;
+    /// otherwise Simplified.
+    static func defaultScript(preferredLanguages: [String], keyboardLanguages: [String], region: String?) -> ChineseScript {
         for identifier in preferredLanguages {
-            let language = Locale.Language(identifier: identifier)
-            guard language.languageCode?.identifier == "zh" else { continue }
-            let region = language.region?.identifier
-            if region == "HK" || region == "MO" { return .traditionalHongKong }
-            if language.script?.identifier == "Hant" || region == "TW" { return .traditionalTaiwan }
-            return .simplified
+            if let script = script(forLanguage: identifier) { return script }
         }
+        let keyboardScripts = Set(keyboardLanguages.compactMap(script(forLanguage:)))
+        if keyboardScripts.count == 1, let script = keyboardScripts.first { return script }
+        if keyboardScripts == [.traditionalTaiwan, .traditionalHongKong] { return .traditionalHongKong }
+        switch region {
+        case "HK", "MO": return .traditionalHongKong
+        case "TW": return .traditionalTaiwan
+        default: return .simplified
+        }
+    }
+
+    /// nil for a language that is not Chinese.
+    private static func script(forLanguage identifier: String) -> ChineseScript? {
+        let language = Locale.Language(identifier: identifier)
+        let code = language.languageCode?.identifier
+        guard code == "zh" || code == "yue" else { return nil }
+        let script = language.script?.identifier
+        let region = language.region?.identifier
+        if script == "Hans" { return .simplified }
+        if region == "HK" || region == "MO" || code == "yue" { return .traditionalHongKong }
+        if script == "Hant" || region == "TW" { return .traditionalTaiwan }
         return .simplified
     }
 }

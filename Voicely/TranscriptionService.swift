@@ -78,8 +78,6 @@ class TranscriptionService: ObservableObject {
 
     @Published var isTranscribing = false
     @Published var loadingProgress: Float = 0.0
-    // Smoothing state is internal; visible note progress publishes separately.
-    var transcriptionProgress: Float = 0.0
     @Published var currentEngine: TranscriptionEngine = .notAvailable
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var previewByNoteID: [UUID: String] = [:]
@@ -526,8 +524,6 @@ class TranscriptionService: ObservableObject {
     private var cancelledRunNoteIDs = Set<UUID>()
     private var localRecordingNoteIDs = Set<UUID>()
     private var discardedNoteIDs = Set<UUID>()
-    private var progressSmoothingTask: Task<Void, Never>?
-    private var progressSmoothingTarget: Float = 0.0
     private var leaseHeartbeatTask: Task<Void, Never>?
     private var isProcessingPendingTranscriptions = false
     private var needsReprocessing = false
@@ -1161,8 +1157,6 @@ class TranscriptionService: ObservableObject {
         }
 
         isTranscribing = true
-        transcriptionProgress = 0.0
-        resetProgressSmoothing()
         let startTime = Date()
         let ownsTelemetry = telemetrySession == nil
         let session = telemetrySession ?? beginTelemetrySession()
@@ -1175,8 +1169,6 @@ class TranscriptionService: ObservableObject {
             currentTranscriptionTask = nil
             if currentDecodeTelemetrySession?.id == session.id { currentDecodeTelemetrySession = nil }
             if ownsTelemetry { endTelemetrySession(session) }
-            resetProgressSmoothing()
-            transcriptionProgress = 0.0
         }
 
         guard isEngineLoaded else {
@@ -1274,9 +1266,7 @@ class TranscriptionService: ObservableObject {
         currentTranscriptionTask?.cancel()
         currentTranscriptionTask = nil
         stopLeaseHeartbeat()
-        resetProgressSmoothing()
         // The owning task releases the engine and note only after decoding exits.
-        transcriptionProgress = 0.0
     }
 
     /// Drops a stale cancellation flag left by an unrelated, already-finished
@@ -1846,7 +1836,6 @@ private extension TranscriptionService {
         cancelRequested = false
         activeNoteID = note.id
         progressByNoteID[note.id] = 0.0
-        transcriptionProgress = 0.0
         note.claimTranscription(
             ownerDeviceID: currentDeviceID,
             attemptID: attemptID,
@@ -1862,7 +1851,6 @@ private extension TranscriptionService {
             activeNoteID = nil
         }
         progressByNoteID.removeValue(forKey: noteID)
-        transcriptionProgress = 0.0
     }
 
     private func handleUnavailableAudio(for note: VoiceNote) {
@@ -1950,11 +1938,10 @@ private extension TranscriptionService {
         }
         Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=fileReady seconds=\(ProcessInfo.processInfo.systemUptime - preparationStart)")
 
-        let updateProgressOnMain: (Float) -> Void = { [weak self] value in
-            guard let self else { return }
-            self.smoothProgress(to: value, progressCallback: progressCallback)
-        }
-        updateProgressOnMain(0.01)
+        // Reported as is: preparing, then once per decode pass. Each report
+        // redraws whatever observes this service, and the decoder's own
+        // steps are counted as work for background tasks separately.
+        progressCallback(0.01)
 
         // An empty transcript cannot be relied on to mark silence: CoreML always
         // writes something and MLX often does. Confident silence is turned away
@@ -1965,7 +1952,7 @@ private extension TranscriptionService {
         }.value
         Self.transcriptionLog.notice("decode=\(diagnosticID, privacy: .public) stage=vadFinished seconds=\(ProcessInfo.processInfo.systemUptime - vadStart) presence=\(String(describing: presence), privacy: .public)")
         guard presence != .silence else {
-            updateProgressOnMain(1.0)
+            progressCallback(1.0)
             return .noSpeech
         }
 
@@ -1979,14 +1966,14 @@ private extension TranscriptionService {
             return .engineError(Self.engineFailurePrefix + error.localizedDescription)
         }
         guard !samples.isEmpty else { return .noSpeech }
-        updateProgressOnMain(0.1)
+        progressCallback(0.1)
 
         let languageHint = self.languageHint(for: decodingNoteID)
         let pieces: [String]
         do {
             guard let decoded = try await decodePasses(
                 samples, languageHint: languageHint, diagnosticID: diagnosticID,
-                progress: { updateProgressOnMain(0.1 + 0.9 * $0) }
+                progress: { progressCallback(0.1 + 0.9 * $0) }
             ) else { return .cancelled }
             pieces = decoded
         } catch is CancellationError {
@@ -2002,43 +1989,6 @@ private extension TranscriptionService {
         return Self.gatedOutput(pieces.joined(separator: " "), presence: presence)
     }
 
-    func resetProgressSmoothing() {
-        progressSmoothingTask?.cancel()
-        progressSmoothingTask = nil
-        progressSmoothingTarget = 0.0
-    }
-
-    func smoothProgress(to target: Float, progressCallback: @escaping (Float) -> Void) {
-        // A finished decoder pass may still be rejected, so it stops short of 100%.
-        let clamped = target.isFinite ? min(0.99, max(0.0, target)) : 0
-        if clamped <= transcriptionProgress {
-            return
-        }
-
-        progressSmoothingTarget = max(progressSmoothingTarget, clamped)
-
-        if progressSmoothingTask != nil {
-            return
-        }
-
-        progressSmoothingTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                let current = self.transcriptionProgress
-                let target = self.progressSmoothingTarget
-                if current >= target {
-                    break
-                }
-                let delta = target - current
-                let step = min(0.05, max(0.01, delta * 0.25))
-                let next = min(target, current + step)
-                self.transcriptionProgress = next
-                progressCallback(next)
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
-            self.progressSmoothingTask = nil
-        }
-    }
 }
 
 extension TranscriptionService {

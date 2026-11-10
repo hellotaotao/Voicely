@@ -103,7 +103,6 @@ struct TranscriptionServiceTests {
         #expect((result?.duration ?? -1) >= 0)
         #expect(result?.modelIdentifier == Qwen3Backend.coreML.modelIdentifier)
         #expect(service.isTranscribing == false)
-        #expect(service.transcriptionProgress == 0.0)
     }
 
     @Test func uncertainAudioKeepsSentencesAndDropsFragments() {

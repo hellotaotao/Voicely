@@ -5,18 +5,6 @@ import Testing
 
 @MainActor
 struct ProgressNotificationTests {
-    @Test func internalProgressAccumulatorDoesNotPublishObservableChanges() {
-        let service = TranscriptionService()
-        var notifications = 0
-        let subscription = service.objectWillChange.sink { notifications += 1 }
-
-        service.transcriptionProgress = 0.01
-
-        #expect(service.transcriptionProgress == 0.01)
-        #expect(notifications == 0)
-        withExtendedLifetime(subscription) {}
-    }
-
     @Test func progressPublishesOnlyDistinctClampedValuesPerNote() {
         let service = TranscriptionService()
         let first = UUID()

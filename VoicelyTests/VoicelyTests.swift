@@ -28,12 +28,13 @@ struct VoicelyTests {
             return "ok"
         }
 
-        let task = Task { await service.transcribeAudio(filePath: "dummy.m4a") }
+        let task = Task { await service.transcribeAudioOutcome(filePath: "dummy.m4a") }
         service.cancelTranscription()
-        let result = await task.value
+        let outcome = await task.value
 
-        #expect(result == nil)
-        #expect(service.wasTranscriptionCancelled() == true)
+        if case .cancelled = outcome {} else {
+            Issue.record("Expected a cancelled outcome, got \(outcome)")
+        }
         #expect(service.isTranscribing == false)
     }
 

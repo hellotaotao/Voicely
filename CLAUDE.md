@@ -69,7 +69,6 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 
 - **ContentView** – Main recording/playback UI with note list
 - **SettingsView** – Model status, speech language, diagnostics
-- **CloudKitSettingsView** – iCloud sync configuration
 - **SyncStatusView** – Visual sync status indicator
 
 ## Testing

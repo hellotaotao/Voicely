@@ -178,6 +178,9 @@ class AudioRecordingService: ObservableObject {
         var framePosition: AVAudioFramePosition = 0
         var latestLevel: Float = 0
         var isWritingSuspended = false
+        /// A write to the recording file failed, as on a full disk. Nothing
+        /// more is written, and the recording is being ended.
+        var writeFailed = false
     }
     private let sharedState = OSAllocatedUnfairLock<SharedState>(initialState: SharedState())
 
@@ -243,6 +246,30 @@ class AudioRecordingService: ObservableObject {
         guard isRecording else { return }
         debugLog("⚠️ [AudioRecordingService] Audio session interrupted — ending recording")
         NotificationCenter.default.post(name: .recordingInterruptedBySystem, object: nil)
+    }
+
+    // MARK: Write failures
+
+    /// The recording file could not take more audio, as on a full disk. Called
+    /// from the audio tap thread; only the first failure of a recording ends
+    /// it. Without this the timer froze while the recording looked alive, and
+    /// everything said after that point was lost unnoticed.
+    nonisolated func reportWriteFailure() {
+        let isFirstFailure = sharedState.withLock { state -> Bool in
+            guard !state.writeFailed else { return false }
+            state.writeFailed = true
+            return true
+        }
+        guard isFirstFailure else { return }
+        Task { @MainActor [weak self] in
+            self?.handleWriteFailureThatEndsRecording()
+        }
+    }
+
+    private func handleWriteFailureThatEndsRecording() {
+        guard isRecording else { return }
+        debugLog("⚠️ [AudioRecordingService] Writing audio failed — ending recording")
+        NotificationCenter.default.post(name: .recordingStoppedAfterWriteFailure, object: self)
     }
 
     // MARK: Permission
@@ -400,6 +427,7 @@ class AudioRecordingService: ObservableObject {
             state.framePosition = 0
             state.latestLevel = 0
             state.isWritingSuspended = false
+            state.writeFailed = false
         }
 
         #if DEBUG
@@ -596,7 +624,7 @@ class AudioRecordingService: ObservableObject {
         converter: AVAudioConverter
     ) {
         guard inputBuffer.frameLength > 0 else { return }
-        guard !sharedState.withLock({ $0.isWritingSuspended }) else { return }
+        guard !sharedState.withLock({ $0.isWritingSuspended || $0.writeFailed }) else { return }
 
         let ratio = outputFormat.sampleRate / inputFormat.sampleRate
         let outputFrameCapacity = AVAudioFrameCount(
@@ -633,8 +661,10 @@ class AudioRecordingService: ObservableObject {
             try file.write(from: outputBuffer)
             wroteFrames = AVAudioFramePosition(outputBuffer.frameLength)
         } catch {
-            // Non-fatal: a dropped frame is preferable to a crash on the audio thread
+            // Never crash on the audio thread; what is already in the file is
+            // kept, and the recording ends so the loss does not go unnoticed.
             wroteFrames = 0
+            reportWriteFailure()
         }
 
         let rms = computeRMS(outputBuffer)

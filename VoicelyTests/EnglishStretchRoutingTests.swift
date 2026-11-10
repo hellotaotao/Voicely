@@ -618,6 +618,40 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.service.languageHint(for: run.note.id) == run.service.languageHint(for: nil))
     }
 
+    /// A short English note never starts a Qwen3-ASR decode, so it must not
+    /// read how the last one ended: after a cancelled decode of other audio
+    /// its Parakeet text was thrown away and the note queued again, each time.
+    @Test @MainActor func shortEnglishNoteKeepsParakeetTextAfterAnEarlierCancelledDecode() async throws {
+        let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: 10)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let service = TranscriptionService()
+        service.setModelManager(LoadedModelManager(backend: .coreML))
+        service.deviceIDProvider = { "this-device" }
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        service.audioDurationProvider = { _ in 10 }
+        service.transcribeImpl = { _, _ in .cancelled }
+        guard case .cancelled = await service.transcribeAudioOutcome(filePath: url.path) else {
+            Issue.record("Expected the earlier decode to end cancelled")
+            return
+        }
+
+        service.transcribeImpl = { _, _ in "qwen" }
+        service.transcribeEnglish = { _, _, _ in [TimedWord(text: "parakeet", start: 4, end: 5)] }
+        service.releaseEnglishEngine = {}
+        let note = VoiceNote(title: "Saved", audioFilePath: url.path)
+        note.transcriptionOriginDeviceID = "this-device"
+        note.setTranscript("old text", spans: nil)
+        note.completeTranscription()
+        note.transcriptionOutcome = .transcribed
+        service.setLanguageKey("english", for: note.id)
+
+        #expect(await service.requestTranscription(for: note, force: true))
+
+        #expect(note.transcription == "parakeet")
+        #expect(note.transcriptionState == .completed)
+        #expect(note.transcriptionOutcome == .transcribed)
+    }
+
     /// Parakeet failing or hearing nothing leaves a short English note to Qwen3-ASR, once.
     @Test(arguments: [true, false])
     @MainActor func qwenTakesAShortEnglishNoteParakeetFailsOnOrHearsNothingIn(fails: Bool) async throws {

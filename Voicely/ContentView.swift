@@ -103,6 +103,10 @@ struct ContentView: View {
             recordingInterruptionID = UUID()
             recordingInterruptionNotice = "An incoming call or another app interrupted recording. What you recorded so far has been saved. Start a new recording to continue."
         }
+        .onReceive(NotificationCenter.default.publisher(for: .recordingStoppedAfterWriteFailure)) { _ in
+            recordingInterruptionID = UUID()
+            recordingInterruptionNotice = "Voicely could not save more audio, so the recording was stopped. The device may be out of storage. What you recorded up to that point has been kept."
+        }
         .onOpenURL { url in
             handleIncomingURL(url)
         }
@@ -688,7 +692,7 @@ struct ContentView: View {
             return false
         case .error(let message):
             return message != "No iCloud account found"
-        case .checkingAccount, .recovering:
+        case .checkingAccount:
             return true
         }
     }
@@ -2098,7 +2102,7 @@ struct VoiceNoteDetailView: View {
             }
         }
         .sheet(isPresented: $showingShareSheet) {
-            ShareSheet(activityItems: [shareableTranscriptionText()])
+            ShareSheet(activityItems: [note.displayTranscription])
         }
         .alert("Model Not Loaded", isPresented: $showLoadModelPrompt) {
             Button("Open Settings") { showingSettings = true }
@@ -2986,7 +2990,7 @@ struct VoiceNoteDetailView: View {
     }
 
     private func copyTranscription() {
-        UIPasteboard.general.string = shareableTranscriptionText()
+        UIPasteboard.general.string = note.displayTranscription
         copyConfirmVisible = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_600_000_000)
@@ -3020,16 +3024,6 @@ struct VoiceNoteDetailView: View {
                 editedTranscription = note.displayTranscription
             }
         }
-    }
-
-    private func shareableTranscriptionText() -> String {
-        guard note.lastTranscriptionDuration > 0 else {
-            return note.displayTranscription
-        }
-        return transcriptionService.annotatedText(
-            text: note.displayTranscription,
-            duration: note.lastTranscriptionDuration
-        )
     }
 
     private func queuedTranscriptionSection(fallback: Text) -> some View {

@@ -7,7 +7,6 @@
 
 import CloudKit
 import Foundation
-import SwiftData
 import SwiftUI
 
 /// Monitor CloudKit sync status and handle sync errors
@@ -16,10 +15,8 @@ class CloudKitSyncMonitor: ObservableObject {
     @Published var syncStatus: SyncStatus = .idle
     @Published private(set) var accountStatus: CKAccountStatus?
     @Published var lastSyncError: Error?
-    @Published var isRecovering: Bool = false
     @Published private(set) var lastStatusCheck: Date?
 
-    private var modelContainer: ModelContainer?
     private var accountStatusTask: Task<Void, Never>?
 
     enum SyncStatus: Equatable {
@@ -27,7 +24,6 @@ class CloudKitSyncMonitor: ObservableObject {
         case checkingAccount
         case available
         case error(String)
-        case recovering
     }
 
     init() {
@@ -37,10 +33,6 @@ class CloudKitSyncMonitor: ObservableObject {
     deinit {
         NotificationCenter.default.removeObserver(self)
         accountStatusTask?.cancel()
-    }
-
-    func setModelContainer(_ container: ModelContainer) {
-        self.modelContainer = container
     }
 
     private func setupNotificationObservers() {
@@ -71,38 +63,6 @@ class CloudKitSyncMonitor: ObservableObject {
             lastStatusCheck = Date()
             syncStatus = .error("Failed to check iCloud account: \(error.localizedDescription)")
         }
-    }
-
-    func resetLocalData() async {
-        // WARNING: This will delete all local data and re-sync from CloudKit
-        // Only use this as a last resort
-
-        guard let container = modelContainer else {
-            print("No model container available for reset")
-            return
-        }
-
-        // Create a new context for the reset operation
-        let context = ModelContext(container)
-
-        do {
-            isRecovering = true
-            syncStatus = .recovering
-
-            // Delete all VoiceNote objects
-            try context.delete(model: VoiceNote.self)
-            try context.save()
-
-            print("Local data reset completed - CloudKit will re-sync data")
-            lastSyncError = nil
-            await checkCloudKitAccountStatus()
-        } catch {
-            print("Failed to reset local data: \(error)")
-            lastSyncError = error
-            syncStatus = .error("Failed to reset local data")
-        }
-
-        isRecovering = false
     }
 
     func applyAccountStatus(_ status: CKAccountStatus, checkedAt: Date = Date()) {
@@ -145,8 +105,6 @@ class CloudKitSyncMonitor: ObservableObject {
                 return "iCloud sync is off. Sign in to iCloud in Settings to sync recordings across devices."
             }
             return "Error: \(message)"
-        case .recovering:
-            return "Resetting local data and refreshing cloud status..."
         }
     }
 
@@ -154,7 +112,7 @@ class CloudKitSyncMonitor: ObservableObject {
         switch syncStatus {
         case .idle:
             return .gray
-        case .checkingAccount, .recovering:
+        case .checkingAccount:
             return .orange
         case .available:
             return .green
@@ -163,41 +121,6 @@ class CloudKitSyncMonitor: ObservableObject {
                 return .orange
             }
             return .red
-        }
-    }
-}
-
-// Extension to provide user-friendly error messages
-extension CloudKitSyncMonitor {
-    func userFriendlyErrorMessage(for error: Error) -> String {
-        guard let ckError = error as? CKError else {
-            return error.localizedDescription
-        }
-
-        switch ckError.code {
-        case .changeTokenExpired:
-            return "Sync data is outdated. The app will automatically refresh."
-
-        case .accountTemporarilyUnavailable:
-            return "iCloud is temporarily unavailable. Please try again later."
-
-        case .networkUnavailable, .networkFailure:
-            return "No internet connection. Sync will resume when connected."
-
-        case .quotaExceeded:
-            return "iCloud storage is full. Please free up space in iCloud Settings."
-
-        case .notAuthenticated:
-            return "Please sign in to iCloud in Settings to enable sync."
-
-        case .serverRecordChanged:
-            return "Data was modified on another device. Resolving conflicts..."
-
-        case .zoneBusy:
-            return "Sync service is busy. Will retry automatically."
-
-        default:
-            return "Sync error: \(ckError.localizedDescription)"
         }
     }
 }

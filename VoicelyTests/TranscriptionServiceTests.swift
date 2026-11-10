@@ -188,10 +188,11 @@ struct TranscriptionServiceTests {
         let service = makeService(deviceID: "device-a")
 
         service.cancelTranscription()
-        let result = await service.transcribeAudio(filePath: "file.m4a")
+        let outcome = await service.transcribeAudioOutcome(filePath: "file.m4a")
 
-        #expect(result == nil)
-        #expect(service.wasTranscriptionCancelled() == true)
+        if case .cancelled = outcome {} else {
+            Issue.record("Expected a cancelled outcome, got \(outcome)")
+        }
     }
 
     @Test @MainActor func originDeviceClaimsQueuedNoteImmediately() async {
@@ -1220,23 +1221,6 @@ struct TranscriptionServiceTests {
         #expect(completedNote.transcriptionState == .completed)
         #expect(queuedNote.pendingTranscription == false)
         #expect(queuedNote.isTranscribing == false)
-    }
-
-    @Test @MainActor func annotatedTextUsesHeaderAndBody() {
-        let service = makeService(deviceID: "device-a")
-        let formatted = service.formatTranscriptionDuration(1.2)
-
-        let withBody = service.annotatedText(text: "Hello", duration: 1.2)
-        #expect(withBody == "Transcription completed in \(formatted).\n\nHello")
-
-        let withoutBody = service.annotatedText(text: "", duration: 1.2)
-        #expect(withoutBody == "Transcription completed in \(formatted).")
-    }
-
-    @Test @MainActor func formatTranscriptionDurationFormatsShortDurations() {
-        let service = makeService(deviceID: "device-a")
-        #expect(service.formatTranscriptionDuration(0.4) == "0.40 seconds")
-        #expect(service.formatTranscriptionDuration(12.3) == "12.30 seconds")
     }
 
     @Test @MainActor func serviceOwnsSegmentProgressStore() {

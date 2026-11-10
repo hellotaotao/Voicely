@@ -526,7 +526,6 @@ class TranscriptionService: ObservableObject {
     private var cancelledRunNoteIDs = Set<UUID>()
     private var localRecordingNoteIDs = Set<UUID>()
     private var discardedNoteIDs = Set<UUID>()
-    private var lastCancellationHandled = false
     private var progressSmoothingTask: Task<Void, Never>?
     private var progressSmoothingTarget: Float = 0.0
     private var leaseHeartbeatTask: Task<Void, Never>?
@@ -1155,11 +1154,9 @@ class TranscriptionService: ObservableObject {
         // Qwen3-ASR waits out a recording with English chosen; the queue and
         // imports pick this work up once it is loaded again.
         if isRecordingEnglish { return .modelUnavailable }
-        lastCancellationHandled = false
         if telemetrySession?.isCancelled == true { return .cancelled }
         if cancelRequested {
             cancelRequested = false
-            lastCancellationHandled = true
             return .cancelled
         }
 
@@ -1193,7 +1190,6 @@ class TranscriptionService: ObservableObject {
         // Cancellation may arrive while reading metadata, before a decode task exists.
         guard !cancelRequested, !Task.isCancelled, !session.isCancelled else {
             cancelRequested = false
-            lastCancellationHandled = true
             return .cancelled
         }
 
@@ -1213,7 +1209,6 @@ class TranscriptionService: ObservableObject {
 
         if cancelRequested || Task.isCancelled || session.isCancelled {
             cancelRequested = false
-            lastCancellationHandled = true
             return .cancelled
         }
         switch raw {
@@ -1248,7 +1243,6 @@ class TranscriptionService: ObservableObject {
         case .engineError(let diagnostic):
             return .engineError(diagnostic)
         case .cancelled:
-            lastCancellationHandled = true
             return .cancelled
         }
     }
@@ -1285,16 +1279,11 @@ class TranscriptionService: ObservableObject {
         transcriptionProgress = 0.0
     }
 
-    func wasTranscriptionCancelled() -> Bool {
-        lastCancellationHandled
-    }
-
     /// Drops a stale cancellation flag left by an unrelated, already-finished
     /// transcription so it can't turn the next caller's first segment into a
     /// spurious `.cancelled`. Safe only when no transcription is active.
     func clearPendingCancellation() {
         cancelRequested = false
-        lastCancellationHandled = false
     }
 
     nonisolated static func estimatedAudioDuration(for filePath: String) async -> TimeInterval? {
@@ -1740,7 +1729,7 @@ private extension TranscriptionService {
 
             // An aborted decode is often transient — retry once before giving up.
             // Output the engine produced and we rejected would only come back the same.
-            if case .engineError(let diagnostic) = outcome, Self.isEngineFailure(diagnostic), !wasTranscriptionCancelled() {
+            if case .engineError(let diagnostic) = outcome, Self.isEngineFailure(diagnostic), !session.isCancelled {
                 outcome = await transcribeAudioOutcome(filePath: url.path, progressCallback: onProgress, telemetrySession: session)
             }
 
@@ -1759,11 +1748,9 @@ private extension TranscriptionService {
             return
         }
 
-        if wasTranscriptionCancelled() {
-            requeueNote(note, queuedAt: nowProvider())
-            return
-        }
-
+        // A cancelled decode says so in its own outcome, which requeues the
+        // note below; what an earlier decode of other audio ended as is not
+        // this run's business.
         switch outcome {
         case .transcribed(let result):
             recordProcessedAudio(start: 0, end: resolvedDuration, session: session)
@@ -2174,39 +2161,5 @@ extension TranscriptionService {
             return .engineError("repetitive output")
         }
         return .text(text)
-    }
-
-    func annotatedText(for result: TranscriptionResult) -> String {
-        annotatedText(text: result.text, duration: result.duration)
-    }
-
-    func annotatedText(text: String, duration: TimeInterval) -> String {
-        let formatted = formatTranscriptionDuration(duration)
-        let header = "Transcription completed in \(formatted)."
-        if text.isEmpty {
-            return header
-        }
-        return header + "\n\n" + text
-    }
-
-    func formatTranscriptionDuration(_ duration: TimeInterval) -> String {
-        if duration < 1 {
-            return String(format: "%.2f seconds", duration)
-        }
-
-        if duration < 60 {
-            return String(format: "%.2f seconds", duration)
-        }
-
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.minute, .second]
-        formatter.unitsStyle = .full
-        formatter.zeroFormattingBehavior = .dropTrailing
-
-        if let formatted = formatter.string(from: duration), !formatted.isEmpty {
-            return formatted
-        }
-
-        return String(format: "%.2f seconds", duration)
     }
 }

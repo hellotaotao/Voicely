@@ -30,16 +30,6 @@ struct CloudKitSyncMonitorTests {
         #expect(monitor.accountStatus == .noAccount)
         #expect(monitor.syncStatus == .error("No iCloud account found"))
     }
-
-    @Test @MainActor func userFriendlyErrorMessageMapsKnownErrors() {
-        let monitor = CloudKitSyncMonitor()
-
-        let networkError = CKError(.networkUnavailable)
-        #expect(monitor.userFriendlyErrorMessage(for: networkError) == "No internet connection. Sync will resume when connected.")
-
-        let authError = CKError(.notAuthenticated)
-        #expect(monitor.userFriendlyErrorMessage(for: authError) == "Please sign in to iCloud in Settings to enable sync.")
-    }
 }
 
 struct ModelStateTests {

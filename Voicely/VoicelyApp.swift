@@ -15,6 +15,9 @@ extension Notification.Name {
     /// another app taking the audio session). Drives a clean finalize of the
     /// in-progress recording so the UI never shows a phantom "recording" state.
     static let recordingInterruptedBySystem = Notification.Name("VoicelyRecordingInterruptedBySystem")
+    /// Posted when the recording file cannot take more audio, as on a full
+    /// disk. The recording is finalized with what was written up to then.
+    static let recordingStoppedAfterWriteFailure = Notification.Name("VoicelyRecordingStoppedAfterWriteFailure")
 }
 
 enum QuickAction {
@@ -98,7 +101,6 @@ struct VoicelyApp: App {
                     } else if AppRuntime.isRunningTests {
                         seedUITestNoteIfNeeded()
                     } else {
-                        syncMonitor.setModelContainer(sharedModelContainer)
                         await syncMonitor.checkCloudKitAccountStatus()
                     }
                 }

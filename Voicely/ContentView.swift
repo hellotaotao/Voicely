@@ -1535,6 +1535,11 @@ struct RecordingControls: View {
         } message: {
             Text(MicrophoneSettings.deniedExplanation)
         }
+        .alert("No Microphone Found", isPresented: $audioService.isShowingNoMicrophoneNotice) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Connect a microphone or headset, or choose an input device in System Settings › Sound, then try again.")
+        }
         .sheet(item: $timerSheetRequest) { request in
             RecordingTimerSheet(session: session, request: request)
         }
@@ -1760,10 +1765,12 @@ struct RecordingControls: View {
                 .frame(height: 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text(formatDuration(audioService.recordingDuration))
-                    .font(.footnote.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(recordingTint)
+                RecordingClockReader(clock: audioService.clock) { elapsed in
+                    Text(formatDuration(elapsed))
+                        .font(.footnote.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(recordingTint)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -1789,7 +1796,9 @@ struct RecordingControls: View {
             .accessibilityIdentifier(AccessibilityIdentifiers.Library.pauseRecordingButton)
 
             timerMenu(isRecording: true)
-            stopButton
+            // Stop is held off for the first second. Nothing else redraws
+            // these controls as time passes, so the clock does it.
+            RecordingClockReader(clock: audioService.clock) { _ in stopButton }
         }
     }
 
@@ -1931,6 +1940,13 @@ struct VoiceNoteDetailView: View {
         isLocallyTranscribing || isLiveUpdatingTranscript || isRecordingInProgress || isFinalizingTranscription
     }
 
+    /// Text edited while this device writes the transcript would be replaced
+    /// when the run finishes, so editing waits for it. An edit already open
+    /// can still be finished with Done.
+    private var isEditLocked: Bool {
+        !isEditing && isTranscribingHere
+    }
+
     /// Another device holds the note and nothing has come of it yet. Not offered
     /// while that device is still recording: the audio does not exist yet.
     private var shouldShowTakeOverAction: Bool {
@@ -2024,10 +2040,6 @@ struct VoiceNoteDetailView: View {
     }
 
     private var durationLabel: String {
-        // While recording, show the live elapsed time here. The recording /
-        // paused state itself is conveyed by the coloured status pill, so
-        // repeating the word "Recording" in this slot would be redundant.
-        if isRecordingInProgress { return formatTime(audioService.recordingDuration) }
         guard let duration = note.knownDuration else { return "Duration unavailable" }
         let total = Int(duration.rounded())
         let minutes = total / 60
@@ -2097,6 +2109,7 @@ struct VoiceNoteDetailView: View {
                             .font(.body.weight(.medium))
                     }
                     .tint(VoicelyTheme.accent)
+                    .disabled(isEditLocked)
                     .accessibilityIdentifier(AccessibilityIdentifiers.Detail.editButton)
                 }
             }
@@ -2248,6 +2261,8 @@ struct VoiceNoteDetailView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(isEditLocked)
+                .opacity(isEditLocked ? 0.45 : 1)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.editButton)
             }
         }
@@ -2256,7 +2271,16 @@ struct VoiceNoteDetailView: View {
     @ViewBuilder
     private var metadataRow: some View {
         WrappingFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-            PillBadge(text: durationLabel, systemImage: "clock", variant: .neutral)
+            if isRecordingInProgress {
+                // The live elapsed time. The recording / paused state itself
+                // is conveyed by the coloured status pill, so repeating the
+                // word "Recording" in this slot would be redundant.
+                RecordingClockReader(clock: audioService.clock) { elapsed in
+                    PillBadge(text: formatTime(elapsed), systemImage: "clock", variant: .neutral)
+                }
+            } else {
+                PillBadge(text: durationLabel, systemImage: "clock", variant: .neutral)
+            }
 
             if isLocallyTranscribing {
                 PillBadge(text: "Processing", systemImage: "waveform", variant: .accent)
@@ -3060,6 +3084,17 @@ struct VoiceNoteDetailView: View {
 }
 
 // MARK: - Supporting layouts and components
+
+/// Redraws its content when the recording clock reaches a new second, so
+/// only the pieces that show the time follow it.
+struct RecordingClockReader<Content: View>: View {
+    @ObservedObject var clock: RecordingClock
+    @ViewBuilder var content: (TimeInterval) -> Content
+
+    var body: some View {
+        content(clock.seconds)
+    }
+}
 
 struct WrappingFlowLayout: Layout {
     struct Item {

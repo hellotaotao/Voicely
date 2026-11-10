@@ -137,6 +137,22 @@ enum MicrophoneSettings {
 }
 #endif
 
+/// The elapsed time shown while recording, as whole seconds. Kept apart from
+/// `AudioRecordingService`: the library and the open note observe the service,
+/// and when the 10 Hz duration tick was published there it redrew both ten
+/// times a second for a number that changes once a second.
+@MainActor
+final class RecordingClock: ObservableObject {
+    @Published private(set) var wholeSeconds = 0
+
+    var seconds: TimeInterval { TimeInterval(wholeSeconds) }
+
+    func show(_ duration: TimeInterval) {
+        let whole = duration.isFinite ? max(0, Int(duration)) : 0
+        if whole != wholeSeconds { wholeSeconds = whole }
+    }
+}
+
 @MainActor
 class AudioRecordingService: ObservableObject {
 
@@ -144,12 +160,19 @@ class AudioRecordingService: ObservableObject {
 
     @Published var isRecording = false
     @Published var isPaused = false
-    @Published var recordingDuration: TimeInterval = 0
+    /// Exact, updated ten times a second; not published. Views show `clock`.
+    var recordingDuration: TimeInterval = 0 {
+        didSet { clock.show(recordingDuration) }
+    }
+    let clock = RecordingClock()
     @Published private(set) var microphonePermission: MicrophonePermission = .undetermined
     var hasPermission: Bool { microphonePermission == .granted }
     /// Set when a recording could not start because the user turned the
     /// microphone off; the controls explain how to turn it back on.
     @Published var isShowingMicrophoneDeniedNotice = false
+    /// Set when a recording could not start because no microphone is
+    /// connected, as on a Mac mini or Mac Studio without one.
+    @Published var isShowingNoMicrophoneNotice = false
     /// True from the moment startRecording begins, including while the
     /// microphone prompt is up, until it returns.
     private var isStartingCapture = false
@@ -411,6 +434,18 @@ class AudioRecordingService: ObservableObject {
         let inputNode = newEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
+        // A Mac with no microphone attached reports a 0 Hz, 0-channel input,
+        // and installing a tap on that raises an exception.
+        guard Self.isUsableInput(inputFormat) else {
+            debugLog("❌ [AudioRecordingService] No usable audio input: \(inputFormat)")
+            engine = nil
+            writeTargets.withLock { $0 = AudioWriteTargets() }
+            try? FileManager.default.removeItem(at: pcmURL)
+            pendingM4AURL = nil
+            isShowingNoMicrophoneNotice = true
+            return nil
+        }
+
         // Avoid Catalyst's implicit stereo-to-mono conversion for USB microphones.
         // Mix channels explicitly; the converter only changes the sample rate.
         guard let monoInputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
@@ -595,6 +630,10 @@ class AudioRecordingService: ObservableObject {
                                 options: [.defaultToSpeaker, .allowBluetoothHFP])
         try session.setActive(true)
         #endif
+    }
+
+    nonisolated static func isUsableInput(_ format: AVAudioFormat) -> Bool {
+        format.sampleRate.isFinite && format.sampleRate > 0 && format.channelCount > 0
     }
 
     private nonisolated static func warmInputRoute() {

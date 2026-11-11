@@ -238,7 +238,7 @@ final class SavedTranscriptionContinuation {
         self.driver = driver
         heartbeat = DecodeWorkHeartbeat(decodeWork: decodeWork)
         self.heartbeatInterval = heartbeatInterval
-        let submitted = driver?.submit(title: "Transcribing saved audio", subtitle: title) { [weak self] handle in
+        let submitted = driver?.submit(title: String(localized: "Transcribing saved audio"), subtitle: title) { [weak self] handle in
             guard let self, !self.finished else {
                 handle.complete(success: false)
                 return
@@ -261,7 +261,7 @@ final class SavedTranscriptionContinuation {
 
     func update(progress: Double) {
         self.progress = progress.isFinite ? min(max(progress, 0), 0.99) : 0
-        handle?.update(progress: self.progress, subtitle: "\(Int(self.progress * 100))% transcribed")
+        handle?.update(progress: self.progress, subtitle: String(localized: "\(Int(self.progress * 100))% transcribed"))
     }
 
     private func startHeartbeat() {

@@ -76,35 +76,35 @@ class CloudKitSyncMonitor: ObservableObject {
         case .noAccount:
             syncStatus = .error("No iCloud account found")
         case .restricted:
-            syncStatus = .error("iCloud account is restricted")
+            syncStatus = .error(String(localized: "iCloud account is restricted"))
         case .couldNotDetermine:
             syncStatus = .error("Could not determine iCloud account status")
         case .temporarilyUnavailable:
-            syncStatus = .error("iCloud account is temporarily unavailable")
+            syncStatus = .error(String(localized: "iCloud account is temporarily unavailable"))
         @unknown default:
-            syncStatus = .error("Unknown iCloud account status")
+            syncStatus = .error(String(localized: "Unknown iCloud account status"))
         }
     }
 
     var statusDescription: String {
         switch syncStatus {
         case .idle:
-            return "Cloud status has not been checked yet."
+            return String(localized: "Cloud status has not been checked yet.")
         case .checkingAccount:
-            return "Checking iCloud account..."
+            return String(localized: "Checking iCloud account...")
         case .available:
             if let lastStatusCheck {
                 let formatter = DateFormatter()
                 formatter.dateStyle = .none
                 formatter.timeStyle = .short
-                return "iCloud account available. Last checked: \(formatter.string(from: lastStatusCheck))"
+                return String(localized: "iCloud account available. Last checked: \(formatter.string(from: lastStatusCheck))")
             }
-            return "iCloud account available."
+            return String(localized: "iCloud account available.")
         case .error(let message):
             if message == "No iCloud account found" {
-                return "iCloud sync is off. Sign in to iCloud in Settings to sync recordings across devices."
+                return String(localized: "iCloud sync is off. Sign in to iCloud in Settings to sync recordings across devices.")
             }
-            return "Error: \(message)"
+            return String(localized: "Error: \(message)")
         }
     }
 

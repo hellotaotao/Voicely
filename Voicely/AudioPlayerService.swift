@@ -392,7 +392,7 @@ class AudioPlayerService: NSObject, ObservableObject {
     }
     
     func reportMetadataSaveFailure() {
-        playbackStatusMessage = "Audio duration was detected but could not be saved."
+        playbackStatusMessage = String(localized: "Audio duration was detected but could not be saved.")
     }
 
     func play() {
@@ -407,7 +407,7 @@ class AudioPlayerService: NSObject, ObservableObject {
                 guard self.pendingPlayRequest == request, self.audioPlayer === player, !player.isPlaying else { return }
                 self.pendingPlayRequest = nil
                 guard activated else {
-                    self.playbackStatusMessage = "Couldn't start audio playback."
+                    self.playbackStatusMessage = String(localized: "Couldn't start audio playback.")
                     return
                 }
 
@@ -415,7 +415,7 @@ class AudioPlayerService: NSObject, ObservableObject {
                     self.isPlaying = true
                     self.startTimer()
                 } else {
-                    self.playbackStatusMessage = "Couldn't start audio playback."
+                    self.playbackStatusMessage = String(localized: "Couldn't start audio playback.")
                     self.deactivateAudioSessionIfNeeded()
                 }
             }
@@ -534,7 +534,7 @@ private extension AudioPlayerService {
         guard let url = storageManager.getFileURL(for: filePath) else {
             debugLog("❌ [DEBUG] Failed to get file URL for: \(filePath)")
             if pendingFilePath == filePath {
-                playbackStatusMessage = "Audio file unavailable."
+                playbackStatusMessage = String(localized: "Audio file unavailable.")
             }
             return
         }
@@ -543,7 +543,7 @@ private extension AudioPlayerService {
 
         if storageManager.isAudioFileMissing(at: url) {
             debugLog("❌ [DEBUG] Audio file NOT found at path")
-            playbackStatusMessage = "Audio file unavailable."
+            playbackStatusMessage = String(localized: "Audio file unavailable.")
             return
         }
 
@@ -557,7 +557,7 @@ private extension AudioPlayerService {
             return
         }
 
-        playbackStatusMessage = "Audio is downloading from iCloud..."
+        playbackStatusMessage = String(localized: "Audio is downloading from iCloud...")
 
         while !Task.isCancelled, pendingFilePath == filePath {
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -584,7 +584,7 @@ private extension AudioPlayerService {
         let selectionID = selectionID
 
         isPreparingAudio = true
-        playbackStatusMessage = "Preparing audio..."
+        playbackStatusMessage = String(localized: "Preparing audio...")
 
         defer {
             if self.selectionID == selectionID {
@@ -597,16 +597,16 @@ private extension AudioPlayerService {
             guard pendingFilePath == filePath else { return }
             if let candidateURL = CloudStorageManager.shared.getFileURL(for: filePath),
                CloudStorageManager.shared.isAudioFileMissing(at: candidateURL) {
-                playbackStatusMessage = "Audio file unavailable."
+                playbackStatusMessage = String(localized: "Audio file unavailable.")
             } else {
-                playbackStatusMessage = "Audio is still downloading from iCloud."
+                playbackStatusMessage = String(localized: "Audio is still downloading from iCloud.")
             }
             return
         }
 
         guard !Task.isCancelled, pendingFilePath == filePath else { return }
         guard await activateAudioSessionIfNeeded() else {
-            playbackStatusMessage = "Couldn't start audio playback."
+            playbackStatusMessage = String(localized: "Couldn't start audio playback.")
             return
         }
         guard !Task.isCancelled, pendingFilePath == filePath else { return }
@@ -640,7 +640,7 @@ private extension AudioPlayerService {
                 isPlaying = true
                 startTimer()
             } else {
-                playbackStatusMessage = "Couldn't start audio playback."
+                playbackStatusMessage = String(localized: "Couldn't start audio playback.")
                 deactivateAudioSessionIfNeeded()
             }
         } catch {
@@ -649,9 +649,9 @@ private extension AudioPlayerService {
             deactivateAudioSessionIfNeeded()
             if (error as NSError).code == 257 {
                 debugLog("❌ [DEBUG] Permission denied (Error 257) - iCloud file access issue")
-                playbackStatusMessage = "Audio is still downloading from iCloud."
+                playbackStatusMessage = String(localized: "Audio is still downloading from iCloud.")
             } else {
-                playbackStatusMessage = "Couldn't open this recording for playback."
+                playbackStatusMessage = String(localized: "Couldn't open this recording for playback.")
             }
         }
     }

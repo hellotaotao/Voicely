@@ -22,10 +22,10 @@ actor ParakeetEnglishEngine {
         var errorDescription: String? {
             switch self {
             case .modelMissing(let directory):
-                return "The English speech model is missing from this build"
+                return String(localized: "The English speech model is missing from this build")
                     + (directory.map { " (looked in \($0.path))" } ?? "") + "."
             case .unreadableAudio:
-                return "The audio could not be read for English transcription."
+                return String(localized: "The audio could not be read for English transcription.")
             }
         }
     }

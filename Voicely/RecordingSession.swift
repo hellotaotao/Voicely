@@ -101,7 +101,7 @@ final class RecordingFinalizationContinuation {
     private func report() {
         let value = progress()
         let clamped = value.isFinite ? min(max(value, 0), 0.99) : 0
-        handle?.update(progress: clamped, subtitle: "\(Int((clamped * 100).rounded(.down)))% transcribed")
+        handle?.update(progress: clamped, subtitle: String(localized: "\(Int((clamped * 100).rounded(.down)))% transcribed"))
         if heartbeat.decoderAdvanced() { handle?.advanceForWork() }
     }
 
@@ -458,7 +458,7 @@ final class RecordingSession: ObservableObject {
             stopNotifier.scheduleWarning(
                 at: warningDate,
                 endDate: schedule.endDate,
-                noteTitle: currentRecordingNote?.title ?? "Your recording"
+                noteTitle: currentRecordingNote?.title ?? String(localized: "Your recording")
             )
         }
         updateLiveActivitySchedule()
@@ -576,7 +576,7 @@ final class RecordingSession: ObservableObject {
             note.completeTranscription()
             note.transcriptionOutcome = .failed
             note.markTranscriptionFailure(
-                "Finalizing was interrupted before it finished. The text below stops where the recording was transcribed live — re-transcribe to fill in the rest."
+                String(localized: "Finalizing was interrupted before it finished. The text below stops where the recording was transcribed live — re-transcribe to fill in the rest.")
             )
             note.clearTransientTranscriptionFlags()
             try? note.modelContext?.save()
@@ -655,7 +655,7 @@ final class RecordingSession: ObservableObject {
                     ? "" : " The text below is what was transcribed live."
                 note.completeTranscription()
                 note.transcriptionOutcome = .failed
-                note.markTranscriptionFailure("Recording was interrupted before it was saved.\(liveText)")
+                note.markTranscriptionFailure(String(localized: "Recording was interrupted before it was saved.\(liveText)"))
                 note.clearTransientTranscriptionFlags()
                 try? note.modelContext?.save()
             }
@@ -795,7 +795,7 @@ final class RecordingSession: ObservableObject {
             if let recordingNote {
                 recordingNote.completeTranscription()
                 recordingNote.transcriptionOutcome = .failed
-                recordingNote.markTranscriptionFailure("Recording could not be finalized. Please check the saved audio before retrying.")
+                recordingNote.markTranscriptionFailure(String(localized: "Recording could not be finalized. Please check the saved audio before retrying."))
                 recordingNote.clearTransientTranscriptionFlags()
                 transcriptionService.endLocalRecording(noteID: recordingNote.id)
                 transcriptionService.endEnglishRecording(noteID: recordingNote.id)
@@ -824,7 +824,7 @@ final class RecordingSession: ObservableObject {
         let remainingSeconds = capturedCoordinator?.remainingAudioSeconds(upTo: finalFrame) ?? .infinity
         let continuation = RecordingFinalizationContinuation(
             driver: remainingSeconds >= Self.continuedProcessingThresholdSeconds ? continuedProcessingDriver : nil,
-            title: "Finishing transcription",
+            title: String(localized: "Finishing transcription"),
             subtitle: note.title,
             decodeWork: { [service = transcriptionService] in service.decodeWorkCount }
         ) { [weak capturedCoordinator, service = transcriptionService] in
@@ -916,7 +916,7 @@ final class RecordingSession: ObservableObject {
 
     private func makeRecordingNote(filePath: String) -> VoiceNote {
         VoiceNote(
-            title: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))",
+            title: String(localized: "Voice Note \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short))"),
             audioFilePath: filePath
         )
     }

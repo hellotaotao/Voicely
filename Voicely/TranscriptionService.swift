@@ -807,7 +807,7 @@ class TranscriptionService: ObservableObject {
             do {
                 try segmentProgressStore.resetProgressPreservingAttempt(for: note.id)
             } catch {
-                note.markTranscriptionFailure("Could not preserve the previous attempt. Retry was not started; saved progress is unchanged.")
+                note.markTranscriptionFailure(String(localized: "Could not preserve the previous attempt. Retry was not started; saved progress is unchanged."))
                 return false
             }
         }
@@ -876,9 +876,9 @@ class TranscriptionService: ObservableObject {
         savedContinuations[note.id] = continuation
         Self.savedJobLog.notice("event=savedContinuationReady note=\(note.id.uuidString, privacy: .public) available=\(continuation.isAvailable)")
         if !supportsBackground {
-            backgroundStatusByNoteID[note.id] = "GPU transcription needs the app open. Progress is saved when the app goes into the background and resumes when you return."
+            backgroundStatusByNoteID[note.id] = String(localized: "GPU transcription needs the app open. Progress is saved when the app goes into the background and resumes when you return.")
         } else if !continuation.isAvailable {
-            backgroundStatusByNoteID[note.id] = "Background execution is unavailable. Keep the app open; saved progress resumes when you return."
+            backgroundStatusByNoteID[note.id] = String(localized: "Background execution is unavailable. Keep the app open; saved progress resumes when you return.")
         } else {
             backgroundStatusByNoteID.removeValue(forKey: note.id)
         }
@@ -922,9 +922,9 @@ class TranscriptionService: ObservableObject {
         if activeNoteID == note.id { cancelTranscriptionRun(for: note.id) }
         savedContinuations.removeValue(forKey: note.id)?.finish(success: false)
         holdOrQueue(note, queuedAt: note.transcriptionQueuedAt ?? nowProvider())
-        backgroundStatusByNoteID[note.id] = "Transcription paused by iOS. Saved progress resumes when you return to the app."
+        backgroundStatusByNoteID[note.id] = String(localized: "Transcription paused by iOS. Saved progress resumes when you return to the app.")
         do { try note.modelContext?.save() }
-        catch { note.markTranscriptionFailure("Could not save the paused state. Keep the app open. \(error.localizedDescription)") }
+        catch { note.markTranscriptionFailure(String(localized: "Could not save the paused state. Keep the app open. \(error.localizedDescription)")) }
     }
 
     func savedTranscriptionsDidEnterBackground() {
@@ -990,7 +990,7 @@ class TranscriptionService: ObservableObject {
             // Do not rely on autosave: the user may force-quit immediately.
             try note.modelContext?.save()
         } catch {
-            note.markTranscriptionFailure("Cancellation could not be saved. Keep the app open and cancel again before closing it. \(error.localizedDescription)")
+            note.markTranscriptionFailure(String(localized: "Cancellation could not be saved. Keep the app open and cancel again before closing it. \(error.localizedDescription)"))
         }
     }
 
@@ -1671,7 +1671,7 @@ private extension TranscriptionService {
         guard let resolvedDuration, resolvedDuration.isFinite, resolvedDuration > 0 else {
             note.completeTranscription()
             note.transcriptionOutcome = .failed
-            note.markTranscriptionFailure("Could not read audio duration. The previous transcript and audio have been kept.")
+            note.markTranscriptionFailure(String(localized: "Could not read audio duration. The previous transcript and audio have been kept."))
             note.clearTransientTranscriptionFlags()
             return
         }
@@ -1872,8 +1872,8 @@ private extension TranscriptionService {
         note.completeTranscription()
         note.transcriptionOutcome = .failed
         note.markTranscriptionFailure(permanentlyMissing
-            ? "Audio file is missing from this device. Restore the audio or import it again to retry."
-            : "Audio is still unavailable. Automatic retries stopped. Check iCloud and retry.")
+            ? String(localized: "Audio file is missing from this device. Restore the audio or import it again to retry.")
+            : String(localized: "Audio is still unavailable. Automatic retries stopped. Check iCloud and retry."))
         note.clearTransientTranscriptionFlags()
     }
 

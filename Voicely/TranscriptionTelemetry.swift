@@ -53,7 +53,7 @@ struct TranscriptionTelemetryMetrics: Equatable {
 
     var speedLabel: String {
         guard let speedMultiplier else {
-            return "Measuring speed"
+            return String(localized: "Measuring speed")
         }
 
         return String(format: "%.1f× realtime", speedMultiplier)

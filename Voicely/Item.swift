@@ -72,7 +72,7 @@ final class VoiceNote {
 
     init(title: String = "", audioFilePath: String = "", transcription: String = "") {
         self.id = UUID()
-        self.title = title.isEmpty ? "Voice Note" : title
+        self.title = title.isEmpty ? String(localized: "Voice Note") : title
         self.timestamp = Date()
         self.duration = 0
         self.audioFilePath = audioFilePath

@@ -121,9 +121,9 @@ enum RecordingStopFormatting {
         let hours = minutes / 60
         let rest = minutes % 60
         switch (hours, rest) {
-        case (0, _): return "\(rest) min"
-        case (_, 0): return "\(hours) hr"
-        default: return "\(hours) hr \(rest) min"
+        case (0, _): return String(localized: "\(rest) min")
+        case (_, 0): return String(localized: "\(hours) hr")
+        default: return String(localized: "\(hours) hr \(rest) min")
         }
     }
 

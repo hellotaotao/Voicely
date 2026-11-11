@@ -122,7 +122,7 @@ enum MicrophonePermission: Equatable {
 
 #if canImport(UIKit)
 enum MicrophoneSettings {
-    static let deniedExplanation = "Voicely needs the microphone to record. Turn it on for Voicely in Settings, then come back and tap record."
+    static let deniedExplanation = String(localized: "Voicely needs the microphone to record. Turn it on for Voicely in Settings, then come back and tap record.")
 
     /// Voicely's page in Settings on iPhone and iPad; the Microphone privacy
     /// pane of System Settings on the Mac, where per-app pages do not exist.

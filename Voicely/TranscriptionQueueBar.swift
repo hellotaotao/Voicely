@@ -8,13 +8,13 @@ import SwiftUI
 extension TranscriptionWaitReason {
     var badgeText: String {
         switch self {
-        case .inLine(let position): return position == 1 ? "Next up" : "#\(position) in line"
-        case .waitingForModel: return "Waiting for model"
-        case .waitingForAudio: return "Waiting for audio"
-        case .waitingForNetwork: return "Waiting for internet"
-        case .waitingForOtherDevice: return "On another device"
-        case .pausedInBackground: return "Paused in background"
-        case .startingSoon: return "Queued"
+        case .inLine(let position): return position == 1 ? String(localized: "Next up") : String(localized: "#\(position) in line")
+        case .waitingForModel: return String(localized: "Waiting for model")
+        case .waitingForAudio: return String(localized: "Waiting for audio")
+        case .waitingForNetwork: return String(localized: "Waiting for internet")
+        case .waitingForOtherDevice: return String(localized: "On another device")
+        case .pausedInBackground: return String(localized: "Paused in background")
+        case .startingSoon: return String(localized: "Queued")
         }
     }
 
@@ -32,13 +32,13 @@ extension TranscriptionWaitReason {
     /// One line for a list row preview.
     var summary: String {
         switch self {
-        case .inLine: return "Waiting for its turn to transcribe."
-        case .waitingForModel: return "Transcribes once the speech model has loaded."
-        case .waitingForAudio: return "The audio hasn't synced to this device yet."
-        case .waitingForNetwork: return "The audio is in iCloud. Transcribes once you're online."
-        case .waitingForOtherDevice: return "Recorded on another device, which transcribes it."
-        case .pausedInBackground: return "Resumes when the app is back in the foreground."
-        case .startingSoon: return "Queued for transcription."
+        case .inLine: return String(localized: "Waiting for its turn to transcribe.")
+        case .waitingForModel: return String(localized: "Transcribes once the speech model has loaded.")
+        case .waitingForAudio: return String(localized: "The audio hasn't synced to this device yet.")
+        case .waitingForNetwork: return String(localized: "The audio is in iCloud. Transcribes once you're online.")
+        case .waitingForOtherDevice: return String(localized: "Recorded on another device, which transcribes it.")
+        case .pausedInBackground: return String(localized: "Resumes when the app is back in the foreground.")
+        case .startingSoon: return String(localized: "Queued for transcription.")
         }
     }
 
@@ -169,6 +169,6 @@ struct TranscriptionQueueBar: View {
 
     private var firstWaitingSummary: String {
         guard let first = waiting.first else { return "" }
-        return waiting.count == 1 ? first.reason.badgeText : "\(first.reason.badgeText) and more"
+        return waiting.count == 1 ? first.reason.badgeText : String(localized: "\(first.reason.badgeText) and more")
     }
 }

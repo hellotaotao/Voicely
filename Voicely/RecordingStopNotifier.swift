@@ -50,9 +50,9 @@ final class RecordingStopNotifier: NSObject, RecordingStopNotifying {
     func install() {
         center.delegate = self
         let actions = [
-            UNNotificationAction(identifier: Self.extendTenAction, title: "Extend 10 min"),
-            UNNotificationAction(identifier: Self.extendThirtyAction, title: "Extend 30 min"),
-            UNNotificationAction(identifier: Self.stopNowAction, title: "Stop Now", options: [.destructive]),
+            UNNotificationAction(identifier: Self.extendTenAction, title: String(localized: "Extend 10 min")),
+            UNNotificationAction(identifier: Self.extendThirtyAction, title: String(localized: "Extend 30 min")),
+            UNNotificationAction(identifier: Self.stopNowAction, title: String(localized: "Stop Now"), options: [.destructive]),
         ]
         center.setNotificationCategories([
             UNNotificationCategory(identifier: Self.warningCategory, actions: actions, intentIdentifiers: []),
@@ -79,8 +79,8 @@ final class RecordingStopNotifier: NSObject, RecordingStopNotifying {
 
     func scheduleWarning(at warningDate: Date, endDate: Date, noteTitle: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Recording stops at \(RecordingStopFormatting.clockTime(endDate))"
-        content.body = "\(noteTitle) will stop and be saved in \(RecordingStopFormatting.length(RecordingStopSchedule.warningLeadTime))."
+        content.title = String(localized: "Recording stops at \(RecordingStopFormatting.clockTime(endDate))")
+        content.body = String(localized: "\(noteTitle) will stop and be saved in \(RecordingStopFormatting.length(RecordingStopSchedule.warningLeadTime)).")
         content.sound = .default
         content.categoryIdentifier = Self.warningCategory
 
@@ -97,8 +97,8 @@ final class RecordingStopNotifier: NSObject, RecordingStopNotifying {
 
     func announceScheduledStop(endDate: Date, noteTitle: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Recording stopped at \(RecordingStopFormatting.clockTime(endDate))"
-        content.body = "\(noteTitle) was saved as scheduled."
+        content.title = String(localized: "Recording stopped at \(RecordingStopFormatting.clockTime(endDate))")
+        content.body = String(localized: "\(noteTitle) was saved as scheduled.")
         content.categoryIdentifier = Self.stoppedCategory
         center.add(UNNotificationRequest(identifier: Self.stoppedIdentifier, content: content, trigger: nil))
     }

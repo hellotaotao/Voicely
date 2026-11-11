@@ -181,7 +181,7 @@ actor Qwen3ASRModelStore {
         var errorDescription: String? {
             switch self {
             case .modelMissing(let directory):
-                return "The speech model is missing from this build"
+                return String(localized: "The speech model is missing from this build")
                     + (directory.map { " (looked in \($0.path))" } ?? "") + "."
             }
         }
@@ -311,7 +311,7 @@ actor Qwen3ASRModelStore {
                 self.coreMLModel = try Self.loadCoreML(directory: directory, progressHandler: progressHandler)
             }
             MemoryFootprint.record("qwenLoaded", seconds: ProcessInfo.processInfo.systemUptime - started)
-            progressHandler?(1.0, "Ready")
+            progressHandler?(1.0, String(localized: "Ready"))
         }
         loadTask = task
         defer { loadTask = nil }
@@ -328,12 +328,12 @@ actor Qwen3ASRModelStore {
             modelId: Qwen3ASRDefaults.mlxModelId,
             cacheDir: directory,
             offlineMode: true,
-            progressHandler: { progress, _ in progressHandler?(progress * 0.97, "Loading") }
+            progressHandler: { progress, _ in progressHandler?(progress * 0.97, String(localized: "Loading")) }
         )
         limitMLXMemory()
         // One tiny decode compiles the Metal pipelines so the first real
         // slice doesn't pay the warm-up cost.
-        progressHandler?(0.98, "Warming up…")
+        progressHandler?(0.98, String(localized: "Warming up…"))
         _ = model.transcribe(
             audio: [Float](repeating: 0, count: 8_000),
             sampleRate: 16_000,
@@ -363,14 +363,14 @@ actor Qwen3ASRModelStore {
         let units = MLComputeUnits.cpuAndNeuralEngine
         #endif
 
-        progressHandler?(0.1, "Loading")
+        progressHandler?(0.1, String(localized: "Loading"))
         let encoder = try CoreMLASREncoder.load(from: directory, computeUnits: units)
-        progressHandler?(0.4, "Loading")
+        progressHandler?(0.4, String(localized: "Loading"))
         let decoder = try CoreMLTextDecoder.load(from: directory, computeUnits: units)
         let tokenizer = Qwen3Tokenizer()
         try tokenizer.load(from: directory.appendingPathComponent("vocab.json"))
 
-        progressHandler?(0.95, "Warming up…")
+        progressHandler?(0.95, String(localized: "Warming up…"))
         try encoder.warmUp()
         try decoder.warmUp()
         return Qwen3CoreMLModel(encoder: encoder, decoder: decoder, tokenizer: tokenizer)
@@ -552,7 +552,7 @@ enum Qwen3AudioPCM {
         case formatUnavailable
 
         var errorDescription: String? {
-            "The audio could not be converted for transcription."
+            String(localized: "The audio could not be converted for transcription.")
         }
     }
 

@@ -96,16 +96,16 @@ struct NoteFolderSet {
 
 /// User-facing wording shared by the folder bar, the editor and menus.
 enum NoteFolderCopy {
-    static let noFolder = "No Folder"
+    static let noFolder = String(localized: "No Folder")
 
     static func removalTitle(folderName: String) -> String {
-        "Remove “\(folderName)”?"
+        String(localized: "Remove “\(folderName)”?")
     }
 
     static func removalMessage(noteCount: Int) -> String {
         noteCount == 1
-            ? "Its recording stays, just outside any folder."
-            : "Its \(noteCount) recordings stay, just outside any folder."
+            ? String(localized: "Its recording stays, just outside any folder.")
+            : String(localized: "Its \(noteCount) recordings stay, just outside any folder.")
     }
 }
 

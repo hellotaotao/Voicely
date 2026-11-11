@@ -21,9 +21,9 @@ enum ChineseScript: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .simplified: return "Simplified"
-        case .traditionalTaiwan: return "Traditional (Taiwan)"
-        case .traditionalHongKong: return "Traditional (Hong Kong)"
+        case .simplified: return String(localized: "Simplified")
+        case .traditionalTaiwan: return String(localized: "Traditional (Taiwan)")
+        case .traditionalHongKong: return String(localized: "Traditional (Hong Kong)")
         }
     }
 

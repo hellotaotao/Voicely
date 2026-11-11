@@ -25,7 +25,7 @@ struct RecordingActivityAttributes: ActivityAttributes {
             switch self {
             case .recording: return "Recording"
             case .paused: return "Paused"
-            case .stopping: return "Stopping"
+            case .stopping: return String(localized: "Stopping")
             }
         }
     }

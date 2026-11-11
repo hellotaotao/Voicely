@@ -17,13 +17,13 @@ enum ModelState: CustomStringConvertible {
     var description: String {
         switch self {
         case .unloaded:
-            return "Not Loaded"
+            return String(localized: "Not Loaded")
         case .loading:
-            return "Loading..."
+            return String(localized: "Loading...")
         case .prewarming:
-            return "Optimizing..."
+            return String(localized: "Optimizing...")
         case .loaded:
-            return "Ready"
+            return String(localized: "Ready")
         }
     }
 }
@@ -104,7 +104,7 @@ class ModelManager: ObservableObject {
                 self.modelState = .loaded
             } catch {
                 self.errorMessage = error is CancellationError
-                    ? nil : "Failed to load model: \(error.localizedDescription)"
+                    ? nil : String(localized: "Failed to load model: \(error.localizedDescription)")
                 self.modelState = .unloaded
                 self.loadingProgressValue = 0
             }

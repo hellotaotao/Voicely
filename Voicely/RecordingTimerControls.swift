@@ -155,12 +155,12 @@ struct RecordingTimerMenu: View, Equatable {
 
     private func accessibilityLabel(at date: Date) -> String {
         if isRecording, let schedule = session.stopSchedule {
-            return "Timer, stops at \(RecordingStopFormatting.clockTime(schedule.endDate))"
+            return String(localized: "Timer, stops at \(RecordingStopFormatting.clockTime(schedule.endDate))")
         }
         if !isRecording, let text = pendingPlanText(at: date) {
-            return "Timer, \(text)"
+            return String(localized: "Timer, \(text)")
         }
-        return "Timer"
+        return String(localized: "Timer")
     }
 }
 
@@ -180,7 +180,7 @@ struct RecordingStopStatusRow: View {
                 HStack(spacing: 8) {
                     Image(systemName: "timer")
                         .foregroundStyle(tint)
-                    Text(isWarning ? "Stopping soon" : "Stops at \(RecordingStopFormatting.clockTime(schedule.endDate))")
+                    Text(isWarning ? String(localized: "Stopping soon") : String(localized: "Stops at \(RecordingStopFormatting.clockTime(schedule.endDate))"))
                         .foregroundStyle(isWarning ? Color.orange : Color.primary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
@@ -263,7 +263,7 @@ struct RecordingTimerSheet: View {
             Form {
                 Picker("Stop", selection: $mode) {
                     ForEach(RecordingTimerSheetRequest.Mode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                        Text(LocalizedStringKey(mode.rawValue)).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -324,17 +324,17 @@ struct RecordingTimerSheet: View {
     private var durationFooter: String {
         if request.isActiveRecording {
             let end = plan.endDate(startingAt: Date())
-            return "Stops at \(RecordingStopFormatting.clockTime(end)), counted from now."
+            return String(localized: "Stops at \(RecordingStopFormatting.clockTime(end)), counted from now.")
         }
-        return "Counted from when you start recording."
+        return String(localized: "Counted from when you start recording.")
     }
 
     private var endTimeFooter: String {
         let end = plan.endDate(startingAt: Date())
         let isTomorrow = !Calendar.current.isDate(end, inSameDayAs: Date())
         return isTomorrow
-            ? "That time has passed today, so the recording stops tomorrow at \(RecordingStopFormatting.clockTime(end))."
-            : "Voicely reminds you 3 minutes before and then stops and saves the recording."
+            ? String(localized: "That time has passed today, so the recording stops tomorrow at \(RecordingStopFormatting.clockTime(end)).")
+            : String(localized: "Voicely reminds you 3 minutes before and then stops and saves the recording.")
     }
 
     private func apply() {

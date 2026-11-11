@@ -12,8 +12,8 @@ enum ImportedAudioListeningCopy {
 
         var errorDescription: String? {
             switch self {
-            case .formatUnavailable: "The imported audio could not be converted."
-            case .noAudio: "The imported audio holds no samples."
+            case .formatUnavailable: String(localized: "The imported audio could not be converted.")
+            case .noAudio: String(localized: "The imported audio holds no samples.")
             }
         }
     }

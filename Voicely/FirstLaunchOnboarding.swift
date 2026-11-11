@@ -39,20 +39,20 @@ enum FirstLaunchOnboarding {
         [
             FirstLaunchOnboardingFeature(
                 id: "capture",
-                title: "Records the whole meeting",
-                detail: "Even with the screen locked",
+                title: String(localized: "Records the whole meeting"),
+                detail: String(localized: "Even with the screen locked"),
                 systemImage: "waveform"
             ),
             FirstLaunchOnboardingFeature(
                 id: "private",
-                title: "Stays on this \(deviceName)",
-                detail: "Transcribed offline, never uploaded",
+                title: String(localized: "Stays on this \(deviceName)"),
+                detail: String(localized: "Transcribed offline, never uploaded"),
                 systemImage: "lock.fill"
             ),
             FirstLaunchOnboardingFeature(
                 id: "use",
-                title: "Ready when it ends",
-                detail: "Copy, share, or replay any sentence",
+                title: String(localized: "Ready when it ends"),
+                detail: String(localized: "Copy, share, or replay any sentence"),
                 systemImage: "doc.text"
             )
         ]
@@ -83,7 +83,7 @@ enum FirstLaunchOnboarding {
         if let errorMessage, !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return FirstLaunchModelSetupStatus(
                 visualState: .failed,
-                title: "Speech model didn’t load",
+                title: String(localized: "Speech model didn’t load"),
                 detail: errorMessage,
                 progress: nil
             )
@@ -93,21 +93,21 @@ enum FirstLaunchOnboarding {
         case .unloaded where !loadsWhenNeeded:
             return FirstLaunchModelSetupStatus(
                 visualState: .idle,
-                title: "Checking speech model",
+                title: String(localized: "Checking speech model"),
                 detail: nil,
                 progress: nil
             )
         case .loading, .prewarming:
             return FirstLaunchModelSetupStatus(
                 visualState: .active,
-                title: "Preparing speech model",
+                title: String(localized: "Preparing speech model"),
                 detail: nil,
                 progress: clampedProgress(progress)
             )
         case .loaded, .unloaded:
             return FirstLaunchModelSetupStatus(
                 visualState: .ready,
-                title: "Ready · works offline",
+                title: String(localized: "Ready · works offline"),
                 detail: nil,
                 progress: nil
             )
@@ -170,9 +170,9 @@ struct FirstLaunchOnboardingView: View {
 
     private var settingsName: String {
         #if targetEnvironment(macCatalyst)
-        "System Settings"
+        String(localized: "System Settings")
         #else
-        "Settings"
+        String(localized: "Settings")
         #endif
     }
 
@@ -324,7 +324,7 @@ struct FirstLaunchOnboardingView: View {
     }
 
     private func continueButton(fullWidth: Bool) -> some View {
-        primaryButton("Continue", trailingImage: "arrow.right", fullWidth: fullWidth) {
+        primaryButton(String(localized: "Continue"), trailingImage: "arrow.right", fullWidth: fullWidth) {
             withAnimation(.easeInOut(duration: 0.25)) {
                 step = .microphone
             }
@@ -485,18 +485,18 @@ struct FirstLaunchOnboardingView: View {
         case .undetermined:
             symbol = "mic.fill"
             tint = VoicelyTheme.accent
-            title = "Allow the microphone"
-            message = "Voicely only listens while you record."
+            title = String(localized: "Allow the microphone")
+            message = String(localized: "Voicely only listens while you record.")
         case .denied:
             symbol = "mic.slash.fill"
             tint = .orange
-            title = "Microphone is off"
-            message = "Turn it on in \(settingsName) to record."
+            title = String(localized: "Microphone is off")
+            message = String(localized: "Turn it on in \(settingsName) to record.")
         case .granted:
             symbol = "checkmark"
             tint = .green
-            title = "You’re all set"
-            message = "Press Record when a meeting starts."
+            title = String(localized: "You’re all set")
+            message = String(localized: "Press Record when a meeting starts.")
         }
 
         return VStack(spacing: 0) {
@@ -532,7 +532,7 @@ struct FirstLaunchOnboardingView: View {
     private func microphoneButtons(fullWidth: Bool) -> some View {
         switch microphonePermission {
         case .undetermined:
-            primaryButton("Allow Microphone", leadingImage: "mic.fill", fullWidth: fullWidth) {
+            primaryButton(String(localized: "Allow Microphone"), leadingImage: "mic.fill", fullWidth: fullWidth) {
                 isRequestingMicrophone = true
                 Task {
                     await requestMicrophone()
@@ -544,17 +544,17 @@ struct FirstLaunchOnboardingView: View {
             .disabled(isRequestingMicrophone)
             .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.allowMicrophoneButton)
 
-            secondaryButton("Not now", action: onComplete)
+            secondaryButton(String(localized: "Not now"), action: onComplete)
                 .disabled(isRequestingMicrophone)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.skipMicrophoneButton)
         case .denied:
-            primaryButton("Open \(settingsName)", fullWidth: fullWidth) {
+            primaryButton(String(localized: "Open \(settingsName)"), fullWidth: fullWidth) {
                 MicrophoneSettings.open()
             }
-            secondaryButton("Continue without it", action: onComplete)
+            secondaryButton(String(localized: "Continue without it"), action: onComplete)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.skipMicrophoneButton)
         case .granted:
-            primaryButton("Start using Voicely", fullWidth: fullWidth, action: onComplete)
+            primaryButton(String(localized: "Start using Voicely"), fullWidth: fullWidth, action: onComplete)
                 .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.finishButton)
         }
     }

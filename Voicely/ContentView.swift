@@ -101,11 +101,11 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .recordingInterruptedBySystem)) { _ in
             recordingInterruptionID = UUID()
-            recordingInterruptionNotice = "An incoming call or another app interrupted recording. What you recorded so far has been saved. Start a new recording to continue."
+            recordingInterruptionNotice = String(localized: "An incoming call or another app interrupted recording. What you recorded so far has been saved. Start a new recording to continue.")
         }
         .onReceive(NotificationCenter.default.publisher(for: .recordingStoppedAfterWriteFailure)) { _ in
             recordingInterruptionID = UUID()
-            recordingInterruptionNotice = "Voicely could not save more audio, so the recording was stopped. The device may be out of storage. What you recorded up to that point has been kept."
+            recordingInterruptionNotice = String(localized: "Voicely could not save more audio, so the recording was stopped. The device may be out of storage. What you recorded up to that point has been kept.")
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -935,7 +935,7 @@ struct ContentView: View {
     private func importIncomingAudio(from url: URL, languageKey: String) async {
         transcriptionService.setModelManager(modelManager)
         guard CloudStorageManager.isSupportedImportedAudioURL(url) else {
-            inboundAudioImportError = "Unsupported audio file type."
+            inboundAudioImportError = String(localized: "Unsupported audio file type.")
             return
         }
 
@@ -944,7 +944,7 @@ struct ContentView: View {
             let title = url.deletingPathExtension().lastPathComponent
             // Keep the file name as the title. audioFilePath stays empty until
             // the transcript is in; a listening copy is stored then.
-            let note = VoiceNote(title: title.isEmpty ? "Imported Audio" : title, audioFilePath: "")
+            let note = VoiceNote(title: title.isEmpty ? String(localized: "Imported Audio") : title, audioFilePath: "")
             note.titleWasManuallyEdited = true
             note.folderSlot = folderFilter.slotForNewNotes
 
@@ -957,7 +957,7 @@ struct ContentView: View {
             // instead of creating a note that will just end up "failed".
             guard SegmentedAudioTranscriber.readAudioInfo(workingCopy) != nil else {
                 transcriptionService.segmentProgressStore.removeWorkingCopy(for: note.id)
-                inboundAudioImportError = "Couldn't read this audio file — its format or encoding may be unsupported."
+                inboundAudioImportError = String(localized: "Couldn't read this audio file — its format or encoding may be unsupported.")
                 return
             }
             note.duration = await audioDuration(for: workingCopy)
@@ -1248,14 +1248,14 @@ struct VoiceNoteRow: View {
     private var previewText: String? {
         let trimmed = note.displayTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
-        if isLocallyTranscribing { return "Transcribing…" }
-        if isRecordingPaused { return "Recording paused. Resume when you are ready." }
-        if isRecordingInProgress { return "Recording… waiting for the first live transcript." }
+        if isLocallyTranscribing { return String(localized: "Transcribing…") }
+        if isRecordingPaused { return String(localized: "Recording paused. Resume when you are ready.") }
+        if isRecordingInProgress { return String(localized: "Recording… waiting for the first live transcript.") }
         if isFinalizingTranscription { return "Finalizing transcription…" }
-        if isAwaitingTranscription { return waitReason?.summary ?? "Queued for transcription." }
-        if isRemoteTranscribing { return "Transcribing on another device." }
-        if note.transcriptionOutcome == .noSpeech { return "No speech detected." }
-        if note.transcriptionOutcome == .failed { return "Couldn't transcribe. Open to try again." }
+        if isAwaitingTranscription { return waitReason?.summary ?? String(localized: "Queued for transcription.") }
+        if isRemoteTranscribing { return String(localized: "Transcribing on another device.") }
+        if note.transcriptionOutcome == .noSpeech { return String(localized: "No speech detected.") }
+        if note.transcriptionOutcome == .failed { return String(localized: "Couldn't transcribe. Open to try again.") }
         return nil
     }
 
@@ -1273,27 +1273,27 @@ struct VoiceNoteRow: View {
 
     private var statusBadge: PillBadge? {
         if isLocallyTranscribing {
-            return PillBadge(text: "Transcribing…", systemImage: "waveform", variant: .accent)
+            return PillBadge(text: String(localized: "Transcribing…"), systemImage: "waveform", variant: .accent)
         } else if note.transcriptionState == .cancelled {
-            return PillBadge(text: "Cancelled", systemImage: "xmark.circle", variant: .neutral)
+            return PillBadge(text: String(localized: "Cancelled"), systemImage: "xmark.circle", variant: .neutral)
         } else if isRecordingPaused {
             return PillBadge(text: "Paused", systemImage: "pause.circle", variant: .warning)
         } else if isLiveUpdatingTranscript {
-            return PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
+            return PillBadge(text: String(localized: "Live transcript"), systemImage: "waveform", variant: .accent)
         } else if isRecordingInProgress {
             return PillBadge(text: "Recording", systemImage: "record.circle", variant: .danger)
         } else if isFinalizingTranscription {
-            return PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
+            return PillBadge(text: String(localized: "Finalizing"), systemImage: "waveform", variant: .accent)
         } else if isAwaitingTranscription {
-            return waitBadge(fallback: "Queued")
+            return waitBadge(fallback: String(localized: "Queued"))
         } else if isRemoteTranscribing {
-            return PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
+            return PillBadge(text: String(localized: "Another device"), systemImage: "laptopcomputer.and.iphone", variant: .info)
         } else if isPending {
-            return waitBadge(fallback: "Transcription pending")
+            return waitBadge(fallback: String(localized: "Transcription pending"))
         } else if note.transcriptionOutcome == .noSpeech {
-            return PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
+            return PillBadge(text: String(localized: "No speech"), systemImage: "waveform.slash", variant: .neutral)
         } else if note.transcriptionOutcome == .failed {
-            return PillBadge(text: "Tap to retry", systemImage: "arrow.clockwise", variant: .warning)
+            return PillBadge(text: String(localized: "Tap to retry"), systemImage: "arrow.clockwise", variant: .warning)
         }
         return nil
     }
@@ -1430,7 +1430,7 @@ struct VoiceNoteRow: View {
         let minutes = total / 60
         let seconds = total % 60
         if minutes > 0 {
-            return "\(minutes)m \(seconds)s"
+            return String(localized: "\(minutes)m \(seconds)s")
         }
         return "\(seconds)s"
     }
@@ -2008,7 +2008,7 @@ struct VoiceNoteDetailView: View {
         }
         let next = Self.engineDisplayName(languageKey: retranscribeLanguage.key)
         guard next != current else { return nil }
-        return "Re-transcribe will use \(next)"
+        return String(localized: "Re-transcribe will use \(next)")
     }
 
     /// The language a re-run uses unless the user picks the other one: the
@@ -2024,7 +2024,7 @@ struct VoiceNoteDetailView: View {
     }
 
     static func retranscribeButtonTitle(languageKey: String) -> String {
-        languageKey == "english" ? "Re-transcribe in English" : "Re-transcribe with Auto Detect"
+        languageKey == "english" ? String(localized: "Re-transcribe in English") : String(localized: "Re-transcribe with Auto Detect")
     }
 
     /// The engine that writes the text for `languageKey`.
@@ -2034,17 +2034,17 @@ struct VoiceNoteDetailView: View {
 
     private var retranscribeConfirmationMessage: String {
         let engines = retranscribeLanguage.key == "english"
-            ? "English uses \(SpeechModelKind.parakeet.displayName)."
-            : "Auto Detect uses \(Qwen3ASRDefaults.modelDisplayName); English passages go to \(SpeechModelKind.parakeet.displayName)."
-        return "\(engines) The new text replaces the current transcript."
+            ? String(localized: "English uses \(SpeechModelKind.parakeet.displayName).")
+            : String(localized: "Auto Detect uses \(Qwen3ASRDefaults.modelDisplayName); English passages go to \(SpeechModelKind.parakeet.displayName).")
+        return String(localized: "\(engines) The new text replaces the current transcript.")
     }
 
     private var durationLabel: String {
-        guard let duration = note.knownDuration else { return "Duration unavailable" }
+        guard let duration = note.knownDuration else { return String(localized: "Duration unavailable") }
         let total = Int(duration.rounded())
         let minutes = total / 60
         let seconds = total % 60
-        return minutes > 0 ? "\(minutes)m \(seconds)s" : "\(seconds)s"
+        return minutes > 0 ? String(localized: "\(minutes)m \(seconds)s") : String(localized: "\(seconds)s")
     }
 
     private var audioPlaybackSelection: AudioPlaybackSelection? {
@@ -2283,25 +2283,25 @@ struct VoiceNoteDetailView: View {
             }
 
             if isLocallyTranscribing {
-                PillBadge(text: "Processing", systemImage: "waveform", variant: .accent)
+                PillBadge(text: String(localized: "Processing"), systemImage: "waveform", variant: .accent)
             } else if isRecordingPaused {
                 PillBadge(text: "Paused", systemImage: "pause.circle", variant: .warning)
             } else if isLiveUpdatingTranscript {
-                PillBadge(text: "Live transcript", systemImage: "waveform", variant: .accent)
+                PillBadge(text: String(localized: "Live transcript"), systemImage: "waveform", variant: .accent)
             } else if isRecordingInProgress {
                 PillBadge(text: "Recording", systemImage: "record.circle", variant: .danger)
             } else if isFinalizingTranscription {
-                PillBadge(text: "Finalizing", systemImage: "waveform", variant: .accent)
+                PillBadge(text: String(localized: "Finalizing"), systemImage: "waveform", variant: .accent)
             } else if isAwaitingTranscription {
-                PillBadge(text: waitReason?.badgeText ?? "Queued", systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath", variant: .warning)
+                PillBadge(text: waitReason?.badgeText ?? String(localized: "Queued"), systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath", variant: .warning)
             } else if isRemoteTranscribing {
-                PillBadge(text: "Another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
+                PillBadge(text: String(localized: "Another device"), systemImage: "laptopcomputer.and.iphone", variant: .info)
             } else if shouldShowPendingState {
-                PillBadge(text: waitReason?.badgeText ?? "Pending", systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath", variant: .warning)
+                PillBadge(text: waitReason?.badgeText ?? String(localized: "Pending"), systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath", variant: .warning)
             } else if !note.transcription.isEmpty {
-                PillBadge(text: "Transcript", systemImage: "checkmark", variant: .success)
+                PillBadge(text: String(localized: "Transcript"), systemImage: "checkmark", variant: .success)
                 PillBadge(
-                    text: note.transcriptionModelDisplayName ?? "Model Unknown",
+                    text: note.transcriptionModelDisplayName ?? String(localized: "Model Unknown"),
                     systemImage: note.transcriptionModelDisplayName == nil ? "questionmark.circle" : "cpu",
                     variant: note.transcriptionModelDisplayName == nil ? .neutral : .info
                 )
@@ -2644,7 +2644,8 @@ struct VoiceNoteDetailView: View {
             HStack(spacing: 5) {
                 Image(systemName: systemImage)
                     .font(.caption.weight(.semibold))
-                Text(title)
+                // `title` stays English: it also picks the accessibility identifier.
+                Text(LocalizedStringKey(title))
                     .font(.footnote.weight(.medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
@@ -2830,7 +2831,7 @@ struct VoiceNoteDetailView: View {
             queuedTranscriptionSection(fallback: Text("This note is waiting in the transcription queue and will switch to live progress once the local task starts."))
         } else if isRemoteTranscribing {
             VStack(alignment: .leading, spacing: 10) {
-                PillBadge(text: "Transcribing on another device", systemImage: "laptopcomputer.and.iphone", variant: .info)
+                PillBadge(text: String(localized: "Transcribing on another device"), systemImage: "laptopcomputer.and.iphone", variant: .info)
                 Text("This recording is currently being transcribed elsewhere. The transcript will appear here after sync finishes.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -2839,7 +2840,7 @@ struct VoiceNoteDetailView: View {
             queuedTranscriptionSection(fallback: Text("This recording is waiting for transcription to start."))
         } else if !hasVisibleTranscript, note.transcriptionOutcome == .noSpeech {
             VStack(alignment: .leading, spacing: 10) {
-                PillBadge(text: "No speech", systemImage: "waveform.slash", variant: .neutral)
+                PillBadge(text: String(localized: "No speech"), systemImage: "waveform.slash", variant: .neutral)
                 Text("This recording is silence or background noise — nothing to transcribe.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -2852,8 +2853,8 @@ struct VoiceNoteDetailView: View {
             }
         } else if !hasVisibleTranscript, note.transcriptionOutcome == .failed {
             VStack(alignment: .leading, spacing: 10) {
-                PillBadge(text: "Couldn't transcribe", systemImage: "arrow.clockwise", variant: .warning)
-                Text(note.transcriptionLastErrorMessage ?? "Something went wrong this time. Tap to try again.")
+                PillBadge(text: String(localized: "Couldn't transcribe"), systemImage: "arrow.clockwise", variant: .warning)
+                Text(note.transcriptionLastErrorMessage ?? String(localized: "Something went wrong this time. Tap to try again."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Button(action: { requestTranscription() }) {
@@ -2866,7 +2867,7 @@ struct VoiceNoteDetailView: View {
             }
         } else if !hasVisibleTranscript {
             VStack(alignment: .leading, spacing: 8) {
-                PillBadge(text: "No transcript yet", systemImage: "text.badge.xmark", variant: .neutral)
+                PillBadge(text: String(localized: "No transcript yet"), systemImage: "text.badge.xmark", variant: .neutral)
                 Text("Recordings without transcription can still be played back, renamed, and shared later.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -3053,7 +3054,7 @@ struct VoiceNoteDetailView: View {
     private func queuedTranscriptionSection(fallback: Text) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             PillBadge(
-                text: waitReason?.badgeText ?? "Queued for transcription",
+                text: waitReason?.badgeText ?? String(localized: "Queued for transcription"),
                 systemImage: waitReason?.badgeSystemImage ?? "clock.arrow.circlepath",
                 variant: .warning
             )

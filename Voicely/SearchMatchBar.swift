@@ -16,8 +16,8 @@ struct SearchMatchBar: View {
     let onStep: (Int) -> Void
 
     private var label: String {
-        guard count > 0 else { return "Only the title matches" }
-        return "\(current + 1) of \(count)\(isCapped ? "+" : "")"
+        guard count > 0 else { return String(localized: "Only the title matches") }
+        return String(localized: "\(current + 1) of \(count)\(isCapped ? "+" : "")")
     }
 
     var body: some View {

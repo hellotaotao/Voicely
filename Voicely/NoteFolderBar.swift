@@ -169,9 +169,9 @@ struct NoteFolderBar: View {
 
     private func label(for item: NoteFolderFilter) -> String {
         switch item {
-        case .all: return "All"
+        case .all: return String(localized: "All")
         case .unfiled: return NoteFolderCopy.noFolder
-        case .folder(let slot): return folders.folder(forSlot: slot)?.name ?? "New"
+        case .folder(let slot): return folders.folder(forSlot: slot)?.name ?? String(localized: "New")
         }
     }
 
@@ -182,11 +182,11 @@ struct NoteFolderBar: View {
 
     private func accessibilityLabel(for item: NoteFolderFilter) -> String {
         switch item {
-        case .all: return "All recordings"
-        case .unfiled: return "Recordings not in a folder"
+        case .all: return String(localized: "All recordings")
+        case .unfiled: return String(localized: "Recordings not in a folder")
         case .folder(let slot):
-            if let folder = folders.folder(forSlot: slot) { return "Folder \(folder.name)" }
-            return "New folder"
+            if let folder = folders.folder(forSlot: slot) { return String(localized: "Folder \(folder.name)") }
+            return String(localized: "New folder")
         }
     }
 }

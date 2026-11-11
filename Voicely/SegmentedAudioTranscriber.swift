@@ -221,7 +221,7 @@ final class SegmentedAudioTranscriber {
                 try progressStore.archiveProgressIfNeeded(for: note.id)
             } catch {
                 // Keep the checkpoint so a later retry can archive it safely.
-                note.markTranscriptionFailure("Could not save this attempt separately; its recovery checkpoint has been kept. \(error.localizedDescription)")
+                note.markTranscriptionFailure(String(localized: "Could not save this attempt separately; its recovery checkpoint has been kept. \(error.localizedDescription)"))
             }
             return
         }

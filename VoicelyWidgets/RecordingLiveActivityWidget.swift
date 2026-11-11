@@ -118,17 +118,17 @@ private struct RecordingLiveActivityLockScreenView: View {
               context.state.recordingState != .stopping else {
             return context.attributes.title
         }
-        return "Stops at \(endDate.formatted(date: .omitted, time: .shortened))"
+        return String(localized: "Stops at \(endDate.formatted(date: .omitted, time: .shortened))")
     }
 
     private var lockScreenTitle: String {
         switch context.state.recordingState {
         case .recording:
-            return "Voicely is recording"
+            return String(localized: "Voicely is recording")
         case .paused:
-            return "Voicely is paused"
+            return String(localized: "Voicely is paused")
         case .stopping:
-            return "Voicely is stopping"
+            return String(localized: "Voicely is stopping")
         }
     }
 }
@@ -145,7 +145,7 @@ private struct RecordingPauseButton: View {
 
     var body: some View {
         Toggle(isOn: isPaused, intent: SetRecordingPausedIntent(paused: !isPaused)) {
-            Text(isPaused ? "Resume recording" : "Pause recording")
+            Text(isPaused ? String(localized: "Resume recording") : String(localized: "Pause recording"))
         }
         .toggleStyle(RecordingPauseToggleStyle(diameter: diameter))
     }
@@ -163,7 +163,7 @@ private struct RecordingPauseToggleStyle: ToggleStyle {
             .background(Color.red, in: Circle())
             .contentShape(Circle())
             .accessibilityElement()
-            .accessibilityLabel(configuration.isOn ? "Resume recording" : "Pause recording")
+            .accessibilityLabel(configuration.isOn ? String(localized: "Resume recording") : String(localized: "Pause recording"))
     }
 }
 

@@ -1,0 +1,51 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "Start a ${applicationName} recording": {
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "en": {
+          "stringSet": {
+            "state": "new",
+            "values": [
+              "Start a ${applicationName} recording",
+              "Record a meeting in ${applicationName}",
+              "Record a sensitive meeting in ${applicationName}"
+            ]
+          }
+        },
+        "zh-HK": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "用${applicationName}開始錄音",
+              "在${applicationName}裡錄會議",
+              "用${applicationName}錄一場機密會議"
+            ]
+          }
+        },
+        "zh-Hans": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "用${applicationName}开始录音",
+              "在${applicationName}里录会议",
+              "用${applicationName}录一场保密会议"
+            ]
+          }
+        },
+        "zh-Hant": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "用${applicationName}開始錄音",
+              "在${applicationName}裡錄會議",
+              "用${applicationName}錄一場機密會議"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "version": "1.3"
+}

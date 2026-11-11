@@ -22,9 +22,9 @@ enum AudioImportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedFileType(let url):
-            return "Unsupported audio file type: \(url.lastPathComponent)"
+            return String(localized: "Unsupported audio file type: \(url.lastPathComponent)")
         case .copyFailed(let error):
-            return "Failed to import audio file: \(error.localizedDescription)"
+            return String(localized: "Failed to import audio file: \(error.localizedDescription)")
         }
     }
 }
@@ -336,7 +336,7 @@ class CloudStorageManager: ObservableObject {
     private func importedAudioTitle(for sourceURL: URL) -> String {
         let title = sourceURL.deletingPathExtension().lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? "Imported Audio" : title
+        return title.isEmpty ? String(localized: "Imported Audio") : title
     }
 
     private func normalizedAudioFileExtension(for sourceURL: URL) -> String {
@@ -353,7 +353,7 @@ class CloudStorageManager: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         let sanitizedTitle = parts.joined(separator: " ")
-        return sanitizedTitle.isEmpty ? "Imported Audio" : sanitizedTitle
+        return sanitizedTitle.isEmpty ? String(localized: "Imported Audio") : sanitizedTitle
     }
     
     // Move local audio files to iCloud, once per iCloud enablement.
@@ -780,15 +780,15 @@ class CloudStorageManager: ObservableObject {
     func getSyncStatusText() -> String {
         switch syncStatus {
         case .idle:
-            return "Synced"
+            return String(localized: "Synced")
         case .checking:
-            return "Checking..."
+            return String(localized: "Checking...")
         case .uploading(let count):
-            return "Uploading \(count) files"
+            return String(localized: "Uploading \(count) files")
         case .downloading(let count):
-            return "Downloading \(count) files"
+            return String(localized: "Downloading \(count) files")
         case .error(let message):
-            return "Error: \(message)"
+            return String(localized: "Error: \(message)")
         }
     }
     

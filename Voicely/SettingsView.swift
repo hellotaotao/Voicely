@@ -22,14 +22,14 @@ struct SettingsView: View {
                     privacyNoticeCard
 
                     settingsSection(
-                        title: "About",
+                        title: String(localized: "About"),
                         identifier: AccessibilityIdentifiers.Settings.aboutSection
                     ) {
                         appInfoContent
                     }
 
                     settingsSection(
-                        title: "Advanced",
+                        title: String(localized: "Advanced"),
                         identifier: AccessibilityIdentifiers.Settings.languageSection
                     ) {
                         VStack(spacing: 14) {
@@ -40,7 +40,7 @@ struct SettingsView: View {
                     }
 
                     settingsSection(
-                        title: "Diagnostics",
+                        title: String(localized: "Diagnostics"),
                         identifier: "settings.diagnosticsSection"
                     ) {
                         DiagnosticsContent()
@@ -104,11 +104,11 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 6) {
                             if usesEnglishEngine {
-                                PillBadge(text: "Loads when needed", systemImage: "circle", variant: .neutral)
+                                PillBadge(text: String(localized: "Loads when needed"), systemImage: "circle", variant: .neutral)
                             } else {
                                 modelStateBadge
                             }
-                            PillBadge(text: "On-device", systemImage: "iphone", variant: .accent)
+                            PillBadge(text: String(localized: "On-device"), systemImage: "iphone", variant: .accent)
                         }
                     }
                     // Without the priority the row splits its width with the
@@ -181,11 +181,11 @@ struct SettingsView: View {
     private var modelStateBadge: some View {
         switch modelManager.modelState {
         case .loaded:
-            return PillBadge(text: "Loaded", systemImage: "checkmark.circle.fill", variant: .success)
+            return PillBadge(text: String(localized: "Loaded"), systemImage: "checkmark.circle.fill", variant: .success)
         case .unloaded:
-            return PillBadge(text: waitsForWork ? "Loads when needed" : "Unloaded", systemImage: "circle", variant: .neutral)
+            return PillBadge(text: waitsForWork ? String(localized: "Loads when needed") : String(localized: "Unloaded"), systemImage: "circle", variant: .neutral)
         case .prewarming:
-            return PillBadge(text: "Warming up", systemImage: "flame", variant: .warning)
+            return PillBadge(text: String(localized: "Warming up"), systemImage: "flame", variant: .warning)
         default:
             return PillBadge(text: modelManager.modelState.description, variant: .neutral)
         }
@@ -193,8 +193,8 @@ struct SettingsView: View {
 
     private var progressStatusText: String {
         switch modelManager.modelState {
-        case .prewarming:  return "Optimizing for device"
-        default:           return "Loading"
+        case .prewarming:  return String(localized: "Optimizing for device")
+        default:           return String(localized: "Loading")
         }
     }
 
@@ -315,11 +315,11 @@ struct SettingsView: View {
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
 
         return VStack(spacing: 10) {
-            infoRow(label: "App Version", value: "\(version) (\(build))")
+            infoRow(label: String(localized: "App Version"), value: "\(version) (\(build))")
             Divider().background(VoicelyTheme.hairline)
-            infoRow(label: "Device", value: DeviceIdentity.hardwareModel)
+            infoRow(label: String(localized: "Device"), value: DeviceIdentity.hardwareModel)
             Divider().background(VoicelyTheme.hairline)
-            infoRow(label: "Speech Engine", value: speechEngineLabel)
+            infoRow(label: String(localized: "Speech Engine"), value: speechEngineLabel)
             Divider().background(VoicelyTheme.hairline)
             NavigationLink {
                 AcknowledgementsView()

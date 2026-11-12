@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var inboundAudioImportError: String?
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
+    @State private var libraryColumnIsNarrow = false
     // An iPad in portrait would otherwise open on the empty detail pane, with the
     // note list and the record button folded behind the sidebar button. The same
     // holds for iPhone Duo's inner display held upright.
@@ -491,11 +492,16 @@ struct ContentView: View {
             }
 
             if showsRecordingControls {
-                recordingControlsBar()
-                    .padding(.horizontal, 14)
+                recordingControlsBar(isNarrow: libraryColumnIsNarrow)
+                    .padding(.horizontal, libraryColumnIsNarrow ? 8 : 14)
                     .padding(.bottom, 12)
                     .zIndex(1)
             }
+        }
+        .onGeometryChange(for: Bool.self) { proxy in
+            proxy.size.width < Self.narrowLibraryColumnWidth
+        } action: { isNarrow in
+            libraryColumnIsNarrow = isNarrow
         }
         .background(VoicelyTheme.groupedBackground)
         // Preserve the identifiers on the recording controls and note rows.
@@ -567,7 +573,11 @@ struct ContentView: View {
         }
     }
 
-    private func recordingControlsBar() -> some View {
+    /// Below this the recording bar tightens its spacing. iPad sidebars are
+    /// 320 pt or wider, except iPad mini in portrait at 296 pt.
+    private static let narrowLibraryColumnWidth: CGFloat = 310
+
+    private func recordingControlsBar(isNarrow: Bool = false) -> some View {
         RecordingControls(
             session: recordingSession,
             audioService: audioService,
@@ -577,7 +587,8 @@ struct ContentView: View {
             recordingInterruptionID: recordingInterruptionID,
             onManageModels: {
                 showingSettings = true
-            }
+            },
+            isNarrow: isNarrow
         )
     }
 
@@ -1450,8 +1461,14 @@ struct RecordingControls: View {
     let togglePauseQuickActionID: UUID
     let recordingInterruptionID: UUID
     let onManageModels: () -> Void
+    /// iPad mini's portrait sidebar (296 pt) leaves too little room at the
+    /// usual spacing: the waveform shrank to two bars and the language name was cut.
+    var isNarrow = false
 
     @State private var timerSheetRequest: RecordingTimerSheetRequest?
+
+    private var itemSpacing: CGFloat { isNarrow ? 6 : 10 }
+    private var pillPadding: CGFloat { isNarrow ? 8 : 12 }
 
     private var controlPhase: RecordingControlPhase {
         session.controlPhase
@@ -1603,7 +1620,7 @@ struct RecordingControls: View {
     }
 
     private var idleLayout: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: itemSpacing) {
             Menu {
                 Picker("Speech Language", selection: languageChoice) {
                     ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { key in
@@ -1634,7 +1651,7 @@ struct RecordingControls: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, pillPadding)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity)
                 .background(
@@ -1665,7 +1682,7 @@ struct RecordingControls: View {
     }
 
     private var startingLayout: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: itemSpacing) {
             HStack(spacing: 10) {
                 ProgressView()
                     .controlSize(.small)
@@ -1678,7 +1695,7 @@ struct RecordingControls: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, pillPadding)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity)
             .background(
@@ -1751,8 +1768,8 @@ struct RecordingControls: View {
     }
 
     private var recordingButtonsRow: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 10) {
+        HStack(spacing: itemSpacing) {
+            HStack(spacing: itemSpacing) {
                 Circle()
                     .fill(recordingTint)
                     .frame(width: 8, height: 8)
@@ -1770,9 +1787,11 @@ struct RecordingControls: View {
                         .font(.footnote.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(recordingTint)
+                        // The waveform gives up width first; the clock never wraps.
+                        .fixedSize()
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, pillPadding)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity)
             .background(
@@ -3324,16 +3343,26 @@ struct AudioWaveformView: View {
         }
     }
 
+    private static let barWidth: CGFloat = 2
+    private static let barSpacing: CGFloat = 1.5
+
+    /// Draws only the newest bars that fit. With all 22 the bars need 75 pt,
+    /// which pushed the recording bar past an iPad mini's 320 pt sidebar and
+    /// widened the whole column beyond the screen.
     private var barsView: some View {
-        HStack(alignment: .center, spacing: 1.5) {
-            ForEach(0..<waveHeights.count, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(Color.red.opacity(0.72))
-                    .frame(width: 2)
-                    .scaleEffect(y: waveHeights[index], anchor: .center)
+        GeometryReader { geometry in
+            let fitting = Int((geometry.size.width + Self.barSpacing) / (Self.barWidth + Self.barSpacing))
+            let shown = max(0, min(waveHeights.count, fitting))
+            HStack(alignment: .center, spacing: Self.barSpacing) {
+                ForEach((waveHeights.count - shown)..<waveHeights.count, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(Color.red.opacity(0.72))
+                        .frame(width: Self.barWidth)
+                        .scaleEffect(y: waveHeights[index], anchor: .center)
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func updateWaveHeights() {

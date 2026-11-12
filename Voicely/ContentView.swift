@@ -37,6 +37,9 @@ struct ContentView: View {
     @State private var shouldShowFirstLaunchOnboarding = FirstLaunchOnboarding.shouldPresent()
     @State private var compactNavigationPath: [UUID] = []
     @State private var libraryColumnIsNarrow = false
+    #if DEBUG
+    @MainActor private static var demoLaunchApplied = false
+    #endif
     // An iPad in portrait would otherwise open on the empty detail pane, with the
     // note list and the record button folded behind the sidebar button. The same
     // holds for iPhone Duo's inner display held upright.
@@ -794,6 +797,28 @@ struct ContentView: View {
         }
 
         #if DEBUG
+        if AppRuntime.isDemoMode, !Self.demoLaunchApplied {
+            // Screenshot launches can open a note and fill in the search field.
+            Self.demoLaunchApplied = true
+            let environment = ProcessInfo.processInfo.environment
+            if let query = environment["VOICELY_DEMO_SEARCH"] { searchText = query }
+            if let title = environment["VOICELY_DEMO_SELECT"],
+               let note = voiceNotes.first(where: { $0.title == title }) {
+                selectedNoteID = note.id
+                if !usesSplitLayout { compactNavigationPath = [note.id] }
+            }
+        }
+        if AppRuntime.isDemoMode, let elapsed = DemoLibrary.recordingElapsedSeconds,
+           let note = voiceNotes.first(where: { $0.isTranscribing && $0.duration == 0 }),
+           !transcriptionService.isLocalRecording(noteID: note.id) {
+            // A demo note shown mid-recording with its live transcript, without the microphone.
+            transcriptionService.beginLocalRecording(noteID: note.id)
+            note.claimTranscription(ownerDeviceID: transcriptionService.deviceIDProvider(),
+                attemptID: "demo-live", queuedAt: Date().addingTimeInterval(-elapsed),
+                leaseExpiresAt: Date().addingTimeInterval(-60))
+            audioService.recordingDuration = elapsed
+            audioService.isRecording = true
+        }
         if AppRuntime.isRunningTests,
            ProcessInfo.processInfo.environment["VOICELY_UI_TEST_EXPIRED_LIVE_RECORDING"] == "1",
            let note = voiceNotes.first, !transcriptionService.isLocalRecording(noteID: note.id) {
@@ -1288,11 +1313,11 @@ struct VoiceNoteRow: View {
         } else if note.transcriptionState == .cancelled {
             return PillBadge(text: String(localized: "Cancelled"), systemImage: "xmark.circle", variant: .neutral)
         } else if isRecordingPaused {
-            return PillBadge(text: "Paused", systemImage: "pause.circle", variant: .warning)
+            return PillBadge(text: String(localized: "Paused"), systemImage: "pause.circle", variant: .warning)
         } else if isLiveUpdatingTranscript {
             return PillBadge(text: String(localized: "Live transcript"), systemImage: "waveform", variant: .accent)
         } else if isRecordingInProgress {
-            return PillBadge(text: "Recording", systemImage: "record.circle", variant: .danger)
+            return PillBadge(text: String(localized: "Recording"), systemImage: "record.circle", variant: .danger)
         } else if isFinalizingTranscription {
             return PillBadge(text: String(localized: "Finalizing"), systemImage: "waveform", variant: .accent)
         } else if isAwaitingTranscription {
@@ -1443,7 +1468,7 @@ struct VoiceNoteRow: View {
         if minutes > 0 {
             return String(localized: "\(minutes)m \(seconds)s")
         }
-        return "\(seconds)s"
+        return String(localized: "\(seconds)s")
     }
 }
 
@@ -1609,7 +1634,7 @@ struct RecordingControls: View {
     }
 
     private func languageLabel(for key: String) -> String {
-        Qwen3ASRDefaults.languageKey(key) == "english" ? "English" : "Auto Detect"
+        Qwen3ASRDefaults.languageKey(key) == "english" ? String(localized: "English") : String(localized: "Auto Detect")
     }
 
     private var languageChoice: Binding<String> {
@@ -1989,7 +2014,8 @@ struct VoiceNoteDetailView: View {
     }
 
     private var shouldShowComputeTelemetry: Bool {
-        isTranscribingHere
+        // Demo notes have no measured speed, so the card would show zeros.
+        isTranscribingHere && !AppRuntime.isDemoMode
     }
 
     private var fallbackTelemetrySnapshot: TranscriptionTelemetrySnapshot {
@@ -2176,6 +2202,11 @@ struct VoiceNoteDetailView: View {
             editedTitle = note.displayTitle
             editedTranscription = note.displayTranscription
             #if DEBUG
+            if AppRuntime.isDemoMode,
+               let seconds = ProcessInfo.processInfo.environment["VOICELY_DEMO_SEEK"].flatMap(TimeInterval.init) {
+                // Screenshots of tap-to-play: the sentence at this time is highlighted.
+                audioPlayer.seek(to: seconds)
+            }
             if AppRuntime.isRunningTests,
                let text = ProcessInfo.processInfo.environment["VOICELY_UI_TEST_RETAINED_ATTEMPT"] {
                 let store = transcriptionService.segmentProgressStore
@@ -2304,11 +2335,11 @@ struct VoiceNoteDetailView: View {
             if isLocallyTranscribing {
                 PillBadge(text: String(localized: "Processing"), systemImage: "waveform", variant: .accent)
             } else if isRecordingPaused {
-                PillBadge(text: "Paused", systemImage: "pause.circle", variant: .warning)
+                PillBadge(text: String(localized: "Paused"), systemImage: "pause.circle", variant: .warning)
             } else if isLiveUpdatingTranscript {
                 PillBadge(text: String(localized: "Live transcript"), systemImage: "waveform", variant: .accent)
             } else if isRecordingInProgress {
-                PillBadge(text: "Recording", systemImage: "record.circle", variant: .danger)
+                PillBadge(text: String(localized: "Recording"), systemImage: "record.circle", variant: .danger)
             } else if isFinalizingTranscription {
                 PillBadge(text: String(localized: "Finalizing"), systemImage: "waveform", variant: .accent)
             } else if isAwaitingTranscription {
@@ -2993,7 +3024,8 @@ struct VoiceNoteDetailView: View {
         let selectedNote = note
         audioPlayer.loadAudio(from: selection?.filePath ?? "", expectedDuration: note.knownDuration) { [weak audioPlayer] duration in
             guard let selection, selection.noteID == selectedNote.id,
-                  selection.filePath == selectedNote.audioFilePath else { return }
+                  selection.filePath == selectedNote.audioFilePath,
+                  !AppRuntime.isDemoMode else { return }
             selectedNote.updateDuration(duration, forAudioPath: selection.filePath)
             do {
                 try selectedNote.modelContext?.save()

@@ -70,6 +70,62 @@ final class AppStoreScreenshots: XCTestCase {
         XCUIDevice.shared.press(.home)
     }
 
+    /// Captures every shot listed in the JSON file at VOICELY_SHOT_PLAN:
+    /// [{"name", "language", "script", "landscape", "wait", "env": {...}}].
+    func testCapturePlan() throws {
+        guard let path = ProcessInfo.processInfo.environment["VOICELY_SHOT_PLAN"] else {
+            throw XCTSkip("Set VOICELY_SHOT_PLAN to capture a plan.")
+        }
+        struct Shot: Decodable {
+            var name: String
+            var language: String
+            var script: String
+            var landscape: Bool?
+            var wait: UInt32?
+            var env: [String: String]?
+        }
+        let shots = try JSONDecoder().decode([Shot].self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        for shot in shots {
+            XCUIDevice.shared.orientation = shot.landscape == true ? .landscapeLeft : .portrait
+            let app = XCUIApplication()
+            app.launchArguments = ["-AppleLanguages", "(\(shot.language))", "-chineseScript", shot.script]
+            app.launchEnvironment = ["VOICELY_DEMO_DIR": demoDirectory].merging(shot.env ?? [:]) { _, new in new }
+            app.terminate()
+            app.launch()
+            sleep(shot.wait ?? 6)
+            let data = XCUIScreen.main.screenshot().pngRepresentation
+            try data.write(to: outputDirectory.appendingPathComponent("\(shot.name).png"))
+        }
+    }
+
+    /// The recording Live Activity on the Lock Screen, in the language and
+    /// with the title given by VOICELY_SHOT_LANGUAGE and VOICELY_SHOT_TITLE.
+    func testCaptureLockScreen() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let language = environment["VOICELY_SHOT_LANGUAGE"] ?? "en"
+        let app = XCUIApplication()
+        app.launchArguments += ["-AppleLanguages", "(\(language))"]
+        app.launchEnvironment["VOICELY_DEMO_DIR"] = demoDirectory
+        app.launchEnvironment["VOICELY_SHOW_RECORDING_ACTIVITY_PREVIEW"] = "1"
+        app.launchEnvironment["VOICELY_LIVE_ACTIVITY_PREVIEW_TITLE"] = environment["VOICELY_SHOT_TITLE"] ?? "Q4 Roadmap Review"
+        app.launchEnvironment["VOICELY_LIVE_ACTIVITY_PREVIEW_ELAPSED_SECONDS"] = "2745"
+        app.launch()
+        sleep(10)
+        let lock = NSSelectorFromString("pressLockButton")
+        guard XCUIDevice.shared.responds(to: lock) else { throw XCTSkip("No lock button on this device.") }
+        XCUIDevice.shared.perform(lock)
+        sleep(3)
+        XCUIDevice.shared.perform(lock)
+        sleep(6)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for label in ["Always Allow", "Allow", "始终允许", "允许", "永遠允許", "允許"] where springboard.buttons[label].exists {
+            springboard.buttons[label].tap()
+            sleep(2)
+        }
+        save("lockscreen-\(language)")
+        XCUIDevice.shared.press(.home)
+    }
+
     private func launch(extra: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["VOICELY_DEMO_DIR"] = demoDirectory

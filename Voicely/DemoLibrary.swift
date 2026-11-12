@@ -12,6 +12,9 @@ import Foundation
 import SwiftData
 
 enum DemoLibrary {
+    /// Elapsed time of the demo note shown mid-recording, if the library has one.
+    @MainActor static private(set) var recordingElapsedSeconds: TimeInterval?
+
     private struct Library: Decodable {
         var folders: [Folder]
         var notes: [Note]
@@ -30,6 +33,8 @@ enum DemoLibrary {
         var engine: String
         var audioFile: String?
         var durationSeconds: Double?
+        /// Shows the note mid-recording, this many seconds in, with its text as the live transcript.
+        var recordingSeconds: Double?
         var sentences: [Sentence]
     }
 
@@ -56,7 +61,9 @@ enum DemoLibrary {
             context.insert(NoteFolder(slot: folder.slot, name: folder.name, colorIndex: folder.colorIndex))
         }
 
-        for item in library.notes {
+        // The note shown mid-recording only joins the library for recording screenshots.
+        let showsRecording = ProcessInfo.processInfo.environment["VOICELY_DEMO_RECORDING"] == "1"
+        for item in library.notes where item.recordingSeconds == nil || showsRecording {
             let audioPath = item.audioFile.map { directory.appendingPathComponent($0).path } ?? ""
             let note = VoiceNote(title: item.title, audioFilePath: audioPath)
             note.titleWasManuallyEdited = true
@@ -73,10 +80,18 @@ enum DemoLibrary {
                 }
             }
             let spans = item.sentences.allSatisfy { $0.start != nil } ? builder.spans : nil
-            note.duration = item.durationSeconds ?? item.sentences.last?.end ?? 0
-            note.setTranscript(text, spans: spans)
             note.transcriptionModelIdentifier = modelIdentifier(for: item.engine)
-            note.completeTranscription()
+            if let elapsed = item.recordingSeconds {
+                // Still recording: no duration yet, and the transcript is the live one.
+                note.duration = 0
+                note.setTranscript(text, spans: nil)
+                note.isTranscribing = true
+                recordingElapsedSeconds = elapsed
+            } else {
+                note.duration = item.durationSeconds ?? item.sentences.last?.end ?? 0
+                note.setTranscript(text, spans: spans)
+                note.completeTranscription()
+            }
             context.insert(note)
         }
 

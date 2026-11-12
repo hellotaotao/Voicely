@@ -1,0 +1,401 @@
+{
+  "folders": [
+    {
+      "slot": 1,
+      "name": "课程",
+      "colorIndex": 5
+    },
+    {
+      "slot": 2,
+      "name": "工作",
+      "colorIndex": 3
+    }
+  ],
+  "notes": [
+    {
+      "id": "weekly-sync-live",
+      "title": "跨国项目周会 · 第 12 周",
+      "hoursAgo": 0.6,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "recordingSeconds": 2745,
+      "sentences": [
+        {
+          "text": "好，人都到齐了，我们开始。今天主要过三件事：上线时间、定价，还有用户访谈的结果。"
+        },
+        {
+          "text": "Before we start, can we do it in English for the first part? Tom from the Sydney office is joining us today."
+        },
+        {
+          "text": "Sure, no problem. So, the launch date. We were planning for the twentieth, but QA found two crashes on older iPads."
+        },
+        {
+          "text": "How bad are they? If it's only on iPads from before twenty twenty, I'd still ship on time and patch it the week after."
+        },
+        {
+          "text": "其中一个是录音中途切到后台就闪退，这个不修不能上。另一个只在设置页，影响不大。"
+        },
+        {
+          "text": "Sorry, could you say that in English for Tom?"
+        },
+        {
+          "text": "Of course. One crash happens when you switch away while recording, and that one is a blocker. The other one is in settings and can wait."
+        },
+        {
+          "text": "Okay, then I agree, the recording crash has to be fixed first. How long do you need?"
+        },
+        {
+          "text": "大概三天。我今天下午就开始查，周四之前给大家一个能测的版本。"
+        },
+        {
+          "text": "Three days, so a test build by Thursday. If that works, we launch on the twenty-fifth instead of the twentieth."
+        },
+        {
+          "text": "That works for marketing. I'd rather move the date than launch with a crash in the core feature."
+        }
+      ]
+    },
+    {
+      "id": "weekly-sync",
+      "title": "跨国项目周会 · 第 11 周",
+      "hoursAgo": 168,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "durationSeconds": 3620,
+      "sentences": [
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "好，人都到齐了，我们开始。今天主要过三件事：上线时间、定价，还有用户访谈的结果。"
+        },
+        {
+          "voice": "Karen",
+          "text": "Before we start, can we do it in English for the first part? Tom from the Sydney office is joining us today."
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "Sure, no problem. So, the launch date. We were planning for the twentieth, but QA found two crashes on older iPads."
+        },
+        {
+          "voice": "Daniel (English (UK))",
+          "text": "How bad are they? If it's only on iPads from before twenty twenty, I'd still ship on time and patch it the week after."
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "其中一个是录音中途切到后台就闪退，这个不修不能上。另一个只在设置页，影响不大。"
+        },
+        {
+          "voice": "Karen",
+          "text": "Sorry, could you say that in English for Tom?"
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "Of course. One crash happens when you switch away while recording, and that one is a blocker. The other one is in settings and can wait."
+        },
+        {
+          "voice": "Daniel (English (UK))",
+          "text": "Okay, then I agree, the recording crash has to be fixed first. How long do you need?"
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "大概三天。我今天下午就开始查，周四之前给大家一个能测的版本。"
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "Three days, so a test build by Thursday. If that works, we launch on the twenty-fifth instead of the twentieth."
+        },
+        {
+          "voice": "Karen",
+          "text": "That works for marketing. I'd rather move the date than launch with a crash in the core feature."
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "好，那上线就定二十五号。第二件事是定价，这个我们上周争论了很久。"
+        },
+        {
+          "voice": "Daniel (English (UK))",
+          "text": "My view hasn't changed. One price, no tiers. Every extra option just turns into another support email."
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "我同意一个价格，但是学生折扣还是要有的，我们一半的访谈对象都是留学生。"
+        },
+        {
+          "voice": "Karen",
+          "text": "That's a good point. A student discount isn't really a tier, it's just one more price for one clear group."
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "那就这样：一个价格，加一个学生折扣。具体数字我和 Tom 下周再定。"
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "最后是访谈。我们一共聊了十二个人，最常见的需求是开会的时候不用自己记笔记。"
+        },
+        {
+          "voice": "Karen",
+          "text": "And the most common complaint was the app size. Several people almost didn't download it because of that."
+        },
+        {
+          "voice": "Flo (Chinese (China mainland))",
+          "text": "这个我们记下来，下个版本把安装包缩小。好，今天就到这里，会议纪要我下午发到群里。"
+        }
+      ]
+    },
+    {
+      "id": "group-project",
+      "title": "小组作业讨论：市场调研",
+      "hoursAgo": 26,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "durationSeconds": 2480,
+      "sentences": [
+        {
+          "voice": "Tingting (Chinese (China mainland))",
+          "text": "我们先把分工定一下吧，这个市场调研报告下周五就要交了。"
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "我觉得可以分成三块：问卷设计、数据分析，还有最后的报告和展示。"
+        },
+        {
+          "voice": "Tingting (Chinese (China mainland))",
+          "text": "问卷我来吧。我之前做过类似的，大概二十道题，周日之前发到群里给大家看。"
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "那数据分析我来。不过我们要先想清楚，到底想证明什么，不然问卷收回来也不知道怎么分析。"
+        },
+        {
+          "voice": "Tingting (Chinese (China mainland))",
+          "text": "对。老师上课说过，好的问卷是从结论倒推回来的。我们的假设是：留学生更愿意为节省时间的工具付钱。"
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "那问卷里至少要问三件事：每周花多少时间整理笔记，现在用什么工具，还有愿意为它付多少钱。"
+        },
+        {
+          "voice": "Tingting (Chinese (China mainland))",
+          "text": "付多少钱这个问题要小心，直接问的话大家都会往低了说。可以给几个价格让他们选。"
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "好主意。样本量我们至少要一百份，不然分组之后每组人太少，结论站不住。"
+        },
+        {
+          "voice": "Tingting (Chinese (China mainland))",
+          "text": "一百份不难，我们可以发到几个留学生群里。不过要注意别只发经济系的，不然样本太单一。"
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "那报告和展示谁来做？小林今天没来，要不要先分给他？"
+        },
+        {
+          "voice": "Tingting (Chinese (China mainland))",
+          "text": "先问问他吧，他上次说想做展示。我们周日晚上再开个线上会，把问卷定下来。"
+        },
+        {
+          "voice": "Reed (Chinese (China mainland))",
+          "text": "行，周日晚上八点，我来建会议链接。"
+        }
+      ]
+    },
+    {
+      "id": "micro-week-3",
+      "title": "Intro to Microeconomics · Week 3",
+      "hoursAgo": 50,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "durationSeconds": 3130,
+      "sentences": [
+        {
+          "voice": "Reed (English (US))",
+          "text": "Good morning, everyone. Let's pick up where we left off on Tuesday."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "We said that a demand curve shows how much people want to buy at every possible price, holding everything else constant."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Today I want to talk about what happens when something other than the price changes, because that is where most real-world questions live."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Say incomes go up across the whole economy. At every single price, people now buy a little more than before."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "So the whole curve shifts to the right. We are not moving along the curve, we are drawing a new one."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Does that work the same way for everything we buy?"
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Good question. Not quite. For most goods, yes. We call those normal goods, and they are the case you should assume by default."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "But for some goods, like instant noodles or bus tickets, people buy less when they earn more, because they switch to something they like better."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Those are inferior goods. The name sounds like a judgment, but it is only a description of how demand responds to income."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Prices of related goods matter too. If coffee gets expensive, demand for tea goes up. Those two are substitutes."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "If printers get cheaper, people buy more ink. Those two are complements, and their demand curves move in the opposite direction."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Then there are expectations. If everyone believes prices will rise next month, demand jumps today, before anything has actually changed."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "So a change in price moves us along the curve, and everything else shifts it?"
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Exactly. That is the single most important distinction in this chapter, and it is the one people get wrong on the exam."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Let me give you a quick test. The price of a concert ticket goes up, and fewer people buy tickets. Is that a shift or a movement?"
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "A movement along the curve, because only the price changed."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Right. Now a famous band announces a tour, and more people want tickets at every price. That one is a shift."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "For next week, read chapter four on elasticity, and try the first five problems at the end of the chapter."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "We will start Thursday with a short quiz on shifts versus movements along the curve, so make sure you are comfortable with today's examples."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Any questions before we wrap up? No? Then see you on Thursday."
+        }
+      ]
+    },
+    {
+      "id": "store-weekly",
+      "title": "门市周会",
+      "hoursAgo": 74,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "durationSeconds": 2930,
+      "sentences": [
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "好，我哋开始啦。今个礼拜铜锣湾分店嘅人流多咗两成，主要系因为隔离开咗间新商场。",
+          "speak": "好，我哋開始啦。今個禮拜銅鑼灣分店嘅人流多咗兩成，主要係因為隔籬開咗間新商場。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "不过晚市嘅人手唔够，星期五同星期六都要加多两个人，阿 May 你帮手排一排更。",
+          "speak": "不過晚市嘅人手唔夠，星期五同星期六都要加多兩個人，阿 May 你幫手排一排更。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "排更冇问题，但系兼职嗰边下个月要加人工，我哋个 budget 要再睇过。",
+          "speak": "排更冇問題，但係兼職嗰邊下個月要加人工，我哋個 budget 要再睇過。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "明白，我今晚 send 个 email 俾总公司，问下可唔可以加啲预算。",
+          "speak": "明白，我今晚 send 個 email 俾總公司，問下可唔可以加啲預算。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "另外新嘅会员计划下个月一号开始，大家记得同客人讲，登记就送一杯饮品。",
+          "speak": "另外新嘅會員計劃下個月一號開始，大家記得同客人講，登記就送一杯飲品。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "上次试做嗰个礼拜，登记嘅人比我哋估计多咗一倍，所以饮品嘅存货要准备多啲。",
+          "speak": "上次試做嗰個禮拜，登記嘅人比我哋估計多咗一倍，所以飲品嘅存貨要準備多啲。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "仲有，旺角店部收银机又坏咗，呢个月已经第二次，我听日搵人嚟整。",
+          "speak": "仲有，旺角店部收銀機又壞咗，呢個月已經第二次，我聽日搵人嚟整。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "如果再坏，不如直接换部新嘅，修嚟修去都唔慳得几多钱。",
+          "speak": "如果再壞，不如直接換部新嘅，修嚟修去都唔慳得幾多錢。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "好，我会问下供应商报价，下个礼拜开会再倾。",
+          "speak": "好，我會問下供應商報價，下個禮拜開會再傾。"
+        },
+        {
+          "voice": "Sinji (Chinese (Hong Kong))",
+          "text": "冇其他嘢嘅话，今日就倾到呢度，辛苦晒大家。",
+          "speak": "冇其他嘢嘅話，今日就傾到呢度，辛苦晒大家。"
+        }
+      ]
+    },
+    {
+      "id": "office-hours",
+      "title": "答疑课：第二次作业",
+      "hoursAgo": 98,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "durationSeconds": 2690,
+      "sentences": [
+        {
+          "text": "第三题先把弹性的公式写出来，注意分子分母不要放反。"
+        },
+        {
+          "text": "然后把表里的两个价格和两个数量代进去，用中点法算，这样涨价和降价算出来是一样的。"
+        }
+      ]
+    },
+    {
+      "id": "internship-debrief",
+      "title": "实习面试复盘",
+      "hoursAgo": 122,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "durationSeconds": 2860,
+      "sentences": [
+        {
+          "text": "这次面试问得最多的是项目经历，尤其是你在团队里具体负责哪一块。"
+        },
+        {
+          "text": "下次准备的时候，每个项目都准备一个具体的数字，比如问卷回收了多少份、分析结论改变了什么决定。"
+        }
+      ]
+    },
+    {
+      "id": "quarterly-planning",
+      "title": "季度规划会",
+      "hoursAgo": 146,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "durationSeconds": 6420,
+      "sentences": [
+        {
+          "text": "这个季度我们主要做三件事：iPad 版上线、改进新用户引导、把客服回复时间压到一天以内。"
+        },
+        {
+          "text": "第一件事最急，其他两件可以并行，但是每件事都要有一个明确的负责人。"
+        }
+      ]
+    }
+  ]
+}

@@ -244,7 +244,7 @@ struct SettingsView: View {
                 set: { selectedLanguage = $0 }
             )) {
                 ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { language in
-                    Text(language == "english" ? "English" : "Auto Detect").tag(language)
+                    Text(language == "english" ? String(localized: "English") : String(localized: "Auto Detect")).tag(language)
                 }
             }
             .pickerStyle(.menu)

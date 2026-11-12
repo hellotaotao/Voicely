@@ -137,7 +137,7 @@ struct TranscriptionQueueBar: View {
                         }
                     }
                 } label: {
-                    PillBadge(text: "\(waiting.count) waiting", systemImage: "clock.arrow.circlepath", variant: .warning)
+                    PillBadge(text: String(localized: "\(waiting.count) waiting"), systemImage: "clock.arrow.circlepath", variant: .warning)
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)

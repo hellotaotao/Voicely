@@ -288,6 +288,28 @@
         }
       }
     },
+    "%lld waiting": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 則在等待"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 条在等待"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 則在等待"
+          }
+        }
+      }
+    },
     "%lld%%": {
       "localizations": {
         "zh-HK": {

@@ -1,0 +1,356 @@
+{
+  "folders": [
+    {
+      "slot": 1,
+      "name": "Classes",
+      "colorIndex": 5
+    },
+    {
+      "slot": 2,
+      "name": "Work",
+      "colorIndex": 3
+    }
+  ],
+  "notes": [
+    {
+      "id": "micro-week-4",
+      "title": "Intro to Microeconomics · Week 4",
+      "hoursAgo": 0.6,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "recordingSeconds": 1965,
+      "sentences": [
+        {
+          "text": "Last week we drew the demand curve. Today we ask a different question: how much does demand move when the price moves?"
+        },
+        {
+          "text": "That is what economists call the price elasticity of demand, and it is probably the most useful number in this whole course."
+        },
+        {
+          "text": "Take coffee on campus. If the café raises the price by ten percent and sales drop by only three percent, demand is inelastic."
+        },
+        {
+          "text": "People grumble, but they keep buying, because there is no other coffee within a five-minute walk of the lecture halls."
+        },
+        {
+          "text": "Now think about one particular brand of sparkling water. Raise the price by ten percent and people simply pick up a different brand from the same shelf."
+        },
+        {
+          "text": "Sales might fall by twenty percent or more. That is elastic demand."
+        },
+        {
+          "text": "So what makes the difference? Mostly, whether there is a close substitute, and how much of your budget the thing takes up."
+        },
+        {
+          "text": "Salt is a classic example. Even if the price doubled, you would barely notice, so you would keep buying the same amount."
+        },
+        {
+          "text": "Rent is the opposite. It is a huge share of the budget, so people move, take a roommate, or commute further when it goes up."
+        },
+        {
+          "text": "Time matters too. In the short run, people can't change much. Give them a year, and they find alternatives."
+        },
+        {
+          "text": "Write this down, because it will be on the midterm: substitutes, share of budget, and time. Those three explain most of what you will see."
+        }
+      ]
+    },
+    {
+      "id": "roadmap-review",
+      "title": "Q4 Roadmap Review",
+      "hoursAgo": 3,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "sentences": [
+        {
+          "text": "Okay, let's move on to the second half of the agenda, which is the roadmap for the fourth quarter.",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "text": "Before we get into dates, I want to be honest about where we are. We shipped three of the five things we promised last quarter.",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "text": "The two we missed were the offline mode and the new onboarding flow, and both slipped for the same reason: we underestimated the testing.",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "text": "So my proposal is that we stop adding scope. Offline mode and onboarding go first, and nothing new starts until both are in the hands of beta users.",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "text": "Priya, you had concerns about the onboarding numbers. Do you want to walk us through them?",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "text": "Sure. Right now about a third of new users drop off at the permission screen, before they've recorded anything at all.",
+          "voice": "Karen"
+        },
+        {
+          "text": "We tested two versions of the copy last month. The one that explains why we need the microphone did eleven points better.",
+          "voice": "Karen"
+        },
+        {
+          "text": "That's a big jump. Is it enough to ship on its own, or do we still need the redesign?",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "text": "I'd ship the copy change this week. It's one string, and it buys us time to do the redesign properly.",
+          "voice": "Karen"
+        },
+        {
+          "text": "Agreed. Marcus, how does that affect the offline work on your side?",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "text": "It doesn't, really. Offline mode is mostly sync and storage, and the hard part is conflict handling when two devices edit the same note.",
+          "voice": "Daniel (English (UK))"
+        },
+        {
+          "text": "We have a design for it, but I want two more weeks of testing on real devices before I'd call it done.",
+          "voice": "Daniel (English (UK))"
+        },
+        {
+          "text": "Two weeks is fine. What I don't want is another quarter where we find the problems after launch.",
+          "voice": "Samantha (English (US))"
+        },
+        {
+          "voice": "Daniel (English (UK))",
+          "text": "Then let's put a hard rule on it: no launch until we've run the full sync test on four devices for a week."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Good. So the plan for the quarter is the copy change this week, offline mode by the end of November, and the onboarding redesign in December."
+        },
+        {
+          "voice": "Karen",
+          "text": "One thing I'd add: let's interview five users who dropped off, so the redesign isn't based only on numbers."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Yes, please set that up. Marcus, can you write the test plan and share it by Friday?"
+        },
+        {
+          "voice": "Daniel (English (UK))",
+          "text": "Will do. I'll include the two-device conflict cases we found last month."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Great. Let's stop there. Thanks, everyone."
+        }
+      ],
+      "durationSeconds": 3620
+    },
+    {
+      "id": "micro-week-3",
+      "title": "Intro to Microeconomics · Week 3",
+      "hoursAgo": 50,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "durationSeconds": 3130,
+      "sentences": [
+        {
+          "voice": "Reed (English (US))",
+          "text": "Good morning, everyone. Let's pick up where we left off on Tuesday."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "We said that a demand curve shows how much people want to buy at every possible price, holding everything else constant."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Today I want to talk about what happens when something other than the price changes, because that is where most real-world questions live."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Say incomes go up across the whole economy. At every single price, people now buy a little more than before."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "So the whole curve shifts to the right. We are not moving along the curve, we are drawing a new one."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Does that work the same way for everything we buy?"
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Good question. Not quite. For most goods, yes. We call those normal goods, and they are the case you should assume by default."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "But for some goods, like instant noodles or bus tickets, people buy less when they earn more, because they switch to something they like better."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Those are inferior goods. The name sounds like a judgment, but it is only a description of how demand responds to income."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Prices of related goods matter too. If coffee gets expensive, demand for tea goes up. Those two are substitutes."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "If printers get cheaper, people buy more ink. Those two are complements, and their demand curves move in the opposite direction."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Then there are expectations. If everyone believes prices will rise next month, demand jumps today, before anything has actually changed."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "So a change in price moves us along the curve, and everything else shifts it?"
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Exactly. That is the single most important distinction in this chapter, and it is the one people get wrong on the exam."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Let me give you a quick test. The price of a concert ticket goes up, and fewer people buy tickets. Is that a shift or a movement?"
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "A movement along the curve, because only the price changed."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Right. Now a famous band announces a tour, and more people want tickets at every price. That one is a shift."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "For next week, read chapter four on elasticity, and try the first five problems at the end of the chapter."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "We will start Thursday with a short quiz on shifts versus movements along the curve, so make sure you are comfortable with today's examples."
+        },
+        {
+          "voice": "Reed (English (US))",
+          "text": "Any questions before we wrap up? No? Then see you on Thursday."
+        }
+      ]
+    },
+    {
+      "id": "marketing-seminar",
+      "title": "Global Marketing Seminar",
+      "hoursAgo": 26,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "durationSeconds": 4210,
+      "sentences": [
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Let's hear from the Mexico City team. How did the launch campaign go?"
+        },
+        {
+          "voice": "Paulina",
+          "text": "Muy bien. En las primeras dos semanas tuvimos casi el doble de descargas que en Brasil."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Twice as many downloads? What do you think made the difference?"
+        },
+        {
+          "voice": "Paulina",
+          "text": "Creo que fue el precio. Lo bajamos a cuarenta y nueve pesos, and we kept the free trial for the first month."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "That's a useful case. Elasticity again: a small price cut, a big jump in demand."
+        },
+        {
+          "voice": "Paulina",
+          "text": "Exacto. Pero también cambiamos los anuncios. Usamos videos cortos de estudiantes reales en lugar de actores."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "So you changed two things at once. How do you know which one did the work?"
+        },
+        {
+          "voice": "Paulina",
+          "text": "Honestly, we don't know yet. We are running a test next month with the old price and the new videos."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Good. That is exactly the kind of answer I want to see in your final reports: what you changed, and how you'll separate the effects."
+        },
+        {
+          "voice": "Paulina",
+          "text": "La próxima semana les comparto los números completos, con las descargas por ciudad."
+        },
+        {
+          "voice": "Samantha (English (US))",
+          "text": "Great. Everyone, bring one example of a price change from your own market, with numbers if you can find them."
+        }
+      ]
+    },
+    {
+      "id": "design-crit",
+      "title": "Design Critique: Onboarding",
+      "hoursAgo": 74,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "durationSeconds": 3480,
+      "sentences": [
+        {
+          "text": "Let's start with the first screen. The headline is doing too much: it tries to explain recording, transcription and sync in one sentence."
+        },
+        {
+          "text": "I'd rather lead with the one thing people came for, which is getting a transcript of their meeting, and leave sync for later."
+        },
+        {
+          "text": "The permission screen is the bigger problem. Right now we ask for the microphone before we've shown why we need it."
+        }
+      ]
+    },
+    {
+      "id": "office-hours",
+      "title": "Office Hours: Problem Set 2",
+      "hoursAgo": 98,
+      "folderSlot": 1,
+      "engine": "qwen",
+      "durationSeconds": 2690,
+      "sentences": [
+        {
+          "text": "For question three, start by writing down the price elasticity formula, and be careful about which quantity goes on top."
+        },
+        {
+          "text": "Then plug in the two prices and the two quantities from the table, and use the midpoint method so the answer doesn't depend on direction."
+        }
+      ]
+    },
+    {
+      "id": "hiring-debrief",
+      "title": "Hiring Debrief: Senior iOS Engineer",
+      "hoursAgo": 120,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "durationSeconds": 2860,
+      "sentences": [
+        {
+          "text": "Let's go around the room. Overall I'd say a strong yes on the technical side. The system design answer was the best we've seen this round."
+        },
+        {
+          "text": "Communication was clear too, and she asked good questions about how the team splits work between iPhone and Mac."
+        }
+      ]
+    },
+    {
+      "id": "board-prep",
+      "title": "Board Meeting Prep",
+      "hoursAgo": 146,
+      "folderSlot": 2,
+      "engine": "qwen",
+      "durationSeconds": 6420,
+      "sentences": [
+        {
+          "text": "The deck is too long. Thirty slides for a forty-minute slot means we'll be rushing through the part they actually care about, which is retention."
+        },
+        {
+          "text": "Let's cut it to twelve and put the cohort chart on slide three."
+        }
+      ]
+    }
+  ]
+}

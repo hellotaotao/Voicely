@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build the invented sample library that the Debug build shows in demo mode.
 
-Reads notes.json next to this script. Notes whose sentences name a voice get
+Reads notes.json next to this script, or the notes file given as the second
+argument (notes-en.json and notes-zh.json hold the store screenshot sets). Notes whose sentences name a voice get
 real audio from macOS `say`, joined with short pauses, so playback, the
 waveform and tap-to-play line up with the text. Writes library.json and the
 audio files into the output directory.
@@ -9,7 +10,7 @@ audio files into the output directory.
 The app is sandboxed, so the output has to be inside its container:
 
   DIR=~/Library/Containers/com.hellotaotao.Voicely/Data/tmp/demo-library
-  scripts/demo-library/make-demo-library.py "$DIR"
+  scripts/demo-library/make-demo-library.py "$DIR" [notes.json]
   NSUnbufferedIO=YES VOICELY_DEMO_DIR="$DIR" <DerivedData>/Debug-maccatalyst/Voicely.app/Contents/MacOS/Voicely
 
 Quit the installed Voicely first; it shares the bundle identifier.
@@ -37,7 +38,9 @@ def build_audio(note: dict, out_dir: Path) -> tuple[str, list[dict]]:
     with tempfile.TemporaryDirectory() as tmp:
         for index, sentence in enumerate(note["sentences"]):
             piece = Path(tmp) / f"s{index}.wav"
-            run("say", "-v", sentence["voice"], f"--data-format=LEI16@{SAMPLE_RATE}", "-o", str(piece), sentence["text"])
+            # "speak" overrides what the voice reads, e.g. Traditional characters for a Hong Kong voice.
+            spoken = sentence.get("speak", sentence["text"])
+            run("say", "-v", sentence["voice"], f"--data-format=LEI16@{SAMPLE_RATE}", "-o", str(piece), spoken)
             with wave.open(str(piece)) as reader:
                 assert reader.getnchannels() == 1 and reader.getsampwidth() == 2
                 audio = reader.readframes(reader.getnframes())
@@ -57,17 +60,25 @@ def build_audio(note: dict, out_dir: Path) -> tuple[str, list[dict]]:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
     out_dir = Path(sys.argv[1]).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    source = json.loads((Path(__file__).parent / "notes.json").read_text())
+    notes_path = Path(sys.argv[2]) if len(sys.argv) == 3 else Path(__file__).parent / "notes.json"
+    source = json.loads(notes_path.read_text())
 
     notes = []
     for note in source["notes"]:
         entry = {key: note[key] for key in ("title", "hoursAgo", "folderSlot", "engine")}
-        if all("voice" in sentence for sentence in note["sentences"]):
+        if "recordingSeconds" in note:
+            # Mid-recording: the text is the live transcript, there is no audio yet.
+            entry["recordingSeconds"] = note["recordingSeconds"]
+            entry["sentences"] = [{"text": sentence["text"]} for sentence in note["sentences"]]
+        elif all("voice" in sentence for sentence in note["sentences"]):
             entry["audioFile"], entry["sentences"] = build_audio(note, out_dir)
+            if "durationSeconds" in note:
+                # A believable meeting length for the list; the audio itself is short.
+                entry["durationSeconds"] = note["durationSeconds"]
         else:
             entry["durationSeconds"] = note["durationSeconds"]
             entry["sentences"] = [{"text": sentence["text"]} for sentence in note["sentences"]]

@@ -53,7 +53,12 @@ struct VoicelyApp: App {
     @StateObject private var syncMonitor = CloudKitSyncMonitor()
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    var sharedModelContainer: ModelContainer = {
+    @StateObject private var modelContainerLoader = ModelContainerLoader(
+        make: VoicelyApp.makeModelContainer,
+        isProtectedDataAvailable: { UIApplication.shared.isProtectedDataAvailable }
+    )
+
+    private static func makeModelContainer() throws -> ModelContainer {
         let schema = Schema([
             VoiceNote.self,
             NoteFolder.self
@@ -80,38 +85,43 @@ struct VoicelyApp: App {
             if !AppRuntime.isRunningTests {
                 debugLog("❌ [DEBUG] Failed to create ModelContainer: \(error)")
             }
-            fatalError("Could not create ModelContainer: \(error)")
+            throw error
         }
-    }()
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(syncMonitor)
-                .task {
-                    #if DEBUG
-                    await launchRecordingLiveActivityPreviewIfNeeded()
-                    #endif
-
-                    // Demo mode first: the screenshot UI test launches it too.
-                    if AppRuntime.isDemoMode {
+            if let container = modelContainerLoader.container {
+                ContentView()
+                    .environmentObject(syncMonitor)
+                    .task {
                         #if DEBUG
-                        DemoLibrary.seed(into: sharedModelContainer.mainContext)
+                        await launchRecordingLiveActivityPreviewIfNeeded()
                         #endif
-                    } else if AppRuntime.isRunningTests {
-                        seedUITestNoteIfNeeded()
-                    } else {
-                        await syncMonitor.checkCloudKitAccountStatus()
+
+                        // Demo mode first: the screenshot UI test launches it too.
+                        if AppRuntime.isDemoMode {
+                            #if DEBUG
+                            DemoLibrary.seed(into: container.mainContext)
+                            #endif
+                        } else if AppRuntime.isRunningTests {
+                            seedUITestNoteIfNeeded(in: container.mainContext)
+                        } else {
+                            await syncMonitor.checkCloudKitAccountStatus()
+                        }
                     }
-                }
-                .onChange(of: scenePhase) { _, newValue in
-                    guard newValue == .active, !AppRuntime.isIsolatedFromUserData else { return }
-                    Task {
-                        await syncMonitor.checkCloudKitAccountStatus()
+                    .onChange(of: scenePhase) { _, newValue in
+                        guard newValue == .active, !AppRuntime.isIsolatedFromUserData else { return }
+                        Task {
+                            await syncMonitor.checkCloudKitAccountStatus()
+                        }
                     }
-                }
+                    .modelContainer(container)
+            } else {
+                // Only before the first unlock after a restart, when no window is on screen.
+                VoicelyTheme.groupedBackground.ignoresSafeArea()
+            }
         }
-        .modelContainer(sharedModelContainer)
     }
 
     #if DEBUG
@@ -145,11 +155,10 @@ struct VoicelyApp: App {
     }
     #endif
 
-    private func seedUITestNoteIfNeeded() {
+    private func seedUITestNoteIfNeeded(in context: ModelContext) {
         let environment = ProcessInfo.processInfo.environment
         guard environment["VOICELY_UI_TEST_SEED_NOTE"] == "1" else { return }
 
-        let context = sharedModelContainer.mainContext
         let descriptor = FetchDescriptor<VoiceNote>()
 
         if let existingNotes = try? context.fetch(descriptor), !existingNotes.isEmpty {
@@ -200,6 +209,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         RecordingStopNotifier.shared.install()
+        // Needs no stored data, so it also runs when iOS launches the app before
+        // the first unlock to restore a recording activity after a restart.
+        RecordingLiveActivityController.shared.endActivitiesFromEarlierLaunches()
 
 #if DEBUG
         print("🔍 [DEBUG] App did finish launching")

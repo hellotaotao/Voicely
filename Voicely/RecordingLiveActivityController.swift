@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import os
 
 #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
 import ActivityKit
@@ -16,6 +17,8 @@ final class RecordingLiveActivityController {
     static let shared = RecordingLiveActivityController()
 
     private init() {}
+
+    nonisolated private static let log = Logger(subsystem: "com.hellotaotao.Voicely", category: "LiveActivity")
 
     /// Carried into every state update so pause/resume keep showing the planned stop.
     private var scheduledEndDate: Date?
@@ -40,6 +43,24 @@ final class RecordingLiveActivityController {
             )
         } catch {
             debugLog("⚠️ [LiveActivity] Failed to start recording activity: \(error)")
+        }
+        #endif
+    }
+
+    /// Ends recording activities this process did not start. A recording never
+    /// outlives its process, so such an activity belongs to one that died with
+    /// the app (crash, power loss). iOS restores it after a restart with its timer
+    /// still counting from the original start, and only the app can end it.
+    func endActivitiesFromEarlierLaunches() {
+        #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
+        // Taken now, so an activity a recording requests later is never in it.
+        let stale = Activity<RecordingActivityAttributes>.activities.filter { $0.id != activity?.id }
+        guard !stale.isEmpty else { return }
+        Self.log.notice("event=endStaleActivities count=\(stale.count)")
+        Task {
+            for activity in stale {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
         }
         #endif
     }

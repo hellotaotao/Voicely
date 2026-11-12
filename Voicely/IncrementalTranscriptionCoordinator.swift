@@ -5,6 +5,36 @@
 
 import AVFoundation
 import Foundation
+import os
+
+/// Audio Parakeet has covered in its pass over the stopped recording, so the
+/// background task's bar moves through that pass instead of resting at 99%.
+struct EnglishPassProgress: Sendable, Equatable {
+    let totalFrames: AVAudioFramePosition
+    private(set) var finishedFrames: AVAudioFramePosition = 0
+    private(set) var currentFrames: AVAudioFramePosition = 0
+
+    init(totalFrames: AVAudioFramePosition) {
+        self.totalFrames = totalFrames
+    }
+
+    var fraction: Double {
+        guard totalFrames > 0 else { return 0 }
+        return min(1, Double(finishedFrames + currentFrames) / Double(totalFrames))
+    }
+
+    mutating func update(_ fraction: Double, ofStretchFrames frames: AVAudioFramePosition) {
+        guard fraction.isFinite else { return }
+        let covered = AVAudioFramePosition((min(max(fraction, 0), 1) * Double(frames)).rounded(.down))
+        currentFrames = max(currentFrames, covered)
+    }
+
+    /// A stretch is done whether Parakeet read it or failed on it.
+    mutating func finishStretch(frames: AVAudioFramePosition) {
+        finishedFrames += frames
+        currentFrames = 0
+    }
+}
 
 struct IncrementalTranscriptionTiming {
     static let defaultIntervalSeconds = Int(Qwen3ASRDefaults.chunkSeconds)
@@ -357,11 +387,25 @@ final class IncrementalTranscriptionCoordinator {
     /// true when anything was replaced, false when nothing was, Parakeet
     /// failed, or the recording needs the regular queue anyway. A stretch that
     /// fails keeps Qwen3-ASR's text.
+    /// How far Parakeet's pass over the stopped recording has come. Nil until it
+    /// starts. Its progress callbacks arrive off the main actor.
+    nonisolated let englishPassProgress = OSAllocatedUnfairLock<EnglishPassProgress?>(initialState: nil)
+
+    /// 0...1 through Parakeet's pass over the stopped recording, nil before it starts.
+    var englishPassFraction: Double? { englishPassProgress.withLock { $0?.fraction } }
+
     func transcribeEnglishStretches(mode: EnglishStretchRouting.Mode, noteID: UUID? = nil) async -> Bool {
         guard !requiresFullTranscription else { return false }
         let tagged = languageTaggedSlices
         let stretches = await EnglishStretchRouting.stretchesInBackground(in: tagged, mode: mode)
         guard !stretches.isEmpty else { return false }
+
+        let pass = englishPassProgress
+        let totalFrames = stretches.reduce(AVAudioFramePosition(0)) { total, stretch in
+            let range = EnglishStretchRouting.frameRange(of: stretch, in: tagged, sampleRate: recordingSampleRate)
+            return total + (range.end - range.start)
+        }
+        pass.withLock { $0 = EnglishPassProgress(totalFrames: totalFrames) }
         if let telemetryNoteID { transcriptionService.recordModel(.parakeet, afterRunOf: telemetryNoteID) }
         await transcriptionService.releaseQwenBeforeEnglishStretches(of: noteID ?? telemetryNoteID)
 
@@ -370,8 +414,13 @@ final class IncrementalTranscriptionCoordinator {
         let routed = await EnglishStretchRouting.transcribeStretches(
             stretches, in: tagged, fileURL: recordingFileURL, sampleRate: recordingSampleRate
         ) { url, start, end in
+            let frames = end - start
+            defer { pass.withLock { $0?.finishStretch(frames: frames) } }
             // Each step counts as decode work for the background task.
-            try await transcribeEnglish(url, start, end) { _ in counter.withLock { $0 &+= 1 } }
+            return try await transcribeEnglish(url, start, end) { fraction in
+                counter.withLock { $0 &+= 1 }
+                pass.withLock { $0?.update(fraction, ofStretchFrames: frames) }
+            }
         }
         await releaseEnglishEngine()
         guard !routed.replaced.isEmpty else { return false }

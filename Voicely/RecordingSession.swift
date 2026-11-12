@@ -47,6 +47,8 @@ final class RecordingFinalizationBackgroundTask {
 final class RecordingFinalizationContinuation {
     private let driver: (any ContinuedProcessingDriver)?
     private let progress: () -> Double
+    private let wholeRecordingPass: (() -> Double?)?
+    private var isInWholeRecordingPass = false
     private var identifier: String?
     private var handle: (any ContinuedProcessingHandle)?
     private var progressTask: Task<Void, Never>?
@@ -58,10 +60,12 @@ final class RecordingFinalizationContinuation {
         title: String,
         subtitle: String,
         decodeWork: @escaping () -> UInt64 = { 0 },
+        wholeRecordingPass: (() -> Double?)? = nil,
         progress: @escaping () -> Double
     ) {
         self.driver = driver
         self.progress = progress
+        self.wholeRecordingPass = wholeRecordingPass
         heartbeat = DecodeWorkHeartbeat(decodeWork: decodeWork)
         let submitted = driver?.submit(title: title, subtitle: subtitle) { [weak self] handle in
             guard let self, !self.isFinished else {
@@ -99,10 +103,28 @@ final class RecordingFinalizationContinuation {
     }
 
     private func report() {
-        let value = progress()
-        let clamped = value.isFinite ? min(max(value, 0), 0.99) : 0
-        handle?.update(progress: clamped, subtitle: String(localized: "\(Int((clamped * 100).rounded(.down)))% transcribed"))
+        // Once Parakeet goes over the whole recording, the live pass has already
+        // reached its end, so the bar shows that pass from 0 instead of resting at 99%.
+        if let pass = wholeRecordingPass?() {
+            if !isInWholeRecordingPass {
+                isInWholeRecordingPass = true
+                handle?.restartProgress()
+            }
+            let clamped = Self.clamped(pass)
+            handle?.update(progress: clamped, subtitle: String(localized: "Checking whole recording · \(Self.percent(clamped))%"))
+        } else {
+            let clamped = Self.clamped(progress())
+            handle?.update(progress: clamped, subtitle: String(localized: "\(Self.percent(clamped))% transcribed"))
+        }
         if heartbeat.decoderAdvanced() { handle?.advanceForWork() }
+    }
+
+    private static func clamped(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 0), 0.99) : 0
+    }
+
+    private static func percent(_ clamped: Double) -> Int {
+        Int((clamped * 100).rounded(.down))
     }
 
     private func release(success: Bool) {
@@ -822,11 +844,19 @@ final class RecordingSession: ObservableObject {
 
         // Without a coordinator the whole recording goes through the queue.
         let remainingSeconds = capturedCoordinator?.remainingAudioSeconds(upTo: finalFrame) ?? .infinity
+        let englishMode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
         let continuation = RecordingFinalizationContinuation(
             driver: remainingSeconds >= Self.continuedProcessingThresholdSeconds ? continuedProcessingDriver : nil,
             title: String(localized: "Finishing transcription"),
             subtitle: note.title,
-            decodeWork: { [service = transcriptionService] in service.decodeWorkCount }
+            decodeWork: { [service = transcriptionService] in service.decodeWorkCount },
+            wholeRecordingPass: { [weak capturedCoordinator] in
+                guard let capturedCoordinator, !capturedCoordinator.requiresFullTranscription else { return nil }
+                if let fraction = capturedCoordinator.englishPassFraction { return fraction }
+                // English sends the whole recording through Parakeet after stop, so
+                // the bar tracks that pass from the start rather than jump back to it.
+                return englishMode == .english ? 0 : nil
+            }
         ) { [weak capturedCoordinator, service = transcriptionService] in
             if let capturedCoordinator, !capturedCoordinator.requiresFullTranscription {
                 return capturedCoordinator.finalizationProgress
@@ -862,8 +892,7 @@ final class RecordingSession: ObservableObject {
             if let coord = capturedCoordinator {
                 accumulatedTranscript = await coord.stop(currentFrame: finalFrame)
                 // Reads the raw recording, so it runs before that is cleaned up.
-                let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
-                parakeetReplacedText = await coord.transcribeEnglishStretches(mode: mode, noteID: note.id)
+                parakeetReplacedText = await coord.transcribeEnglishStretches(mode: englishMode, noteID: note.id)
                 if parakeetReplacedText { accumulatedTranscript = coord.accumulatedTranscript }
                 // That pass runs after the live clock stopped, so the note's badge
                 // learns of Parakeet only here.

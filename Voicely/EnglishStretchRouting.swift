@@ -241,6 +241,16 @@ enum EnglishStretchRouting {
     /// Transcribes the stretches of `slices` with Parakeet and puts its words
     /// in their slices. Returns the slices and the indices it replaced; a
     /// stretch that fails keeps Qwen3-ASR's text.
+    /// The recording frames a stretch of slices covers.
+    static func frameRange(
+        of stretch: ClosedRange<Int>,
+        in slices: [LanguageTaggedSlice],
+        sampleRate: Double
+    ) -> (start: Int64, end: Int64) {
+        (Int64((slices[stretch.lowerBound].start * sampleRate).rounded()),
+         Int64((slices[stretch.upperBound].end * sampleRate).rounded()))
+    }
+
     static func transcribeStretches(
         _ stretches: [ClosedRange<Int>],
         in slices: [LanguageTaggedSlice],
@@ -252,8 +262,7 @@ enum EnglishStretchRouting {
         var replaced: [Int] = []
         for stretch in stretches {
             if Task.isCancelled { break }
-            let start = Int64((slices[stretch.lowerBound].start * sampleRate).rounded())
-            let end = Int64((slices[stretch.upperBound].end * sampleRate).rounded())
+            let (start, end) = frameRange(of: stretch, in: slices, sampleRate: sampleRate)
             let words: [TimedWord]
             do {
                 words = try await transcribe(fileURL, start, end)

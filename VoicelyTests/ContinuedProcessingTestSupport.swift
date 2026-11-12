@@ -28,6 +28,11 @@ final class RecordingProgressHandle: ContinuedProcessingHandle {
         record()
     }
 
+    func restartProgress() {
+        reporter.restart()
+        record()
+    }
+
     func complete(success: Bool) {
         completions.append(success)
         reporter.complete(success: success)

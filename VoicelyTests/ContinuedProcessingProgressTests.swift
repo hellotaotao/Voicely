@@ -207,6 +207,58 @@ struct ContinuedProcessingProgressTests {
         #expect(driver.handle.reporter.progress.isFinished)
     }
 
+    @MainActor final class PassState { var fraction: Double? }
+
+    /// Stopping a 45-minute English recording sent it through Parakeet again for
+    /// 33 s while the lock screen sat at 99%: the live pass had reached the end.
+    @Test @MainActor func wholeRecordingPassRestartsTheBarOnce() async {
+        let driver = RecordingProgressDriver()
+        let pass = PassState()
+        let continuation = RecordingFinalizationContinuation(
+            driver: driver, title: "Finishing", subtitle: "Meeting",
+            wholeRecordingPass: { pass.fraction }) { 0.99 }
+        await waitUntil(.seconds(3)) { driver.handle.reporter.progress.completedUnitCount >= 9_900 }
+        #expect(driver.handle.reporter.progress.completedUnitCount >= 9_900)
+
+        pass.fraction = 0.3
+        await waitUntil(.seconds(3)) { driver.handle.reporter.progress.completedUnitCount == 3_000 }
+        #expect(driver.handle.reporter.progress.completedUnitCount == 3_000)
+
+        pass.fraction = 0.6
+        await waitUntil(.seconds(3)) { driver.handle.reporter.progress.completedUnitCount == 6_000 }
+        // Further reports of the pass move forward without starting over again.
+        #expect(driver.handle.reporter.progress.completedUnitCount == 6_000)
+        continuation.finish(success: true)
+        #expect(driver.handle.reporter.progress.isFinished)
+    }
+
+    @Test @MainActor func wholeRecordingPassNamesItselfInTheSubtitle() async {
+        let driver = RecordingSessionTests.FakeContinuedProcessingDriver()
+        let continuation = RecordingFinalizationContinuation(
+            driver: driver, title: "Finishing", subtitle: "Meeting",
+            wholeRecordingPass: { 0.42 }) { 0.99 }
+        await waitUntil(.seconds(3)) { driver.handle.progressUpdates.count >= 2 }
+        #expect(driver.handle.restarts == 1)
+        #expect(driver.handle.progressUpdates.allSatisfy { $0 == 0.42 })
+        #expect(driver.handle.subtitles.first == "Checking whole recording · 42%")
+        continuation.finish(success: true)
+    }
+
+    @Test func englishPassProgressCoversEveryStretch() {
+        var progress = EnglishPassProgress(totalFrames: 300)
+        progress.update(0.5, ofStretchFrames: 100)
+        #expect(progress.fraction == 50.0 / 300)
+        progress.update(0.2, ofStretchFrames: 100)   // never moves backwards
+        #expect(progress.fraction == 50.0 / 300)
+        progress.finishStretch(frames: 100)
+        #expect(progress.fraction == 100.0 / 300)
+        progress.update(0.5, ofStretchFrames: 200)
+        #expect(progress.fraction == 200.0 / 300)
+        progress.finishStretch(frames: 200)
+        #expect(progress.fraction == 1)
+        #expect(EnglishPassProgress(totalFrames: 0).fraction == 0)
+    }
+
     @MainActor final class WorkCounter { var steps: UInt64 = 0 }
 
     @Test @MainActor func heartbeatSeesOnlyNewDecoderSteps() {

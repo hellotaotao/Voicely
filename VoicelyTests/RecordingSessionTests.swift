@@ -396,9 +396,15 @@ struct RecordingSessionTests {
         private(set) var progressUpdates: [Double] = []
         private(set) var completions: [Bool] = []
         private(set) var workAdvances = 0
+        private(set) var restarts = 0
+        private(set) var subtitles: [String] = []
 
-        func update(progress: Double, subtitle _: String) { progressUpdates.append(progress) }
+        func update(progress: Double, subtitle: String) {
+            progressUpdates.append(progress)
+            subtitles.append(subtitle)
+        }
         func advanceForWork() { workAdvances += 1 }
+        func restartProgress() { restarts += 1 }
         func complete(success: Bool) { completions.append(success) }
     }
 

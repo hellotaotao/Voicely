@@ -18,6 +18,8 @@ protocol ContinuedProcessingHandle: AnyObject {
     /// Records observed decode work, including retries at the same audio position.
     /// The system bar advances; the audio-position subtitle is unchanged.
     func advanceForWork()
+    /// Starts the bar over for a second phase of the same work.
+    func restartProgress()
     func complete(success: Bool)
 }
 
@@ -49,6 +51,14 @@ final class ContinuedProcessingProgress {
         let next = progress.completedUnitCount + 1
         progress.totalUnitCount = max(progress.totalUnitCount, next + Self.remainingWorkUnits)
         progress.completedUnitCount += 1
+    }
+
+    /// The only way the bar moves back: a new phase of the task, such as
+    /// Parakeet's pass over a recording the live pass already reached the end of.
+    func restart() {
+        guard !completed else { return }
+        progress.totalUnitCount = Self.audioUnits
+        progress.completedUnitCount = 0
     }
 
     func complete(success: Bool) {
@@ -197,6 +207,11 @@ private final class SystemContinuedProcessingHandle: ContinuedProcessingHandle {
     func advanceForWork() {
         reportedProgress.advanceForWork()
         logProgressIfNeeded()
+    }
+
+    func restartProgress() {
+        reportedProgress.restart()
+        log.notice("task=\(self.task.identifier, privacy: .public) event=progressRestarted")
     }
 
     private func logProgressIfNeeded() {

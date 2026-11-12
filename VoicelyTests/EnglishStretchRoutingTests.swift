@@ -276,8 +276,12 @@ struct EnglishStretchTranscriptionTests {
         let qwenSpans = coordinator.accumulatedSpans
         let workBefore = service.decodeWorkCount
         #expect(service.telemetryState.snapshot(for: noteID)?.models == [.qwen3])
+        #expect(coordinator.englishPassFraction == nil)
 
         let replaced = await coordinator.transcribeEnglishStretches(mode: .automatic)
+
+        // The background task's bar follows the pass to its end.
+        #expect(coordinator.englishPassFraction == 1)
 
         // Parakeet's pass runs after the live clock stopped and still shows on the card.
         #expect(service.telemetryState.snapshot(for: noteID)?.models == [.qwen3, .parakeet])

@@ -12,6 +12,10 @@ struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @Environment(\.dismiss) private var dismiss
+    /// Quitting to apply a new interface language is held off while recording.
+    var isRecording = false
+    @State private var appLanguage = AppLanguageSettings.storedSelection
+    @State private var showingLanguageRestartAlert = false
 
     var body: some View {
         NavigationStack {
@@ -33,6 +37,8 @@ struct SettingsView: View {
                         identifier: AccessibilityIdentifiers.Settings.languageSection
                     ) {
                         VStack(spacing: 14) {
+                            appLanguageRow
+                            Divider()
                             languageRow
                             Divider()
                             chineseScriptRow
@@ -228,6 +234,98 @@ struct SettingsView: View {
 
     // MARK: - Language
 
+    /// On iPhone and iPad the system gives Voicely a Language row on its own
+    /// page in Settings, so the row links there. The Mac has no per-app page,
+    /// so the language is picked here and applies on the next launch.
+    @ViewBuilder
+    private var appLanguageRow: some View {
+        #if targetEnvironment(macCatalyst)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("App Language")
+                        .font(.subheadline.weight(.medium))
+                    Text("Language of Voicely's menus and buttons. Transcripts are not affected.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { appLanguage },
+                    set: { newValue in
+                        appLanguage = newValue
+                        AppLanguageSettings.storedSelection = newValue
+                        showingLanguageRestartAlert = newValue != AppLanguageSettings.selectionAtLaunch
+                    }
+                )) {
+                    Text("Follow System").tag(AppLanguageSettings.followSystem)
+                    ForEach(AppLanguageSettings.options, id: \.self) { code in
+                        Text(verbatim: AppLanguageSettings.displayName(code)).tag(code)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .accessibilityIdentifier("settings.appLanguagePicker")
+            }
+            .alert("Reopen Voicely to Switch Language", isPresented: $showingLanguageRestartAlert) {
+                if isRecording {
+                    Button("OK", role: .cancel) {}
+                } else {
+                    Button("Quit Now") { AppLanguageSettings.quit() }
+                    Button("Later", role: .cancel) {}
+                }
+            } message: {
+                Text(isRecording
+                     ? "The new language appears after you stop recording, quit Voicely and open it again."
+                     : "The new language appears after you quit Voicely and open it again.")
+            }
+
+            if appLanguage != AppLanguageSettings.selectionAtLaunch {
+                HStack(alignment: .center, spacing: 10) {
+                    Text(isRecording
+                         ? "Stop recording, then quit and reopen Voicely to switch the language."
+                         : "Quit and reopen Voicely to switch the language.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Quit Voicely") {
+                        AppLanguageSettings.quit()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isRecording)
+                    .accessibilityIdentifier("settings.quitForLanguageButton")
+                }
+            }
+        }
+        #else
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("App Language")
+                    .font(.subheadline.weight(.medium))
+                Text("Follows your device language. You can pick a different one for Voicely in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button {
+                AppLanguageSettings.openSystemSettings()
+            } label: {
+                HStack(spacing: 4) {
+                    Text(verbatim: AppLanguageSettings.currentLanguageName)
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.caption)
+                }
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("settings.appLanguageButton")
+        }
+        #endif
+    }
+
     private var languageRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -356,4 +454,75 @@ struct SettingsView: View {
 #Preview {
     SettingsView()
         .environmentObject(ModelManager())
+}
+
+/// The interface language. It follows the system's preferred languages unless
+/// an app-level `AppleLanguages` override is set, which is what both System
+/// Settings (Language & Region > Applications on the Mac, the app's page on
+/// iPhone) and the in-app picker write. The bundle reads it only at launch.
+enum AppLanguageSettings {
+    static let followSystem = ""
+    /// The localizations the app ships, in menu order.
+    ///
+    /// zh-HK ships too, for Hong Kong wording such as the Settings path to the
+    /// microphone switch, but the system picks it on its own: in the menu it
+    /// would read as a second Traditional Chinese.
+    static let options = ["en", "zh-Hans", "zh-Hant", "ja", "ko", "es", "fr", "de", "pt-BR"]
+
+    static func displayName(_ code: String) -> String {
+        switch code {
+        case "en": return "English"
+        case "zh-Hans": return "简体中文"
+        case "zh-Hant": return "繁體中文"
+        case "zh-HK": return "繁體中文（香港）"
+        case "ja": return "日本語"
+        case "ko": return "한국어"
+        case "es": return "Español"
+        case "fr": return "Français"
+        case "de": return "Deutsch"
+        case "pt-BR": return "Português (Brasil)"
+        default: return code
+        }
+    }
+
+    /// The localization the app is running in, named in that language.
+    static var currentLanguageName: String {
+        displayName(Bundle.main.preferredLocalizations.first ?? "en")
+    }
+
+    /// The app-level override mapped onto a shipped localization, or
+    /// `followSystem` when there is none. Reads only Voicely's own defaults
+    /// domain, since `UserDefaults.standard` also returns the global list.
+    static var storedSelection: String {
+        get {
+            guard let domain = Bundle.main.bundleIdentifier,
+                  let languages = UserDefaults.standard.persistentDomain(forName: domain)?["AppleLanguages"] as? [String],
+                  !languages.isEmpty
+            else { return followSystem }
+            return Bundle.preferredLocalizations(from: options, forPreferences: languages).first ?? followSystem
+        }
+        set {
+            if newValue == followSystem {
+                UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+            } else {
+                UserDefaults.standard.set([newValue], forKey: "AppleLanguages")
+            }
+        }
+    }
+
+    /// The selection this process launched with, captured on first use,
+    /// which is before the picker can change it.
+    static let selectionAtLaunch = storedSelection
+
+    @MainActor static func openSystemSettings() {
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+    }
+
+    /// Mac Catalyst apps cannot relaunch themselves, so the user reopens it.
+    static func quit() {
+        UserDefaults.standard.synchronize()
+        exit(0)
+    }
 }

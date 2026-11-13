@@ -296,7 +296,7 @@ struct ContentView: View {
             .frame(width: sidebarWidth(for: geometry))
             .background(VoicelyTheme.groupedBackground)
             .sheet(isPresented: $showingSettings) {
-                SettingsView()
+                SettingsView(isRecording: audioService.isRecording)
                     .environmentObject(modelManager)
             }
             .task {
@@ -357,7 +357,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showingSettings) {
-            SettingsView()
+            SettingsView(isRecording: audioService.isRecording)
                 .environmentObject(modelManager)
         }
         .task {
@@ -381,7 +381,7 @@ struct ContentView: View {
                 }
                 .toolbarBackground(.visible, for: .navigationBar)
                 .sheet(isPresented: $showingSettings) {
-                    SettingsView()
+                    SettingsView(isRecording: audioService.isRecording)
                         .environmentObject(modelManager)
                 }
                 .task {

@@ -4,6 +4,16 @@
     "Start a ${applicationName} recording": {
       "extractionState": "extracted_with_value",
       "localizations": {
+        "de": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "${applicationName}-Aufnahme starten",
+              "Besprechung in ${applicationName} aufnehmen",
+              "Vertrauliche Besprechung in ${applicationName} aufnehmen"
+            ]
+          }
+        },
         "en": {
           "stringSet": {
             "state": "new",
@@ -11,6 +21,56 @@
               "Start a ${applicationName} recording",
               "Record a meeting in ${applicationName}",
               "Record a sensitive meeting in ${applicationName}"
+            ]
+          }
+        },
+        "es": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "Iniciar una grabación de ${applicationName}",
+              "Grabar una reunión en ${applicationName}",
+              "Grabar una reunión confidencial en ${applicationName}"
+            ]
+          }
+        },
+        "fr": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "Démarrer un enregistrement ${applicationName}",
+              "Enregistrer une réunion dans ${applicationName}",
+              "Enregistrer une réunion confidentielle dans ${applicationName}"
+            ]
+          }
+        },
+        "ja": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "${applicationName}で録音を開始",
+              "${applicationName}で会議を録音",
+              "${applicationName}で機密の会議を録音"
+            ]
+          }
+        },
+        "ko": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "${applicationName}에서 녹음 시작",
+              "${applicationName}에서 회의 녹음",
+              "${applicationName}에서 기밀 회의 녹음"
+            ]
+          }
+        },
+        "pt-BR": {
+          "stringSet": {
+            "state": "translated",
+            "values": [
+              "Iniciar uma gravação do ${applicationName}",
+              "Gravar uma reunião no ${applicationName}",
+              "Gravar uma reunião confidencial no ${applicationName}"
             ]
           }
         },

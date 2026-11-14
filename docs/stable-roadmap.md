@@ -90,7 +90,7 @@
 0. **安装包拆出 Parakeet**（2026-11-10 定，1.1.0 之后的下一版做，版本号 1.1.1）：包太大会让人不想点 Get。千问是开箱即用必需的，Parakeet 只是英文的第二步优化，可以装完以后在后台下载。1.0.1 build 1 实测：iPhone/iPad 包 1.29 GB，拆掉后约 0.86 GB；Mac 1.4 GB，拆掉后约 0.97 GB；Parakeet 约 430 MB（模型权重几乎压缩不了，压缩后大小和磁盘上一样）。剩下的基本都是千问 CoreML，已经是 8-bit，再压到 4-bit 会丢字，所以这是能缩的最大一块。0.86 GB 仍高于 iOS 默认的 200 MB 蜂窝下载提示线，收益是下载时间少三分之一。当初全部打包是怕中国大陆连不上 Hugging Face，现在不在大陆上架，这个顾虑没了。
    - 下载渠道：先试苹果托管的后台资源（App Store Connect 里设成"安装时预取"：安装时系统就开始下，装完后在后台接着下，不用 app 开着；苹果只说"安装时必须下完"那类计入商店显示的大小）。要 iOS 26 / macOS 26，文档没提 Mac Catalyst，Mac 上要实测；Mac 不支持就继续把 Parakeet 打进 Mac 包，只拆 iPhone 和 iPad。iOS 18–25 的设备拿不到时，英文就一直用千问。另一个办法是 app 首次打开后从 Hugging Face 下，所有系统都能用，但推广文本里的 "No internet" 要改。
    - app 里要改的：Parakeet 没下完时，选 English 的录音先用千问转（接上现有的 Parakeet 失败改用千问那条路）；Auto Detect 下把英文大段交给 Parakeet 重转这一步先跳过；设置页显示下载进度；下完后接上提前编译（`ModelWarmUp`）。
-0a. **Parakeet 换成 Ultra**（2026-11-14 用户定）：英文上和 v2 打平（P-0t：公开测试集合计略好；真实会议录音盲听 v2 对 4 处、Ultra 对 3 处），欧洲语言和本国语言夹英文的错误约为千问 0.6B 的四成到一半，所以一个模型同时替掉 v2、接住欧洲语言。和第 0 项一起做，拆出去下载的就是 Ultra。模型文件夹约 600 MB（编码器 8 位），v2 约 460 MB。还要定：欧洲语言的录音怎么交给它（P-0t"还没做"）；Ultra 会照写口吃重复（P-0t），和下面的去语气词（新功能 2e）一起看。定下来后同步改"不单独扩大发布范围"第一条。iPhone 上的速度和内存放进发布前清单。
+0a. **Parakeet 换成 Ultra**（2026-11-14 用户定）：英文上和 v2 打平（P-0t：公开测试集合计略好；用户会议录音里以前判过对错的 27 处分歧，v2 对 20 处、Ultra 对 21 处；新抽的盲听 v2 对 4 处、Ultra 对 3 处），欧洲语言和本国语言夹英文的错误约为千问 0.6B 的四成到一半，所以一个模型同时替掉 v2、接住欧洲语言。和第 0 项一起做，拆出去下载的就是 Ultra。模型文件夹约 600 MB（编码器 8 位），v2 约 460 MB。还要定：欧洲语言的录音怎么交给它（P-0t"还没做"）；Ultra 会照写口吃重复（P-0t），和下面的去语气词（新功能 2e）一起看。定下来后同步改"不单独扩大发布范围"第一条。iPhone 上的速度和内存放进发布前清单。
 1. 剪尾巴（2a）：会开完忘了停，尾巴可能有半小时，这是主场景里唯一常见的编辑。
 1a. English 转完后检查是不是真的英文：从录音里均匀抽最多 10 段，让千问只读语种标签（不写正文），大多数不是英文就提示改用 Auto Detect 重转；录音、导入、重转三个入口都要做。千问现在没有"只读标签"的接口，要在 vendored speech-swift 里加。苹果的文字语言识别不能用（见上面 2026-11-08 那条）。
 1b. 录音中途切到 Auto Detect 后，在录音过程中趁千问空闲补转之前 Parakeet 转过的段，新录进来的段优先；要改录音时逐段转写的调度（`IncrementalTranscriptionCoordinator`），和停止、短尾巴合并交织在一起。
@@ -885,7 +885,23 @@ ASCEND 片上千问 0.6B 是 18.39%，和 v2 差不多（+0.43，−0.79~+1.72�
 **结论**
 - 欧洲语言和本国语言夹英文，Ultra 全面最好，错误约为千问 0.6B 的四成到一半，快 6–7 倍；v3 在混说上会整句翻成英文，不如 Ultra。
 - 英文上 Ultra 和 v2 互有胜负（会议录音略差，电话会和口音闲聊略好），合计略好；Unified EN 没有比 v2 更准，它的价值只在边录边转，不值得为准确率换。
-- 所以 Ultra 有可能一个模型同时替掉 v2 并接住欧洲语言。还没做：用我们自己的真实英文会议录音（远场、手机录）比 Ultra 和 v2；欧洲语言录音怎么分给 Parakeet（选了欧洲语言就全程用它，还是自动模式下按千问的语言标签分）；iPhone 上的速度和内存。
+- 所以 Ultra 有可能一个模型同时替掉 v2 并接住欧洲语言。
+
+**真实英文会议录音**（2026-11-12；Mac 笔记库里 10 分钟以上、转写里没有汉字的 45 条录音，27.2 小时，大多是工作会议；两个模型都像 app 一样整段 16 kHz 单声道文件交给 Parakeet）
+- 没有参考答案，只能比两份输出。去掉 uh/um 后有 10.0% 的词不一样，每小时约 394 处分歧；Ultra 多写 3.7% 的词（220,682 对 212,893）。
+- 分歧按类型：用词不同 6256 处；Ultra 写了 3 个词以上而 v2 没写 289 处、多写 5 个词以上 127 处（共约 2700 词），反过来 v2 多写只有 35 处；Ultra 照写口吃重复 2016 处，数字写法不同 90 处（后两类是写法，不算对错）。
+- 速度：v2 约 316× 实时，Ultra 约 253×。
+- 抽 40 处做盲听，用户听了 7 处（很多远场片段人也听不清）：v2 对 4、Ultra 对 3。v2 赢的有两处是实质内容（"No, I'm done… So over to you again. Thank you." 被 Ultra 写成 "Okay. All right."；"feedback very much welcome" 被写成 "Lord"），Ultra 赢的都是一两个词的补漏。样本太少，下不了结论；只能说真实会议上看不出 Ultra 比 v2 好。
+- 盲听页面和分歧数据在 `pk3/listen/`、`pk3/out/real-spots.json`。
+
+**已判过对错的 40 处分歧**（2026-11-14；P-0q 里 v2 和千问在 6 条真实英文录音上的分歧，对错是当时用户亲耳听或按上下文判的：v2 对 20、千问对 7、都不对 4、两种都行 9。这次用 Ultra 和 v2 按 app 的方式重转这 6 条，看两者在这些位置写的是什么；重转的 v2 和当时的 v2 在这些位置一致）
+- 只看判出了对错的 27 处：v2 对 20 处，Ultra 对 21 处（其中 2 处是近似对："somehow have succeeded" 对应正确的 "has"，"harvest now decrypti later" 对应 "decrypt"），错 5 处，1 处说不准（"instead of it being a JSON" 里的 "it"，当时判的是这里不该有词）。
+- 当时 v2 错的 7 处，Ultra 改对 4 处（补上 "a really great journey" 的 great、"crack a" 不再写成 "track a"、"or as, you know, 0"、"has" 的主语不再写成 I've），另 2 处和 v2 错得一样（漏掉 "the target" 的 the），或换了个错法（"EDS" 写成 "elias"）。
+- 当时 v2 对的 20 处，Ultra 写错 3 处："in cop and web" 写成 "like cop and web"；"some more tasks will direct us" 写成 "Put some more tasks here, I guess"；"observes" 写成 "observe"。另外在两处争议点旁边各写错了别的词（"thanks Mel to Umar" 写成 "thanks now to everyone"，"I don't want to hold up the stand-up" 丢了 "to hold"），这两处不计入上面的数。
+- 结论：在用户自己的会议录音上，能判出对错的地方两者打平（21 对 20），Ultra 改掉 v2 的错和新犯的错数量相当。加上公开测试集英文合计持平，换成 Ultra 英文不会变差。
+- 对照脚本 `pk3/scripts/disp_check.py`，结果 `pk3/out/disp-check.json`（注意 `en/listen/ai-verdicts.json` 的编号从 1 开始，用户答案从 0 开始）。
+
+- 还没做：欧洲语言录音怎么分给 Parakeet（选了欧洲语言就全程用它，还是自动模式下按千问的语言标签分）；iPhone 上的速度和内存。
 - 数据和脚本在本机 `~/Library/Caches/voicely-qwen-bench/pk3/`（`ParakeetBatch` 批量转写工具、`scripts/prep.py` 准备数据、`scripts/score.py` 打分、`out/` 各模型输出），不在 git。
 
 ### P-5 English-only 模型的老用户迁移——已被④取代

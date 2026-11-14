@@ -38,7 +38,7 @@ final class CloudDiagnostics: ObservableObject {
         do {
             accountStatusText = Self.describe(try await container.accountStatus())
         } catch {
-            accountStatusText = "error"
+            accountStatusText = String(localized: "error")
         }
 
         do {
@@ -51,12 +51,12 @@ final class CloudDiagnostics: ObservableObject {
 
     private static func describe(_ status: CKAccountStatus) -> String {
         switch status {
-        case .available: return "available"
-        case .noAccount: return "no account"
-        case .restricted: return "restricted"
-        case .couldNotDetermine: return "could not determine"
-        case .temporarilyUnavailable: return "temporarily unavailable"
-        @unknown default: return "unknown"
+        case .available: return String(localized: "available")
+        case .noAccount: return String(localized: "no account")
+        case .restricted: return String(localized: "restricted")
+        case .couldNotDetermine: return String(localized: "could not determine")
+        case .temporarilyUnavailable: return String(localized: "temporarily unavailable")
+        @unknown default: return String(localized: "unknown")
         }
     }
 
@@ -196,7 +196,7 @@ struct DiagnosticsContent: View {
         }
     }
 
-    private func row(label: String, value: String, mono: Bool = false) -> some View {
+    private func row(label: LocalizedStringKey, value: String, mono: Bool = false) -> some View {
         HStack {
             Text(label)
                 .font(.subheadline)

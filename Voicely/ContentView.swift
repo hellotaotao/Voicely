@@ -802,6 +802,7 @@ struct ContentView: View {
             Self.demoLaunchApplied = true
             let environment = ProcessInfo.processInfo.environment
             if let query = environment["VOICELY_DEMO_SEARCH"] { searchText = query }
+            if environment["VOICELY_DEMO_SETTINGS"] == "1" { showingSettings = true }
             if let title = environment["VOICELY_DEMO_SELECT"],
                let note = voiceNotes.first(where: { $0.title == title }) {
                 selectedNoteID = note.id

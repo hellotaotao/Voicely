@@ -99,6 +99,7 @@ struct SettingsView: View {
                 .font(.system(size: 40, weight: .bold))
             Spacer()
             doneButton
+                .font(.system(size: 19))
                 .buttonStyle(.bordered)
                 .keyboardShortcut(.defaultAction)
                 .background {
@@ -110,9 +111,10 @@ struct SettingsView: View {
                         .accessibilityHidden(true)
                 }
         }
-        // The cards below sit 16 pt in; the title's glyphs start a little inside their box.
+        // The cards below sit 16 pt in; the title's glyphs start a little
+        // inside their box. Done sits a little further in than the cards' edge.
         .padding(.leading, 18)
-        .padding(.trailing, 16)
+        .padding(.trailing, 24)
         .padding(.top, 36)
         .padding(.bottom, 20)
         .background(VoicelyTheme.groupedBackground)

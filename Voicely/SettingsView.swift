@@ -16,6 +16,9 @@ struct SettingsView: View {
     var isRecording = false
     @State private var appLanguage = AppLanguageSettings.storedSelection
     @State private var showingLanguageRestartAlert = false
+    /// Mac only: the scroll view's content plus the bars it scrolls under,
+    /// which is the sheet height that shows all of Settings.
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         NavigationStack {
@@ -57,6 +60,12 @@ struct SettingsView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                (geometry.contentSize.height + geometry.contentInsets.top
+                    + geometry.contentInsets.bottom).rounded()
+            } action: { _, height in
+                contentHeight = height
+            }
             .background(VoicelyTheme.groupedBackground.ignoresSafeArea())
             .accessibilityIdentifier(AccessibilityIdentifiers.Settings.screen)
             .navigationTitle("Settings")
@@ -70,6 +79,7 @@ struct SettingsView: View {
             }
         }
         .tint(VoicelyTheme.accent)
+        .modifier(MacSettingsSheetSize(contentHeight: contentHeight))
     }
 
     // MARK: - Section shell
@@ -524,5 +534,42 @@ enum AppLanguageSettings {
     static func quit() {
         UserDefaults.standard.synchronize()
         exit(0)
+    }
+}
+
+/// The iPad form sheet the Mac inherits is narrow and of fixed height: Settings
+/// filled a third of the window and still had to scroll. On the Mac the sheet
+/// is wider and exactly as tall as its content, up to most of the window.
+private struct MacSettingsSheetSize: ViewModifier {
+    /// Depends only on the content, never on the sheet's own height, so
+    /// resizing the sheet cannot feed back into it.
+    let contentHeight: CGFloat
+
+    private static let width: CGFloat = 760
+    private static let maximumWindowFraction: CGFloat = 0.85
+    private static let bottomMargin: CGFloat = 8
+
+    func body(content: Content) -> some View {
+        #if targetEnvironment(macCatalyst)
+        content
+            .frame(width: min(Self.width, windowSize.width - 40), height: fittedHeight)
+            .presentationSizing(.fitted)
+        #else
+        content
+        #endif
+    }
+
+    /// Opens at the tallest allowed height, then shrinks to the content once measured.
+    private var fittedHeight: CGFloat {
+        let maximum = (windowSize.height * Self.maximumWindowFraction).rounded()
+        guard contentHeight > 0 else { return maximum }
+        return min(contentHeight + Self.bottomMargin, maximum)
+    }
+
+    private var windowSize: CGSize {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        return scene?.windows.first?.bounds.size ?? CGSize(width: 800, height: 700)
     }
 }

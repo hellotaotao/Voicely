@@ -212,6 +212,9 @@ struct ContentView: View {
             }
             .background(VoicelyTheme.groupedBackground)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { _ in
+            showingSettings = true
+        }
         .onChange(of: usesSplitLayout) { _, isSplit in
             // Unfolding or folding iPhone Duo swaps the layouts: keep the open note on screen.
             if isSplit {

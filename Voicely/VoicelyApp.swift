@@ -18,6 +18,8 @@ extension Notification.Name {
     /// Posted when the recording file cannot take more audio, as on a full
     /// disk. The recording is finalized with what was written up to then.
     static let recordingStoppedAfterWriteFailure = Notification.Name("VoicelyRecordingStoppedAfterWriteFailure")
+    /// Posted by the Settings… menu item (Command-comma).
+    static let openSettings = Notification.Name("VoicelyOpenSettings")
 }
 
 enum QuickAction {
@@ -120,6 +122,15 @@ struct VoicelyApp: App {
             } else {
                 // Only before the first unlock after a restart, when no window is on screen.
                 VoicelyTheme.groupedBackground.ignoresSafeArea()
+            }
+        }
+        .commands {
+            // The Mac's usual Settings… item; also Command-comma on an iPad keyboard.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                }
+                .keyboardShortcut(",", modifiers: .command)
             }
         }
     }

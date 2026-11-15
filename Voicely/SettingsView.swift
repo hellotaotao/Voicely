@@ -69,17 +69,49 @@ struct SettingsView: View {
             .background(VoicelyTheme.groupedBackground.ignoresSafeArea())
             .accessibilityIdentifier(AccessibilityIdentifiers.Settings.screen)
             .navigationTitle("Settings")
+            #if targetEnvironment(macCatalyst)
+            // The iOS toolbar button hung off the sheet's corner above the
+            // title. The Mac gets one header row instead, and Escape closes.
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) { macHeader }
+            #else
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
-                        .accessibilityIdentifier(AccessibilityIdentifiers.Settings.doneButton)
+                    doneButton
                 }
             }
+            #endif
         }
         .tint(VoicelyTheme.accent)
         .modifier(MacSettingsSheetSize(contentHeight: contentHeight))
+    }
+
+    private var doneButton: some View {
+        Button("Done") { dismiss() }
+            .fontWeight(.semibold)
+            .accessibilityIdentifier(AccessibilityIdentifiers.Settings.doneButton)
+    }
+
+    private var macHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Settings")
+                .font(.largeTitle.bold())
+            Spacer()
+            doneButton
+                .buttonStyle(.bordered)
+                .keyboardShortcut(.defaultAction)
+            // Escape as well as Return, like any Mac sheet.
+            Button("Done") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 30)
+        .padding(.bottom, 14)
+        .background(VoicelyTheme.groupedBackground)
     }
 
     // MARK: - Section shell
@@ -552,18 +584,18 @@ private struct MacSettingsSheetSize: ViewModifier {
     func body(content: Content) -> some View {
         #if targetEnvironment(macCatalyst)
         content
-            .frame(width: min(Self.width, windowSize.width - 40), height: fittedHeight)
-            .presentationSizing(.fitted)
+            .background(SheetPreferredSize(size: sheetSize))
         #else
         content
         #endif
     }
 
     /// Opens at the tallest allowed height, then shrinks to the content once measured.
-    private var fittedHeight: CGFloat {
-        let maximum = (windowSize.height * Self.maximumWindowFraction).rounded()
-        guard contentHeight > 0 else { return maximum }
-        return min(contentHeight + Self.bottomMargin, maximum)
+    private var sheetSize: CGSize {
+        let window = windowSize
+        let maximum = (window.height * Self.maximumWindowFraction).rounded()
+        let height = contentHeight > 0 ? min(contentHeight + Self.bottomMargin, maximum) : maximum
+        return CGSize(width: min(Self.width, window.width - 40), height: height)
     }
 
     private var windowSize: CGSize {
@@ -571,5 +603,57 @@ private struct MacSettingsSheetSize: ViewModifier {
             .compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive }
         return scene?.windows.first?.bounds.size ?? CGSize(width: 800, height: 700)
+    }
+}
+
+/// Sets the presented sheet's preferred content size, which UIKit's form sheet
+/// follows each time it changes. SwiftUI's own sheet sizing settles the size
+/// once, when the sheet appears, and opening Settings from the menu caught it
+/// before the content had been measured.
+private struct SheetPreferredSize: UIViewControllerRepresentable {
+    let size: CGSize
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.size = size
+    }
+
+    final class Controller: UIViewController {
+        var size: CGSize = .zero {
+            didSet { if size != oldValue { apply() } }
+        }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            apply()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            apply()
+        }
+
+        // SwiftUI can reset the size while it presents the sheet: put it back.
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            apply()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            apply()
+        }
+
+        private func apply() {
+            guard size != .zero else { return }
+            var sheet: UIViewController = self
+            while let parent = sheet.parent { sheet = parent }
+            if sheet.preferredContentSize != size {
+                sheet.preferredContentSize = size
+            }
+        }
     }
 }

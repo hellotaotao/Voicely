@@ -94,23 +94,27 @@ struct SettingsView: View {
     }
 
     private var macHeader: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .center) {
             Text("Settings")
-                .font(.largeTitle.bold())
+                .font(.system(size: 40, weight: .bold))
             Spacer()
             doneButton
                 .buttonStyle(.bordered)
                 .keyboardShortcut(.defaultAction)
-            // Escape as well as Return, like any Mac sheet.
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
-                .hidden()
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
+                .background {
+                    // Escape as well as Return, like any Mac sheet. In the
+                    // background so it takes no room in the row.
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .hidden()
+                        .accessibilityHidden(true)
+                }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 30)
-        .padding(.bottom, 14)
+        // The cards below sit 16 pt in; the title's glyphs start a little inside their box.
+        .padding(.leading, 18)
+        .padding(.trailing, 16)
+        .padding(.top, 36)
+        .padding(.bottom, 20)
         .background(VoicelyTheme.groupedBackground)
     }
 

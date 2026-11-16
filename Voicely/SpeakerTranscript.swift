@@ -73,8 +73,10 @@ enum SpeakerTranscriptBuilder {
         var speakerNumbers: [Int: Int] = [:]
         var cursor = 0
         var previousTime: TimeInterval = 0
+        var pendingShort: (start: TimeInterval, end: TimeInterval)?
 
-        func append(length: Int, time: TimeInterval?, speaker: Int?) {
+        func append(length: Int, time: TimeInterval?, end: TimeInterval? = nil, speaker: Int?,
+                    canBridge: Bool = false) {
             let validTime = time.flatMap { $0 >= previousTime ? $0 : nil }
             if let validTime { previousTime = validTime }
             let number = validTime.flatMap { _ in speaker }.map { speaker in
@@ -83,7 +85,17 @@ enum SpeakerTranscriptBuilder {
                 speakerNumbers[speaker] = number
                 return number
             }
+            // Only a normally labeled next unit may resolve the preceding candidate.
+            if let pendingShort, let validTime, let end, let speaker, let number,
+               index.continues(speaker: speaker, from: pendingShort, into: (validTime, end)) {
+                output[output.count - 1].speaker = number
+            }
             output.append(.init(length: length, start: validTime, speaker: number))
+            if canBridge, speaker == nil, let validTime, let end {
+                pendingShort = (validTime, end)
+            } else {
+                pendingShort = nil
+            }
         }
 
         for sentence in sentences {
@@ -119,7 +131,7 @@ enum SpeakerTranscriptBuilder {
                         let boundary = next == words.count ? end : words[next].range.location
                         let runRange = NSRange(location: location, length: boundary - location)
                         let covered = coversText(runRange, with: words[firstWord..<next], in: source)
-                        append(length: runRange.length, time: words[firstWord].start,
+                        append(length: runRange.length, time: words[firstWord].start, end: words[firstWord].end,
                                speaker: covered ? speakers[firstWord] : nil)
                         location = boundary
                         firstWord = next
@@ -129,8 +141,11 @@ enum SpeakerTranscriptBuilder {
             }
 
             let covered = coversText(sentence.range, with: words[...], in: source)
-            append(length: sentence.range.length, time: start,
-                   speaker: covered ? index.speaker(start: start, end: stop) : nil)
+            let speaker = covered ? index.speaker(start: start, end: stop) : nil
+            append(length: sentence.range.length, time: start, end: stop,
+                   speaker: speaker,
+                   canBridge: speaker == nil && covered && contentLength <= 12 && stop - start <= 1
+                       && hasTimedEdges(sentence.range, words: words, in: source))
         }
 
         let result = SpeakerTranscript(audioPath: audioPath, units: output)
@@ -149,6 +164,15 @@ enum SpeakerTranscriptBuilder {
         guard total > 0 else { return false }
         let known = words.reduce(into: 0) { $0 += significantCount(source.substring(with: $1.range)) }
         return Double(known) >= 0.8 * Double(total)
+    }
+
+    private static func hasTimedEdges(_ range: NSRange, words: [SpeakerAlignedToken], in source: NSString) -> Bool {
+        guard let first = words.first?.range, let last = words.last?.range else { return false }
+        // Untimed edge words could hide a speaker change outside the measured window.
+        let leading = NSRange(location: range.location, length: first.location - range.location)
+        let trailing = NSRange(location: NSMaxRange(last), length: NSMaxRange(range) - NSMaxRange(last))
+        return significantCount(source.substring(with: leading)) == 0
+            && significantCount(source.substring(with: trailing)) == 0
     }
 }
 
@@ -187,6 +211,24 @@ private struct SpeakerOverlapIndex {
         }
         guard let best, best.seconds >= 0.55 * total, best.seconds >= 0.55 * (end - start) else { return nil }
         return best.speaker
+    }
+
+    func continues(speaker: Int, from short: Range, into next: Range) -> Bool {
+        let gap = next.start - short.end
+        guard gap >= 0, gap <= 0.25, let ranges = rangesBySpeaker[speaker] else { return false }
+
+        // Require a single range, not interruptions by silence or scattered overlaps.
+        let minimumOverlap = max(0.06, 0.2 * (short.end - short.start))
+        let junctionEnd = min(next.end, next.start + 0.06)
+        let position = lowerBound(ranges) { $0.end >= junctionEnd }
+        guard position < ranges.count,
+              short.end - max(short.start, ranges[position].start) >= minimumOverlap else { return false }
+
+        for (other, ranges) in rangesBySpeaker where other != speaker {
+            let position = lowerBound(ranges) { $0.end > short.start }
+            if position < ranges.count, ranges[position].start < junctionEnd { return false }
+        }
+        return true
     }
 }
 

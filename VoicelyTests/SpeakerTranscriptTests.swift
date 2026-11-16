@@ -59,6 +59,74 @@ struct SpeakerTranscriptTests {
         ) == nil)
     }
 
+    @Test func assignsShortUtterancesOnlyWhenAudioContinuesIntoTheNextTurn() throws {
+        let text = "Not yet. It's still in progress. Great. How many people are searching?"
+        let source = text as NSString
+        func timed(_ word: String, _ start: Double, _ end: Double) -> SpeakerAlignedToken {
+            .init(range: source.range(of: word), start: start, end: end)
+        }
+        let payload = try #require(SpeakerTranscriptBuilder.make(
+            text: text, spans: spans(text), audioPath: "a",
+            tokens: [
+                timed("Not", 0, 0.2), timed("yet", 0.2, 0.5), timed("It's still in progress", 0.65, 2.5),
+                timed("Great", 2.8, 3.13), timed("How many people are searching", 3.27, 5.25)
+            ],
+            segments: [segment(0, 0.32, 2.55), segment(1, 3.02, 5.3)]
+        ))
+        #expect(payload.units.map(\.speaker) == [1, 1, 2, 2])
+        #expect(payload.units.map(\.start) == [0, 0.65, 2.8, 3.27])
+        let presentation = try #require(SpeakerTranscriptPresentation(
+            text: text, speakers: payload, label: { "S\($0 ?? 0)" }
+        ))
+        #expect(presentation.headings.count == 2)
+        #expect(presentation.playbackUnits.map(\.start) == [0, 0.65, 2.8, 3.27])
+    }
+
+    @Test func shortUtteranceStaysUnknownWithoutAContinuousUncontestedRange() throws {
+        let text = "Not yet. Still in progress."
+        let words = [token(0, 3, 0, 0.2), token(4, 3, 0.2, 0.5), token(9, 17, 0.65, 1.7)]
+        let rejected: [[SpeakerTimeRange]] = [
+            [segment(0, 0.65, 2)], // No audio evidence in the short utterance.
+            [segment(0, 0.32, 0.55), segment(0, 0.6, 2)], // Same speaker but disjoint ranges.
+            [segment(0, 0.32, 2), segment(1, 0, 0.20)], // Another voice in the short utterance.
+            [segment(0, 0.32, 2), segment(1, 0.5, 0.60)], // Another voice in the gap.
+            [segment(0, 0.32, 2), segment(1, 0.66, 0.75)], // Another voice as the next sentence starts.
+            [segment(0, 0.49, 2)] // A single 10 ms frame is not enough evidence.
+        ]
+        for segments in rejected {
+            let payload = try #require(SpeakerTranscriptBuilder.make(
+                text: text, spans: spans(text), audioPath: "a", tokens: words, segments: segments
+            ))
+            #expect(payload.units.map(\.speaker) == [nil, 1])
+        }
+    }
+
+    @Test func shortUtteranceStaysUnknownWithMissingTimingOrALongPause() throws {
+        let text = "Not yet. Still in progress."
+        let next = token(9, 17, 1.0, 2.3)
+        for words in [[token(4, 3, 0.2, 0.5), token(9, 17, 0.65, 1.7)],
+                      [token(0, 3, 0, 0.2), token(4, 3, 0.2, 0.5), next]] {
+            let payload = try #require(SpeakerTranscriptBuilder.make(
+                text: text, spans: spans(text), audioPath: "a", tokens: words, segments: [segment(0, 0.32, 2.5)]
+            ))
+            #expect(payload.units.map(\.speaker) == [nil, 1])
+        }
+    }
+
+    @Test func shortUtteranceStaysUnknownWhenOnlyItsInteriorHasReliableTiming() throws {
+        for text in ["Oh, thank you. Still in progress.", "Thank you, oh. Still in progress."] {
+            let source = text as NSString
+            let words: [SpeakerAlignedToken] = [
+                .init(range: source.range(of: "thank you", options: .caseInsensitive), start: 0.2, end: 0.65),
+                .init(range: source.range(of: "Still in progress"), start: 0.78, end: 2)
+            ]
+            let payload = try #require(SpeakerTranscriptBuilder.make(
+                text: text, spans: spans(text), audioPath: "a", tokens: words, segments: [segment(0, 0.5, 2.1)]
+            ))
+            #expect(payload.units.map(\.speaker) == [nil, 1])
+        }
+    }
+
     @Test func transcriptPresentationPreservesSearchAndPlaybackCoordinates() throws {
         let text = "A🙂. Bye."
         let speakers = SpeakerTranscript(audioPath: "a", units: [

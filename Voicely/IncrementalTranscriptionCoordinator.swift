@@ -79,7 +79,8 @@ final class IncrementalTranscriptionCoordinator {
             guard let text = slice.text else { continue }
             builder.append(text,
                            start: Double(slice.startFrame) / recordingSampleRate,
-                           end: Double(slice.endFrame) / recordingSampleRate)
+                           end: Double(slice.endFrame) / recordingSampleRate,
+                           wordTimings: slice.wordTimings)
         }
         return builder.spans
     }
@@ -213,7 +214,7 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     private enum SliceResult {
-        case text(String, language: String?)
+        case text(String, language: String?, wordTimings: [TranscriptWordTiming]? = nil)
         case silent
         case failed(SliceFailure)
     }
@@ -226,6 +227,7 @@ final class IncrementalTranscriptionCoordinator {
         var failure: SliceFailure?
         /// The language Qwen3-ASR named for the slice, nil without one.
         var language: String?
+        var wordTimings: [TranscriptWordTiming]?
         /// Parakeet transcribed the slice, not Qwen3-ASR.
         var byParakeet = false
 
@@ -248,17 +250,20 @@ final class IncrementalTranscriptionCoordinator {
 
         mutating func apply(_ result: SliceResult) {
             switch result {
-            case .text(let text, let language):
+            case .text(let text, let language, let wordTimings):
                 self.text = text
                 self.language = language
+                self.wordTimings = wordTimings
                 failure = nil
             case .silent:
                 text = nil
                 language = nil
+                wordTimings = nil
                 failure = nil
             case .failed(let reason):
                 text = nil
                 language = nil
+                wordTimings = nil
                 failure = reason
             }
         }
@@ -364,7 +369,7 @@ final class IncrementalTranscriptionCoordinator {
         slices.map {
             LanguageTaggedSlice(start: Double($0.startFrame) / recordingSampleRate,
                                 end: Double($0.endFrame) / recordingSampleRate,
-                                text: $0.text, language: $0.language)
+                                text: $0.text, language: $0.language, wordTimings: $0.wordTimings)
         }
     }
 
@@ -426,7 +431,9 @@ final class IncrementalTranscriptionCoordinator {
         guard !routed.replaced.isEmpty else { return false }
         var replacedStarts = Set<AVAudioFramePosition>()
         for index in routed.replaced {
-            slices[index].text = routed.slices[index].text
+            let replacement = routed.slices[index]
+            slices[index].text = replacement.text
+            slices[index].wordTimings = replacement.wordTimings
             slices[index].failure = nil
             replacedStarts.insert(slices[index].startFrame)
         }
@@ -682,8 +689,8 @@ final class IncrementalTranscriptionCoordinator {
                 start: Double(startFrame) / recordingSampleRate,
                 end: Double(endFrame) / recordingSampleRate, session: session)
         }
-        return Self.finalizedSegmentText(words.map(\.text).joined(separator: " "))
-            .map { SliceResult.text($0, language: nil) } ?? .silent
+        guard let rendered = EnglishStretchRouting.render(words) else { return .silent }
+        return .text(rendered.text, language: nil, wordTimings: rendered.wordTimings)
     }
 
     /// Records how far the decoder has reached through the slice it is decoding.

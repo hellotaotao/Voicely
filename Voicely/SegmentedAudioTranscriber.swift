@@ -128,6 +128,11 @@ final class SegmentedAudioTranscriber {
         }
         // Drop a stale cancellation flag left by a prior, unrelated transcription.
         transcriptionService.clearPendingCancellation()
+        // A reused transcriber (including a resumed pass) needs fresh words
+        // from this file and start frame, not the previous pass's remainder.
+        parakeetRan = false
+        parakeetWords = nil
+        parakeetSeconds = 0
 
         let session = suppliedSession ?? transcriptionService.beginTelemetrySession(noteID: note.id)
         telemetrySession = session
@@ -265,7 +270,7 @@ final class SegmentedAudioTranscriber {
             _ = CloudStorageManager.shared.deleteFile(at: path)
             return true
         }
-        note.audioFilePath = path
+        note.attachImportedAudio(path)
         try? note.modelContext?.save()
         return true
     }
@@ -300,7 +305,8 @@ final class SegmentedAudioTranscriber {
         default: break
         }
         if case .transcribed(let result) = outcome {
-            note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(for: result.text, duration: duration))
+            note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(
+                for: result.text, duration: duration, wordTimings: result.wordTimings))
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             persistTelemetry(on: note)
@@ -442,12 +448,15 @@ final class SegmentedAudioTranscriber {
             switch outcome {
             case .transcribed(let result):
                 let text = IncrementalTranscriptionCoordinator.finalizedSegmentText(result.text)
+                let wordTimings = text.map { $0.utf16.elementsEqual(result.text.utf16) } == true
+                    ? result.wordTimings : nil
                 if let text {
                     pieces.append(text)
-                    spans.append(text, start: seconds(start), end: seconds(end))
+                    spans.append(text, start: seconds(start), end: seconds(end), wordTimings: wordTimings)
                 }
                 tagged?.append(LanguageTaggedSlice(start: seconds(start), end: seconds(end),
-                                                   text: text, language: text == nil ? nil : result.language))
+                                                   text: text, language: text == nil ? nil : result.language,
+                                                   wordTimings: wordTimings))
                 producedAnyText = true
                 if text != nil {
                     if result.modelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier {
@@ -553,13 +562,14 @@ final class SegmentedAudioTranscriber {
         let boundary = end < info.totalFrames ? Double(end) / info.sampleRate : .infinity
         let sliceWords = words.prefix { ($0.start + $0.end) / 2 < boundary }
         parakeetWords = words.dropFirst(sliceWords.count)
-        guard let text = LocalTranscriptFinalizer.finalizedText(sliceWords.map(\.text).joined(separator: " ")) else {
+        guard let rendered = EnglishStretchRouting.render(sliceWords) else {
             return .noSpeech
         }
         defer { parakeetSeconds = 0 }
         return .transcribed(TranscriptionResult(
-            text: text, duration: parakeetSeconds,
-            modelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier))
+            text: rendered.text, duration: parakeetSeconds,
+            modelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier,
+            wordTimings: rendered.wordTimings))
     }
 
     private func runParakeet(on sourceURL: URL, from start: Int64, to end: Int64) async {

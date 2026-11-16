@@ -23,6 +23,8 @@ struct TranscriptionResult {
     /// The language Qwen3-ASR named for the audio when it decoded without a
     /// hint ("English", "Chinese", "None", …), nil otherwise.
     var language: String? = nil
+    /// Exact Parakeet timings, with character ranges relative to this result.
+    var wordTimings: [TranscriptWordTiming]? = nil
 }
 
 /// What a single transcription attempt produced. `.text` carries the engine's raw

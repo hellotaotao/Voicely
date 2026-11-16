@@ -623,6 +623,84 @@ struct IncrementalTranscriptionCoordinatorTests {
         }
     }
 
+    private struct UnavailableParakeetPass: Error {}
+
+    @Test(arguments: [false, true])
+    @MainActor func parakeetWordTimesFollowTheTranscriptKeptAtStop(fullPassSucceeds: Bool) async throws {
+        let pcmURL = try makeSilentCAF(seconds: 28)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        coordinator.transcribesWithParakeet = true
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
+        coordinator.releaseEnglishEngine = {}
+        coordinator.transcribeEnglishSlice = { _, start, _, _ in
+            let offset = Double(start) / 16_000
+            return [
+                TimedWord(text: "Live", start: offset + 1, end: offset + 2),
+                TimedWord(text: "slice.", start: offset + 2, end: offset + 3)
+            ]
+        }
+        coordinator.transcribeEnglish = { _, _, _, _ in
+            guard fullPassSucceeds else { throw UnavailableParakeetPass() }
+            return [
+                TimedWord(text: "New", start: 3, end: 4),
+                TimedWord(text: "first.", start: 4, end: 5),
+                TimedWord(text: "Fresh", start: 18, end: 19),
+                TimedWord(text: "tail.", start: 19, end: 20)
+            ]
+        }
+
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
+        _ = await coordinator.stop(currentFrame: 28 * 16_000)
+        let liveSpans = try #require(coordinator.accumulatedSpans)
+        #expect(liveSpans.count == 2)
+        #expect(liveSpans[0].wordTimings == [
+            .init(offset: 0, length: 4, start: 1, end: 2),
+            .init(offset: 5, length: 6, start: 2, end: 3)
+        ])
+        #expect(liveSpans[1].wordTimings?.map(\.start) == [15, 16])
+
+        let replaced = await coordinator.transcribeEnglishStretches(mode: .english)
+        #expect(replaced == fullPassSucceeds)
+        if fullPassSucceeds {
+            #expect(coordinator.accumulatedTranscript == "New first.\nFresh tail.")
+            let finalSpans = try #require(coordinator.accumulatedSpans)
+            #expect(finalSpans[0].wordTimings == [
+                .init(offset: 0, length: 3, start: 3, end: 4),
+                .init(offset: 4, length: 6, start: 4, end: 5)
+            ])
+            #expect(finalSpans[1].wordTimings?.map(\.start) == [18, 19])
+        } else {
+            #expect(coordinator.accumulatedTranscript == "Live slice.\nLive slice.")
+            #expect(coordinator.accumulatedSpans == liveSpans)
+        }
+    }
+
+    @Test @MainActor func switchingToAutoDetectDropsParakeetTimesFromReplacedSlices() async throws {
+        let pcmURL = try makeSilentCAF(seconds: 28)
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        let coordinator = IncrementalTranscriptionCoordinator(
+            transcriptionService: TranscriptionService(), recordingFileURL: pcmURL)
+        coordinator.transcribesWithParakeet = true
+        coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
+        coordinator.transcribeEnglishSlice = { _, _, _, _ in
+            [TimedWord(text: "Live.", start: 1, end: 2)]
+        }
+
+        await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
+        #expect(coordinator.accumulatedSpans?.first?.wordTimings?.count == 1)
+
+        coordinator.switchToAutoDetect()
+        coordinator.transcribeOverride = { _ in "Replacement." }
+        _ = await coordinator.stop(currentFrame: 28 * 16_000)
+
+        #expect(coordinator.accumulatedTranscript == "Replacement.\nReplacement.")
+        let finalSpans = try #require(coordinator.accumulatedSpans)
+        #expect(finalSpans.count == 2)
+        #expect(finalSpans.allSatisfy { $0.wordTimings == nil })
+    }
+
     @Test @MainActor func finalFlushDrainsBacklogInEngineSizedWindows() async throws {
         let pcmURL = try makeSilentCAF(seconds: 36)
         defer { try? FileManager.default.removeItem(at: pcmURL) }

@@ -12,6 +12,42 @@ struct TranscriptSpan: Codable, Equatable, Sendable {
     var length: Int
     var start: TimeInterval
     var end: TimeInterval
+    /// Word offsets are relative to this span; audio times are recording-relative.
+    var wordTimings: [TranscriptWordTiming]? = nil
+
+    func withoutWordTimings() -> TranscriptSpan {
+        var span = self
+        span.wordTimings = nil
+        return span
+    }
+}
+
+/// A verified word range in the original written text, not a copy of the word.
+struct TranscriptWordTiming: Codable, Equatable, Sendable {
+    var offset: Int
+    var length: Int
+    var start: TimeInterval
+    var end: TimeInterval
+}
+
+extension TranscriptWordTiming {
+    // A long recording contains thousands of words. Store a fixed tuple in the
+    // existing timeline JSON rather than repeating four property names per word.
+    init(from decoder: Decoder) throws {
+        var values = try decoder.unkeyedContainer()
+        offset = try values.decode(Int.self)
+        length = try values.decode(Int.self)
+        start = try values.decode(TimeInterval.self)
+        end = try values.decode(TimeInterval.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.unkeyedContainer()
+        try values.encode(offset)
+        try values.encode(length)
+        try values.encode(start)
+        try values.encode(end)
+    }
 }
 
 /// Spans as stored on a note, with a digest of the text they were built for.
@@ -20,16 +56,22 @@ struct TranscriptSpan: Codable, Equatable, Sendable {
 struct StoredTranscriptTimeline: Codable, Equatable, Sendable {
     var textDigest: String
     var spans: [TranscriptSpan]
+    /// The audio revision that supplied the precise times. Empty until an
+    /// imported recording's listening copy has been attached.
+    var wordTimingAudioPath: String?
 
-    init(spans: [TranscriptSpan], text: String) {
+    init(spans: [TranscriptSpan], text: String, audioPath: String? = nil) {
         self.spans = spans
         textDigest = Self.digest(of: text)
+        wordTimingAudioPath = spans.contains { $0.wordTimings != nil } ? audioPath : nil
     }
 
-    /// The spans, if they were built for exactly this text.
-    func spans(for text: String) -> [TranscriptSpan]? {
+    /// The spans, if they were built for exactly this text. A mismatched
+    /// audio version cannot supply precise word times.
+    func spans(for text: String, audioPath: String? = nil) -> [TranscriptSpan]? {
         guard textDigest == Self.digest(of: text), TranscriptTimeline.fits(spans, text) else { return nil }
-        return spans
+        guard let audioPath, wordTimingAudioPath != audioPath else { return spans }
+        return spans.map { $0.withoutWordTimings() }
     }
 
     static func digest(of text: String) -> String {
@@ -71,12 +113,14 @@ struct TranscriptSpanBuilder {
         }
     }
 
-    mutating func append(_ piece: String, start: TimeInterval, end: TimeInterval) {
+    mutating func append(_ piece: String, start: TimeInterval, end: TimeInterval,
+                         wordTimings: [TranscriptWordTiming]? = nil) {
         guard !piece.isEmpty else { return }
         if hasText, spans != nil {
             spans![spans!.count - 1].length += 1
         }
-        spans?.append(TranscriptSpan(length: piece.utf16.count, start: start, end: max(start, end)))
+        spans?.append(TranscriptSpan(length: piece.utf16.count, start: start, end: max(start, end),
+                                     wordTimings: wordTimings))
         hasText = true
     }
 }
@@ -87,18 +131,20 @@ enum TranscriptTimeline {
     /// treated as having no timeline.
     static func fits(_ spans: [TranscriptSpan], _ text: String) -> Bool {
         guard !spans.isEmpty else { return false }
-        var total = 0
+        var remaining = text.utf16.count
         for span in spans {
-            guard span.length > 0, span.start.isFinite, span.end.isFinite, span.start <= span.end else { return false }
-            total += span.length
+            guard span.length > 0, span.length <= remaining,
+                  span.start.isFinite, span.end.isFinite, span.start <= span.end else { return false }
+            remaining -= span.length
         }
-        return total == text.utf16.count
+        return remaining == 0
     }
 
     /// Whole-file transcripts from a single pass cover the recording as one span.
-    static func singleSpan(for text: String, duration: TimeInterval) -> [TranscriptSpan]? {
+    static func singleSpan(for text: String, duration: TimeInterval,
+                           wordTimings: [TranscriptWordTiming]? = nil) -> [TranscriptSpan]? {
         guard !text.isEmpty, duration.isFinite, duration > 0 else { return nil }
-        return [TranscriptSpan(length: text.utf16.count, start: 0, end: duration)]
+        return [TranscriptSpan(length: text.utf16.count, start: 0, end: duration, wordTimings: wordTimings)]
     }
 
     // MARK: - Edits
@@ -141,7 +187,8 @@ enum TranscriptTimeline {
         }
         current.length = new.count - currentStart
         if current.length > 0 { result.append(current) }
-        return fits(result, newText) ? result : nil
+        // Coarse slice times can survive a text edit; precise word offsets can't.
+        return fits(result, newText) ? result.map { $0.withoutWordTimings() } : nil
     }
 
     /// One contiguous change: `old` characters replaced by `new` ones.

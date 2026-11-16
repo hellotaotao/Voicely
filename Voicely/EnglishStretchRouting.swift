@@ -12,6 +12,7 @@ struct LanguageTaggedSlice: Codable, Equatable, Sendable {
     /// "None", …). Nil when it decoded with a language hint, found no speech,
     /// or failed.
     var language: String?
+    var wordTimings: [TranscriptWordTiming]? = nil
 }
 
 /// A word Parakeet transcribed, timed in seconds from the start of the recording.
@@ -107,6 +108,9 @@ enum EnglishStretchRouting {
         if case .transcribed(let result) = outcome {
             slice.text = LocalTranscriptFinalizer.finalizedText(result.text)
             slice.language = slice.text == nil ? nil : result.language
+            if let text = slice.text, text.utf16.elementsEqual(result.text.utf16) {
+                slice.wordTimings = result.wordTimings
+            }
         }
         return slice
     }
@@ -270,9 +274,11 @@ enum EnglishStretchRouting {
                 debugLog("⚠️ [EnglishStretchRouting] Parakeet failed on \(slices[stretch.lowerBound].start)–\(slices[stretch.upperBound].end) s: \(error)")
                 continue
             }
-            let texts = distribute(words, over: Array(slices[stretch]))
-            for (index, text) in zip(stretch, texts) {
-                result[index].text = LocalTranscriptFinalizer.finalizedText(text)
+            let buckets = distributeWords(words, over: Array(slices[stretch]))
+            for (index, bucket) in zip(stretch, buckets) {
+                let rendered = render(bucket)
+                result[index].text = rendered?.text
+                result[index].wordTimings = rendered?.wordTimings
                 replaced.append(index)
             }
         }
@@ -286,7 +292,7 @@ enum EnglishStretchRouting {
         for slice in slices {
             guard let text = slice.text else { continue }
             lines.append(text)
-            builder.append(text, start: slice.start, end: slice.end)
+            builder.append(text, start: slice.start, end: slice.end, wordTimings: slice.wordTimings)
         }
         return (lines.joined(separator: "\n"), builder.spans)
     }
@@ -297,14 +303,46 @@ enum EnglishStretchRouting {
     /// Words outside every slice go to the nearest one. Returns one text per
     /// slice, nil where Parakeet heard nothing.
     static func distribute(_ words: [TimedWord], over slices: [LanguageTaggedSlice]) -> [String?] {
+        distributeWords(words, over: slices).map { $0.isEmpty ? nil : $0.map(\.text).joined(separator: " ") }
+    }
+
+    private static func distributeWords(_ words: [TimedWord], over slices: [LanguageTaggedSlice]) -> [[TimedWord]] {
         guard !slices.isEmpty else { return [] }
-        var buckets = [[String]](repeating: [], count: slices.count)
+        var buckets = [[TimedWord]](repeating: [], count: slices.count)
         var index = 0
         for word in words.sorted(by: { $0.start < $1.start }) {
             let middle = (word.start + word.end) / 2
             while index < slices.count - 1, middle >= slices[index].end { index += 1 }
-            buckets[index].append(word.text)
+            buckets[index].append(word)
         }
-        return buckets.map { $0.isEmpty ? nil : $0.joined(separator: " ") }
+        return buckets
+    }
+
+    /// Keep the exact existing transcript formatting. A timing is attached
+    /// only if its word matches literally at the next non-whitespace offset.
+    static func render(_ words: some Collection<TimedWord>) -> (text: String, wordTimings: [TranscriptWordTiming]?)? {
+        guard let text = LocalTranscriptFinalizer.finalizedText(words.map(\.text).joined(separator: " "))
+        else { return nil }
+        let source = text as NSString
+        let nonWhitespace = CharacterSet.whitespacesAndNewlines.inverted
+        var cursor = 0
+        var timings: [TranscriptWordTiming] = []
+        for word in words {
+            let surface = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !surface.isEmpty else { continue }
+            let remainder = NSRange(location: cursor, length: source.length - cursor)
+            let first = source.rangeOfCharacter(from: nonWhitespace, range: remainder).location
+            guard first != NSNotFound else { return (text, nil) }
+            let range = source.range(of: surface, options: [.anchored, .literal],
+                                     range: NSRange(location: first, length: source.length - first))
+            guard range.location != NSNotFound else { return (text, nil) }
+            cursor = NSMaxRange(range)
+            if word.start.isFinite, word.end.isFinite, word.start >= 0, word.end > word.start {
+                timings.append(TranscriptWordTiming(offset: range.location, length: range.length,
+                                                    start: word.start, end: word.end))
+            }
+        }
+        guard cursor == source.length else { return (text, nil) }
+        return (text, timings.isEmpty ? nil : timings)
     }
 }

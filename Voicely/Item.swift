@@ -45,8 +45,7 @@ final class VoiceNote {
     var duration: TimeInterval = 0
     var audioFilePath: String = ""
     var transcription: String = ""
-    /// JSON `StoredTranscriptTimeline` tying the transcript to the audio. Written only
-    /// through `setTranscript(_:spans:)`; read through `transcriptSpans`.
+    /// JSON `StoredTranscriptTimeline` tying the transcript and word times to the audio.
     var transcriptSpansData: Data?
     var transcriptionModelIdentifier: String?
     var transcriptionLastErrorMessage: String?
@@ -103,10 +102,11 @@ extension VoiceNote {
     /// Where each part of the transcript sits in the audio, or nil when the
     /// note has no timeline or its spans no longer fit the text.
     var transcriptSpans: [TranscriptSpan]? {
-        guard let transcriptSpansData,
-              let timeline = try? JSONDecoder().decode(StoredTranscriptTimeline.self, from: transcriptSpansData)
-        else { return nil }
-        return timeline.spans(for: transcription)
+        storedTranscriptTimeline?.spans(for: transcription, audioPath: audioFilePath)
+    }
+
+    private var storedTranscriptTimeline: StoredTranscriptTimeline? {
+        transcriptSpansData.flatMap { try? JSONDecoder().decode(StoredTranscriptTimeline.self, from: $0) }
     }
 
     /// The one way to change the transcript, so its spans never describe
@@ -114,10 +114,23 @@ extension VoiceNote {
     func setTranscript(_ text: String, spans: [TranscriptSpan]?) {
         transcription = text
         if let spans, TranscriptTimeline.fits(spans, text) {
-            transcriptSpansData = try? JSONEncoder().encode(StoredTranscriptTimeline(spans: spans, text: text))
+            let timeline = StoredTranscriptTimeline(spans: spans, text: text, audioPath: audioFilePath)
+            transcriptSpansData = try? JSONEncoder().encode(timeline)
         } else {
             transcriptSpansData = nil
         }
+    }
+
+    /// The listening copy preserves the source clock; bind exact timings from
+    /// transcription of the working copy to this note's first audio file.
+    func attachImportedAudio(_ path: String) {
+        if audioFilePath.isEmpty, !path.isEmpty,
+           var timeline = storedTranscriptTimeline, timeline.wordTimingAudioPath == "",
+           timeline.spans(for: transcription) != nil {
+            timeline.wordTimingAudioPath = path
+            if let data = try? JSONEncoder().encode(timeline) { transcriptSpansData = data }
+        }
+        audioFilePath = path
     }
 
     /// Saves text the user edited, carrying the timeline across the edit.

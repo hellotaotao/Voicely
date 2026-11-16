@@ -1,0 +1,9 @@
+Nemotron 3 Diarization model by NVIDIA.
+Original model: https://huggingface.co/nvidia/Nemotron-3-Diarization
+
+Core ML conversion (c128-split-w8a8) by Fluid Inference.
+Conversion source: https://huggingface.co/FluidInference/nemotron-3-diarization-coreml
+Conversion revision: 25a90f97f254428d4b30374b76af9c74fdee8327
+
+The model and converted weights are distributed under the OpenMDW License
+Agreement, version 1.1. See LICENSE-OpenMDW-1.1.txt in this directory.

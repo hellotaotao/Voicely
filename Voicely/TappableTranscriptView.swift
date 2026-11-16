@@ -18,6 +18,7 @@ import UIKit
 struct TappableTranscriptView: UIViewRepresentable {
     let text: String
     let spans: [TranscriptSpan]
+    var speakerPresentation: SpeakerTranscriptPresentation?
     /// Nil before playback has started, so nothing is lit on arrival.
     var currentTime: TimeInterval?
     /// False holds the page still, for as long as the waveform is being dragged.
@@ -55,7 +56,8 @@ struct TappableTranscriptView: UIViewRepresentable {
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.onSeek = onSeek
-        context.coordinator.apply(text: text, spans: spans, currentTime: currentTime, followsPlayback: followsPlayback)
+        context.coordinator.apply(text: text, spans: spans, speakerPresentation: speakerPresentation,
+                                  currentTime: currentTime, followsPlayback: followsPlayback)
         context.coordinator.applySearch(ranges: searchRanges, current: currentSearchIndex, jump: searchJump)
     }
 
@@ -74,6 +76,7 @@ struct TappableTranscriptView: UIViewRepresentable {
 
         private var builtText = ""
         private var builtSpans: [TranscriptSpan] = []
+        private var builtSpeakers: SpeakerTranscriptPresentation?
         private var units: [TranscriptUnit] = []
         private var measured: (width: CGFloat, height: CGFloat)?
         private var highlightedIndex: Int?
@@ -90,6 +93,7 @@ struct TappableTranscriptView: UIViewRepresentable {
         private let highlightColor = UIColor(VoicelyTheme.accent).withAlphaComponent(0.22)
         let highlightLayer = CAShapeLayer()
 
+        private var sourceSearchRanges: [NSRange]?
         private var searchRanges: [NSRange] = []
         private var currentSearchIndex: Int?
         private var searchJump = 0
@@ -103,10 +107,12 @@ struct TappableTranscriptView: UIViewRepresentable {
 
         /// Rebuilds the text only when the transcript changes; otherwise only
         /// moves the highlight. Runs about ten times a second during playback.
-        func apply(text: String, spans: [TranscriptSpan], currentTime: TimeInterval?, followsPlayback: Bool) {
+        func apply(text: String, spans: [TranscriptSpan], speakerPresentation: SpeakerTranscriptPresentation?,
+                   currentTime: TimeInterval?, followsPlayback: Bool) {
             guard let textView else { return }
-            if text != builtText || spans != builtSpans {
-                rebuild(text: text, spans: spans, in: textView)
+            let displayText = speakerPresentation?.text ?? text
+            if displayText != builtText || spans != builtSpans || speakerPresentation != builtSpeakers {
+                rebuild(text: displayText, spans: spans, speakerPresentation: speakerPresentation, in: textView)
             }
             let scrubbingEnded = followsPlayback && !self.followsPlayback
             self.followsPlayback = followsPlayback
@@ -117,11 +123,15 @@ struct TappableTranscriptView: UIViewRepresentable {
         }
 
         func applySearch(ranges: [NSRange], current: Int?, jump: Int) {
-            // Ranges found in a newer transcript than the one shown wait for it.
-            let length = (builtText as NSString).length
-            let valid = ranges.filter { NSMaxRange($0) <= length }
-            if valid != searchRanges || current != currentSearchIndex {
-                searchRanges = valid
+            let rangesChanged = ranges != sourceSearchRanges
+            if rangesChanged {
+                sourceSearchRanges = ranges
+                // Ranges found in a newer transcript than the one shown wait for it.
+                let length = (builtText as NSString).length
+                let mapped = builtSpeakers.map { presentation in ranges.map { presentation.displayRange(for: $0) } } ?? ranges
+                searchRanges = mapped.filter { NSMaxRange($0) <= length }
+            }
+            if rangesChanged || current != currentSearchIndex {
                 currentSearchIndex = current
                 redrawSearch()
             }
@@ -161,7 +171,9 @@ struct TappableTranscriptView: UIViewRepresentable {
             let others = CGMutablePath()
             let current = CGMutablePath()
             for (index, range) in searchRanges.enumerated() {
-                addRects(for: range, in: textView, to: index == currentSearchIndex ? current : others)
+                for textRange in builtSpeakers?.textRanges(in: range) ?? [range] where textRange.length > 0 {
+                    addRects(for: textRange, in: textView, to: index == currentSearchIndex ? current : others)
+                }
             }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -194,22 +206,33 @@ struct TappableTranscriptView: UIViewRepresentable {
             return fitted.height
         }
 
-        private func rebuild(text: String, spans: [TranscriptSpan], in textView: UITextView) {
+        private func rebuild(text: String, spans: [TranscriptSpan],
+                             speakerPresentation: SpeakerTranscriptPresentation?, in textView: UITextView) {
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = 6
-            textView.attributedText = NSAttributedString(string: text, attributes: [
+            let formatted = NSMutableAttributedString(string: text, attributes: [
                 .font: UIFont.preferredFont(forTextStyle: .body),
                 .foregroundColor: UIColor.label,
                 .paragraphStyle: paragraph
             ])
+            let caption = UIFont.preferredFont(forTextStyle: .subheadline)
+            let headingFont = caption.fontDescriptor.withSymbolicTraits(.traitBold).map {
+                UIFont(descriptor: $0, size: caption.pointSize)
+            } ?? caption
+            for heading in speakerPresentation?.headings ?? [] {
+                formatted.addAttributes([.font: headingFont, .foregroundColor: UIColor.secondaryLabel], range: heading)
+            }
+            textView.attributedText = formatted
             // New text leaves the caret at its end, and the page would scroll there.
             textView.selectedRange = NSRange(location: 0, length: 0)
             builtText = text
             builtSpans = spans
+            builtSpeakers = speakerPresentation
             measured = nil
-            units = TranscriptTimeline.units(text: text, spans: spans)
+            units = speakerPresentation?.playbackUnits ?? TranscriptTimeline.units(text: text, spans: spans)
             highlightedIndex = nil
             tappedIndex = nil
+            sourceSearchRanges = nil
             searchRanges = []
             currentSearchIndex = nil
             redrawHighlight()

@@ -17,6 +17,9 @@ struct AcknowledgementsTests {
                 #expect(item.licenseText.contains("Permission is hereby granted"), "\(item.name)")
             case .ccBy4:
                 #expect(item.licenseText.contains("creativecommons.org/licenses/by/4.0"), "\(item.name)")
+            case .openMDW11:
+                #expect(item.licenseText.contains("OpenMDW License Agreement, version 1.1"), "\(item.name)")
+                #expect(item.licenseText.contains("If you distribute any portion of the Model Materials"), "\(item.name)")
             }
         }
     }

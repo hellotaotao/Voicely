@@ -54,7 +54,7 @@ struct ParakeetWordTimingTests {
         #expect(spans[2].wordTimings == [.init(offset: 0, length: 6, start: 7, end: 8)])
     }
 
-    @Test @MainActor func persistedTimesAreBoundToTheTextAndAudio() throws {
+    @Test @MainActor func persistedTimesAreBoundToTheTextAndAudioAndSurviveLabelWrites() throws {
         let note = VoiceNote(title: "Test")
         let word = TranscriptWordTiming(offset: 0, length: 3, start: 1, end: 2)
         let spans = [TranscriptSpan(length: 4, start: 0, end: 3, wordTimings: [word])]
@@ -64,6 +64,10 @@ struct ParakeetWordTimingTests {
         let wire = try #require(note.transcriptSpansData)
         let legacy = try JSONDecoder().decode(LegacyTimeline.self, from: wire)
         #expect(legacy.spans.first?.length == 4)
+        #expect(note.setSpeakerTranscript(.init(
+            audioPath: "original.m4a", units: [.init(length: 4, start: 1, speaker: 1)]
+        )))
+        #expect(note.transcriptSpans == spans)
 
         note.audioFilePath = "replacement.m4a"
         #expect(note.transcriptSpans?.first?.wordTimings == nil)

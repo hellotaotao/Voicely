@@ -45,7 +45,8 @@ final class VoiceNote {
     var duration: TimeInterval = 0
     var audioFilePath: String = ""
     var transcription: String = ""
-    /// JSON `StoredTranscriptTimeline` tying the transcript and word times to the audio.
+    /// JSON `StoredTranscriptTimeline` tying the transcript to the audio.
+    /// Includes optional speaker labels tied to the same text and audio revision.
     var transcriptSpansData: Data?
     var transcriptionModelIdentifier: String?
     var transcriptionLastErrorMessage: String?
@@ -107,6 +108,24 @@ extension VoiceNote {
 
     private var storedTranscriptTimeline: StoredTranscriptTimeline? {
         transcriptSpansData.flatMap { try? JSONDecoder().decode(StoredTranscriptTimeline.self, from: $0) }
+    }
+
+    var speakerTranscript: SpeakerTranscript? {
+        guard let timeline = storedTranscriptTimeline, timeline.spans(for: transcription) != nil,
+              let speakers = timeline.speakerTranscript,
+              speakers.fits(text: transcription, audioPath: audioFilePath) else { return nil }
+        return speakers
+    }
+
+    /// Labels never alter the original transcript, even when the result is invalid.
+    @discardableResult
+    func setSpeakerTranscript(_ speakers: SpeakerTranscript?) -> Bool {
+        guard var timeline = storedTranscriptTimeline, timeline.spans(for: transcription) != nil,
+              speakers?.fits(text: transcription, audioPath: audioFilePath) != false else { return false }
+        timeline.speakerTranscript = speakers
+        guard let data = try? JSONEncoder().encode(timeline) else { return false }
+        transcriptSpansData = data
+        return true
     }
 
     /// The one way to change the transcript, so its spans never describe

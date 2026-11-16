@@ -22,6 +22,7 @@ struct ContentView: View {
     @StateObject private var modelManager: ModelManager
     @StateObject private var transcriptionService: TranscriptionService
     @StateObject private var recordingSession: RecordingSession
+    @StateObject private var speakerLabeling = SpeakerLabelingController()
     @ObservedObject private var cloudManager = CloudStorageManager.shared
     @EnvironmentObject private var syncMonitor: CloudKitSyncMonitor
     @State private var selectedNoteID: UUID?
@@ -92,7 +93,57 @@ struct ContentView: View {
         NoteLibraryFilter.notes(voiceNotes, in: folderFilter, matching: searchText)
     }
 
+    private var speakerLabelingIsBlocked: Bool {
+        audioService.isRecording || recordingSession.isStartingRecording
+            || !transcriptionService.isIdleForWarmUp
+    }
+
     var body: some View {
+        libraryInteractions
+        .onChange(of: languageSetting) { _, _ in
+            Task { await transcriptionService.followLanguageSetting() }
+        }
+        .onChange(of: voiceNotes.count) { _, _ in
+            syncInitialSelection()
+        }
+        .alert(
+            "Import Failed",
+            isPresented: Binding(
+                get: { inboundAudioImportError != nil },
+                set: { if !$0 { inboundAudioImportError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { inboundAudioImportError = nil }
+        } message: {
+            Text(inboundAudioImportError ?? "")
+        }
+        .alert(
+            "Recording Stopped",
+            isPresented: Binding(
+                get: { recordingInterruptionNotice != nil },
+                set: { if !$0 { recordingInterruptionNotice = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { recordingInterruptionNotice = nil }
+        } message: {
+            Text(recordingInterruptionNotice ?? "")
+        }
+        .overlay {
+            if shouldShowFirstLaunchOnboarding {
+                FirstLaunchOnboardingView(
+                    modelSetupStatus: onboardingModelSetupStatus,
+                    microphonePermission: audioService.microphonePermission,
+                    requestMicrophone: { await audioService.requestPermission() },
+                    onComplete: completeFirstLaunchOnboarding
+                )
+                .transition(.opacity)
+                .zIndex(10)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: shouldShowFirstLaunchOnboarding)
+    }
+
+    private var libraryInteractions: some View {
         libraryLayout
         .tint(VoicelyTheme.accent)
         .onAppear {
@@ -146,59 +197,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .transcriptionCanResumeNotification)) { _ in
             resumeWaitingWork()
         }
-        .onChange(of: languageSetting) { _, _ in
-            Task { await transcriptionService.followLanguageSetting() }
+        .onChange(of: speakerLabelingIsBlocked) { _, blocked in
+            if blocked { speakerLabeling.cancel() }
         }
-        .onChange(of: voiceNotes.count) { _, _ in
-            syncInitialSelection()
-        }
-        .alert(
-            "Import Failed",
-            isPresented: Binding(
-                get: { inboundAudioImportError != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        inboundAudioImportError = nil
-                    }
-                }
-            )
-        ) {
-            Button("OK", role: .cancel) {
-                inboundAudioImportError = nil
-            }
-        } message: {
-            Text(inboundAudioImportError ?? "")
-        }
-        .alert(
-            "Recording Stopped",
-            isPresented: Binding(
-                get: { recordingInterruptionNotice != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        recordingInterruptionNotice = nil
-                    }
-                }
-            )
-        ) {
-            Button("OK", role: .cancel) {
-                recordingInterruptionNotice = nil
-            }
-        } message: {
-            Text(recordingInterruptionNotice ?? "")
-        }
-        .overlay {
-            if shouldShowFirstLaunchOnboarding {
-                FirstLaunchOnboardingView(
-                    modelSetupStatus: onboardingModelSetupStatus,
-                    microphonePermission: audioService.microphonePermission,
-                    requestMicrophone: { await audioService.requestPermission() },
-                    onComplete: completeFirstLaunchOnboarding
-                )
-                .transition(.opacity)
-                .zIndex(10)
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: shouldShowFirstLaunchOnboarding)
     }
 
     private var libraryLayout: some View {
@@ -782,9 +783,11 @@ struct ContentView: View {
             isPreparingAudio: recordingSession.isPreparingAudio(note),
             activeTranscriptionTitle: activeTranscriptionNote?.displayTitle,
             sidebarIsHidden: splitColumnVisibility == .detailOnly,
-            searchQuery: NoteSearch.query(searchText)
+            searchQuery: NoteSearch.query(searchText),
+            speakerLabelingIsBlocked: speakerLabelingIsBlocked
         )
-            .environmentObject(transcriptionService)
+        .environmentObject(transcriptionService)
+        .environmentObject(speakerLabeling)
     }
 
     private var sidebarRecordingOverlayInset: CGFloat {
@@ -917,8 +920,9 @@ struct ContentView: View {
     /// idle, from the first launch's onboarding on.
     private func startModelWarmUp() {
         let session = recordingSession
+        let speakerLabeling = speakerLabeling
         ModelWarmUpRunner.shared.start(transcriptionService: transcriptionService) {
-            session.currentRecordingNote != nil || session.isStartingRecording
+            session.currentRecordingNote != nil || session.isStartingRecording || speakerLabeling.activeNoteID != nil
         }
     }
 
@@ -1211,6 +1215,8 @@ struct ContentView: View {
 
     private func deleteNoteAndAudio(_ note: VoiceNote) {
         guard !recordingSession.isRecording(note) else { return }
+        speakerLabeling.cancel(noteID: note.id)
+        speakerLabeling.clearFailure(for: note.id)
         transcriptionService.discardTranscription(for: note)
         transcriptionService.segmentProgressStore.deleteRetainedAttempts(for: note.id)
         transcriptionService.segmentProgressStore.delete(for: note.id)
@@ -1920,8 +1926,14 @@ struct VoiceNoteDetailView: View {
     var sidebarIsHidden = false
     /// The library search, trimmed; its matches are marked in the transcript.
     var searchQuery = ""
+    var speakerLabelingIsBlocked = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var transcriptionService: TranscriptionService
+    @EnvironmentObject private var speakerLabeling: SpeakerLabelingController
+    @State private var speakerPresentation: SpeakerTranscriptPresentation?
+    @State private var speakerPlaybackTimeline: SpeakerPlaybackTimeline?
+    @State private var showingAlignmentModelConfirmation = false
+    @State private var speakerDownloadSource: SpeakerLabelingSource?
     @State private var showLoadModelPrompt = false
     @State private var showingShareSheet = false
     @State private var isEditing = false
@@ -2104,7 +2116,150 @@ struct VoiceNoteDetailView: View {
         !note.audioFilePath.isEmpty && !isRecordingInProgress && !isPreparingAudio
     }
 
+    private struct SpeakerPresentationInput: Equatable {
+        var noteID: UUID
+        var text: String
+        var audioPath: String
+        var timeline: Data?
+        var script: ChineseScript
+    }
+
+    private var speakerPresentationInput: SpeakerPresentationInput {
+        SpeakerPresentationInput(noteID: note.id, text: note.transcription, audioPath: note.audioFilePath,
+                                 timeline: note.transcriptSpansData, script: ChineseScriptSetting.shared.script)
+    }
+
+    private struct SpeakerPlaybackTimeline {
+        let input: SpeakerPresentationInput
+        let spans: [TranscriptSpan]
+    }
+
+    private var speakerPlaybackSpans: [TranscriptSpan]? {
+        guard let cached = speakerPlaybackTimeline, cached.input == speakerPresentationInput else { return nil }
+        return cached.spans
+    }
+
+    private var transcriptForSharing: String { speakerPresentation?.text ?? note.displayTranscription }
+
+    private var canShowSpeakerAction: Bool {
+        !isEditing && hasVisibleTranscript && shouldShowAudioPlayerCard
+            && !isTranscribingHere && !isAwaitingTranscription && !isRemoteTranscribing
+    }
+
+    private func refreshSpeakerPresentation(input: SpeakerPresentationInput) {
+        // Playback updates continuously; do not decode a note's word timing
+        // payload every time the playback cursor moves.
+        let spans = note.transcriptSpans?.map { $0.withoutWordTimings() }
+        speakerPlaybackTimeline = spans.map { SpeakerPlaybackTimeline(input: input, spans: $0) }
+        speakerPresentation = note.speakerTranscript.flatMap {
+            SpeakerTranscriptPresentation(text: note.displayTranscription, speakers: $0, fallbackSpans: spans ?? []) { speaker in
+                if let speaker { return String(localized: "Speaker \(speaker)") }
+                return String(localized: "Uncertain speaker")
+            }
+        }
+    }
+
+    private func identifySpeakers() {
+        guard canShowSpeakerAction, !speakerLabelingIsBlocked, speakerLabeling.activeNoteID == nil,
+              let source = SpeakerLabelingSource(note: note) else { return }
+        if SpeakerLabelingController.needsAlignmentDownload(for: source) {
+            speakerDownloadSource = source
+            showingAlignmentModelConfirmation = true
+        } else {
+            startSpeakerLabeling(source: source, allowAlignmentDownload: false)
+        }
+    }
+
+    private func startSpeakerLabeling(source: SpeakerLabelingSource, allowAlignmentDownload: Bool) {
+        guard canShowSpeakerAction, !speakerLabelingIsBlocked else { return }
+        speakerLabeling.start(note: note, source: source, allowAlignmentDownload: allowAlignmentDownload,
+                              transcriptionService: transcriptionService)
+    }
+
+    @ViewBuilder
+    private var speakerLabelingControls: some View {
+        if speakerLabeling.activeNoteID == note.id, let phase = speakerLabeling.phase {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if phase.progress == nil {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(phase.title)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let progress = phase.progress {
+                        Text(Double(progress.percent) / 100, format: .percent.precision(.fractionLength(0)))
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if phase != .stopping {
+                        Button("Cancel", role: .cancel) { speakerLabeling.cancel(noteID: note.id) }
+                            .buttonStyle(.borderless)
+                    }
+                }
+                if let progress = phase.progress {
+                    ProgressView(value: Double(progress.percent), total: 100)
+                        .progressViewStyle(.linear)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityIdentifier("SpeakerLabelingProgress")
+        } else if !isEditing {
+            #if targetEnvironment(macCatalyst)
+            if canShowSpeakerAction, speakerPlaybackSpans != nil, speakerPresentation == nil {
+                Button(action: identifySpeakers) {
+                    Label("Identify Speakers", systemImage: "person.2.wave.2")
+                        .font(.footnote.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .disabled(speakerLabelingIsBlocked || speakerLabeling.activeNoteID != nil)
+                .accessibilityIdentifier("IdentifySpeakers")
+            } else if canShowSpeakerAction, speakerPlaybackSpans == nil {
+                Text("Re-transcribe this recording to identify speakers.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            #endif
+
+            if speakerPresentation != nil {
+                Menu {
+                    Button("Remove Speaker Labels", role: .destructive) {
+                        speakerLabeling.removeLabels(from: note)
+                    }
+                } label: {
+                    Label("Speaker Labels", systemImage: "person.2.wave.2")
+                        .font(.footnote.weight(.medium))
+                }
+                .fixedSize()
+                .menuStyle(.borderlessButton)
+                .accessibilityIdentifier("SpeakerLabelsMenu")
+            }
+        }
+        if speakerLabeling.failureNoteID == note.id, let failure = speakerLabeling.failureMessage {
+            Label(failure, systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("SpeakerLabelingError")
+        }
+    }
+
     var body: some View {
+        detailPage
+        .confirmationDialog("Download the text alignment model?",
+                            isPresented: $showingAlignmentModelConfirmation, titleVisibility: .visible,
+                            presenting: speakerDownloadSource) { source in
+            Button("Download and Identify") {
+                startSpeakerLabeling(source: source, allowAlignmentDownload: true)
+                speakerDownloadSource = nil
+            }
+            Button("Cancel", role: .cancel) { speakerDownloadSource = nil }
+        } message: { _ in
+            Text("Download about 983 MB for the text alignment model. Speaker identification runs on this Mac without uploading your audio or transcript.")
+        }
+    }
+
+    private var detailPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 headerBlock
@@ -2126,6 +2281,13 @@ struct VoiceNoteDetailView: View {
             }
             .onChange(of: note.transcription) { _, _ in
                 findSearchMatches(jumpToFirst: false)
+            }
+            .onChange(of: speakerPresentationInput, initial: true) { old, new in
+                if old.noteID != new.noteID || old.timeline != new.timeline || old.audioPath != new.audioPath {
+                    showingAlignmentModelConfirmation = false
+                    speakerDownloadSource = nil
+                }
+                refreshSpeakerPresentation(input: new)
             }
         }
         .modifier(TopScrollEdgeEffectHidden(isHidden: hidesNavigationBar))
@@ -2164,7 +2326,7 @@ struct VoiceNoteDetailView: View {
             }
         }
         .sheet(isPresented: $showingShareSheet) {
-            ShareSheet(activityItems: [note.displayTranscription])
+            ShareSheet(activityItems: [transcriptForSharing])
         }
         .alert("Model Not Loaded", isPresented: $showLoadModelPrompt) {
             Button("Open Settings") { showingSettings = true }
@@ -2594,6 +2756,9 @@ struct VoiceNoteDetailView: View {
                 Divider().opacity(0.5)
 
                 VStack(alignment: .leading, spacing: shouldShowComputeTelemetry ? 12 : 0) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        speakerLabelingControls
+                    }
                     if shouldShowComputeTelemetry {
                         TranscriptionTelemetryCard(
                             noteID: note.id,
@@ -2988,7 +3153,26 @@ struct VoiceNoteDetailView: View {
                 .background(VoicelyTheme.surfaceRaised)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .accessibilityIdentifier(AccessibilityIdentifiers.Detail.transcriptEditor)
-        } else if shouldShowAudioPlayerCard, let spans = note.transcriptSpans {
+        } else if let speakerPresentation {
+            TappableTranscriptView(
+                text: note.displayTranscription,
+                spans: [],
+                speakerPresentation: speakerPresentation,
+                currentTime: shouldShowAudioPlayerCard && (audioPlayer.isPlaying || audioPlayer.currentTime > 0)
+                    ? audioPlayer.currentTime : nil,
+                followsPlayback: !isScrubbingWaveform,
+                searchRanges: searchMatches,
+                currentSearchIndex: searchMatches.isEmpty ? nil : currentSearchMatch,
+                searchJump: searchJump,
+                onSeek: { time in
+                    guard shouldShowAudioPlayerCard else { return }
+                    audioPlayer.seek(to: time)
+                    audioPlayer.play()
+                }
+            )
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if shouldShowAudioPlayerCard, let spans = speakerPlaybackSpans {
             TappableTranscriptView(
                 text: note.displayTranscription,
                 spans: spans,
@@ -3070,7 +3254,7 @@ struct VoiceNoteDetailView: View {
     }
 
     private func copyTranscription() {
-        UIPasteboard.general.string = note.displayTranscription
+        UIPasteboard.general.string = transcriptForSharing
         copyConfirmVisible = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_600_000_000)

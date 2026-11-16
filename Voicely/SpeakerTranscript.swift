@@ -1,0 +1,306 @@
+import Foundation
+
+struct SpeakerTimeRange: Sendable {
+    var speaker: Int
+    var start: TimeInterval
+    var end: TimeInterval
+}
+
+struct SpeakerAlignedToken: Sendable {
+    var range: NSRange
+    var start: TimeInterval
+    var end: TimeInterval
+}
+
+/// Audio-local labels. Units tile the original transcript in UTF-16 units.
+struct SpeakerTranscript: Codable, Equatable, Sendable {
+    struct Unit: Codable, Equatable, Sendable {
+        var length: Int
+        var start: TimeInterval?
+        var speaker: Int?
+    }
+
+    var audioPath: String
+    var units: [Unit]
+
+    func fits(text: String, audioPath: String) -> Bool {
+        guard !audioPath.isEmpty, self.audioPath == audioPath else { return false }
+        return fits(text: text)
+    }
+
+    func fits(text: String) -> Bool {
+        guard !units.isEmpty else { return false }
+        let length = text.utf16.count
+        var offset = 0
+        var lastTime: TimeInterval = 0
+        var hasSpeaker = false
+        for unit in units {
+            guard unit.length > 0, unit.length <= length - offset else { return false }
+            if let start = unit.start {
+                guard start.isFinite, start >= lastTime else { return false }
+                lastTime = start
+            }
+            if let speaker = unit.speaker {
+                guard speaker > 0, unit.start != nil else { return false }
+                hasSpeaker = true
+            }
+            offset += unit.length
+        }
+        return offset == length && hasSpeaker
+    }
+}
+
+enum SpeakerTranscriptBuilder {
+    static func make(text: String, spans: [TranscriptSpan], audioPath: String,
+                     tokens: [SpeakerAlignedToken], segments: [SpeakerTimeRange]) -> SpeakerTranscript? {
+        guard !audioPath.isEmpty else { return nil }
+        let source = text as NSString
+        let sentences = TranscriptTimeline.units(text: text, spans: spans)
+        let index = SpeakerOverlapIndex(segments: segments)
+        guard !sentences.isEmpty, !index.rangesBySpeaker.isEmpty else { return nil }
+
+        var lastEnd = 0
+        let orderedTokens = tokens.sorted { $0.range.location < $1.range.location }.filter { token in
+            let range = token.range
+            guard range.location >= lastEnd, range.location < source.length,
+                  range.length > 0, range.length <= source.length - range.location,
+                  token.start.isFinite, token.end.isFinite, token.start >= 0, token.end > token.start
+            else { return false }
+            lastEnd = NSMaxRange(range)
+            return true
+        }
+        var output: [SpeakerTranscript.Unit] = []
+        var speakerNumbers: [Int: Int] = [:]
+        var cursor = 0
+        var previousTime: TimeInterval = 0
+
+        func append(length: Int, time: TimeInterval?, speaker: Int?) {
+            let validTime = time.flatMap { $0 >= previousTime ? $0 : nil }
+            if let validTime { previousTime = validTime }
+            let number = validTime.flatMap { _ in speaker }.map { speaker in
+                if let number = speakerNumbers[speaker] { return number }
+                let number = speakerNumbers.count + 1
+                speakerNumbers[speaker] = number
+                return number
+            }
+            output.append(.init(length: length, start: validTime, speaker: number))
+        }
+
+        for sentence in sentences {
+            let end = NSMaxRange(sentence.range)
+            let contentLength = significantCount(source.substring(with: sentence.range))
+            if contentLength == 0, !output.isEmpty {
+                output[output.count - 1].length += sentence.range.length
+                continue
+            }
+
+            var words: [SpeakerAlignedToken] = []
+            while cursor < orderedTokens.count, orderedTokens[cursor].range.location < end {
+                let word = orderedTokens[cursor]
+                if word.range.location >= sentence.range.location, NSMaxRange(word.range) <= end {
+                    words.append(word)
+                }
+                cursor += 1
+            }
+
+            guard let start = words.map(\.start).min(), let stop = words.map(\.end).max() else {
+                append(length: sentence.range.length, time: nil, speaker: nil)
+                continue
+            }
+
+            if contentLength >= 8, stop - start > 2 {
+                let speakers = words.map { index.speaker(start: $0.start, end: $0.end) }
+                if Set(speakers.compactMap { $0 }).count > 1 {
+                    // Split only on aligned word boundaries, never guessed character positions.
+                    var location = sentence.range.location
+                    var firstWord = 0
+                    for next in 1...words.count
+                        where next == words.count || speakers[next] != speakers[firstWord] {
+                        let boundary = next == words.count ? end : words[next].range.location
+                        let runRange = NSRange(location: location, length: boundary - location)
+                        let covered = coversText(runRange, with: words[firstWord..<next], in: source)
+                        append(length: runRange.length, time: words[firstWord].start,
+                               speaker: covered ? speakers[firstWord] : nil)
+                        location = boundary
+                        firstWord = next
+                    }
+                    continue
+                }
+            }
+
+            let covered = coversText(sentence.range, with: words[...], in: source)
+            append(length: sentence.range.length, time: start,
+                   speaker: covered ? index.speaker(start: start, end: stop) : nil)
+        }
+
+        let result = SpeakerTranscript(audioPath: audioPath, units: output)
+        return result.fits(text: text) ? result : nil
+    }
+
+    private static func significantCount(_ text: String) -> Int {
+        text.unicodeScalars.reduce(into: 0) {
+            if CharacterSet.alphanumerics.contains($1) { $0 += 1 }
+        }
+    }
+
+    private static func coversText(_ range: NSRange, with words: ArraySlice<SpeakerAlignedToken>,
+                                   in source: NSString) -> Bool {
+        let total = significantCount(source.substring(with: range))
+        guard total > 0 else { return false }
+        let known = words.reduce(into: 0) { $0 += significantCount(source.substring(with: $1.range)) }
+        return Double(known) >= 0.8 * Double(total)
+    }
+}
+
+private struct SpeakerOverlapIndex {
+    typealias Range = (start: TimeInterval, end: TimeInterval)
+    let rangesBySpeaker: [Int: [Range]]
+
+    init(segments: [SpeakerTimeRange]) {
+        let valid = segments.filter { $0.speaker >= 0 && $0.start.isFinite && $0.end.isFinite
+            && $0.start >= 0 && $0.end > $0.start }
+        rangesBySpeaker = Dictionary(grouping: valid, by: \.speaker).mapValues { segments in
+            var merged: [Range] = []
+            for segment in segments.sorted(by: { $0.start < $1.start }) {
+                if let last = merged.last, segment.start <= last.end {
+                    merged[merged.count - 1].end = max(last.end, segment.end)
+                } else {
+                    merged.append((segment.start, segment.end))
+                }
+            }
+            return merged
+        }
+    }
+
+    func speaker(start: TimeInterval, end: TimeInterval) -> Int? {
+        var total: TimeInterval = 0
+        var best: (speaker: Int, seconds: TimeInterval)?
+        for (speaker, ranges) in rangesBySpeaker {
+            var position = lowerBound(ranges) { $0.end > start }
+            var seconds: TimeInterval = 0
+            while position < ranges.count, ranges[position].start < end {
+                seconds += min(end, ranges[position].end) - max(start, ranges[position].start)
+                position += 1
+            }
+            total += seconds
+            if seconds > (best?.seconds ?? 0) { best = (speaker, seconds) }
+        }
+        guard let best, best.seconds >= 0.55 * total, best.seconds >= 0.55 * (end - start) else { return nil }
+        return best.speaker
+    }
+}
+
+/// Adds display-only headings without changing the source text or its search index.
+struct SpeakerTranscriptPresentation: Equatable {
+    struct Piece: Equatable {
+        var source: NSRange
+        var display: NSRange
+    }
+
+    let text: String
+    let headings: [NSRange]
+    let playbackUnits: [TranscriptUnit]
+    private let pieces: [Piece]
+
+    init?(text: String, speakers: SpeakerTranscript, fallbackSpans: [TranscriptSpan] = [],
+          label: (Int?) -> String) {
+        guard speakers.fits(text: text) else { return nil }
+        let source = text as NSString
+        let estimatedUnits = TranscriptTimeline.units(text: text, spans: fallbackSpans)
+        var anchors: [(offset: Int, start: TimeInterval)] = []
+        var scan = 0
+        for unit in speakers.units {
+            if let start = unit.start { anchors.append((scan, start)) }
+            scan += unit.length
+        }
+        var anchorIndex = 0
+        var rendered = ""
+        var headingRanges: [NSRange] = []
+        var playback: [TranscriptUnit] = []
+        var pieces: [Piece] = []
+        var offset = 0
+        var displayedOffset = 0
+        var previousSpeaker: Int?
+        for unit in speakers.units {
+            let firstInTurn = offset == 0 || unit.speaker != previousSpeaker
+            if firstInTurn {
+                let separator = offset == 0 ? "" : "\n\n"
+                let name = label(unit.speaker)
+                headingRanges.append(NSRange(location: displayedOffset + separator.utf16.count, length: name.utf16.count))
+                let inserted = separator + name + "\n"
+                rendered.append(inserted)
+                displayedOffset += inserted.utf16.count
+            }
+
+            let range = NSRange(location: offset, length: unit.length)
+            let displayed = NSRange(location: displayedOffset, length: unit.length)
+            rendered.append(source.substring(with: range))
+            if !firstInTurn {
+                pieces[pieces.count - 1].source.length += unit.length
+                pieces[pieces.count - 1].display.length += unit.length
+            } else {
+                pieces.append(Piece(source: range, display: displayed))
+            }
+            if let start = unit.start {
+                anchorIndex += 1
+                // Aligned times need only a short lead-in.
+                playback.append(TranscriptUnit(range: displayed, start: start, spanStart: max(0, start - 0.15)))
+            } else if let index = TranscriptTimeline.unitIndex(containing: offset, in: estimatedUnits) {
+                // Unknown speaker does not make a previously tappable sentence
+                // untappable. Keep estimates in order around aligned neighbors.
+                let estimated = estimatedUnits[index]
+                let previous = anchorIndex > 0 ? anchors[anchorIndex - 1] : nil
+                let next = anchorIndex < anchors.count ? anchors[anchorIndex] : nil
+                var start = estimated.start
+                if let previous, let next, start < previous.start || start >= next.start {
+                    let fraction = Double(offset - previous.offset) / Double(next.offset - previous.offset)
+                    start = previous.start + fraction * (next.start - previous.start)
+                }
+                start = min(next?.start ?? .infinity, max(playback.last?.start ?? 0, start))
+                playback.append(TranscriptUnit(range: displayed, start: start, spanStart: min(start, estimated.spanStart)))
+            }
+            previousSpeaker = unit.speaker
+            offset += unit.length
+            displayedOffset += unit.length
+        }
+        self.text = rendered
+        headings = headingRanges
+        playbackUnits = playback
+        self.pieces = pieces
+    }
+
+    func displayRange(for source: NSRange) -> NSRange {
+        guard let last = pieces.last, source.length > 0, source.location >= 0,
+              source.location < NSMaxRange(last.source),
+              source.length <= NSMaxRange(last.source) - source.location else { return NSRange() }
+        let start = displayLocation(for: source.location)
+        let end = displayLocation(for: NSMaxRange(source) - 1) + 1
+        return NSRange(location: start, length: end - start)
+    }
+
+    func textRanges(in displayRange: NSRange) -> [NSRange] {
+        var index = lowerBound(pieces) { NSMaxRange($0.display) > displayRange.location }
+        var ranges: [NSRange] = []
+        while index < pieces.count, pieces[index].display.location < NSMaxRange(displayRange) {
+            let range = NSIntersectionRange(pieces[index].display, displayRange)
+            if range.length > 0 { ranges.append(range) }
+            index += 1
+        }
+        return ranges
+    }
+
+    private func displayLocation(for point: Int) -> Int {
+        let piece = pieces[lowerBound(pieces) { NSMaxRange($0.source) > point }]
+        return piece.display.location + point - piece.source.location
+    }
+}
+
+private func lowerBound<T>(_ array: [T], matching predicate: (T) -> Bool) -> Int {
+    var low = 0
+    var high = array.count
+    while low < high {
+        let mid = low + (high - low) / 2
+        if predicate(array[mid]) { high = mid } else { low = mid + 1 }
+    }
+    return low
+}

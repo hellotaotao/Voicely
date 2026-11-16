@@ -4,17 +4,29 @@
 #   Models/mlx/       Qwen3-ASR MLX 8-bit weights for the Mac app
 #   Models/coreml/    Qwen3-ASR CoreML models for the iPhone and iPad app
 #   Models/parakeet/  Parakeet TDT v2 CoreML models (English) for every platform
+#   Models/nemotron/  Nemotron 3 speaker detection (CoreML) for the Mac app
 #
 # The Qwen3-ASR folders carry the tokenizer files. Files already in the
 # Hugging Face cache that speech-swift uses (~/Library/Caches/qwen3-speech) or
 # in FluidAudio's model folder are cloned instead of downloaded. The revisions
 # are pinned; change them on purpose.
 #
-# Usage: scripts/fetch-speech-models.sh
+# Usage: scripts/fetch-speech-models.sh [--nemotron-only [--source DIRECTORY]]
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
 DEST="$ROOT/Models"
+
+if [[ "${1:-}" == "--nemotron-only" ]]; then
+    shift
+    exec /usr/bin/python3 -I "$ROOT/scripts/nemotron-model.py" "$@"
+fi
+if (( $# != 0 )); then
+    echo "Usage: scripts/fetch-speech-models.sh [--nemotron-only [--source DIRECTORY]]" >&2
+    exit 2
+fi
+
+/usr/bin/python3 -I "$ROOT/scripts/nemotron-model.py"
 
 exec /usr/bin/python3 -I - "$DEST" <<'PYTHON'
 import json, os, shutil, subprocess, sys, urllib.request

@@ -330,6 +330,19 @@ class TranscriptionService: ObservableObject {
         await unloadQwen()
     }
 
+    /// Speaker labeling uses its own models. Free idle speech models first,
+    /// but never unload a model once new transcription or recording needs it.
+    func releaseModelsBeforeSpeakerLabeling() async {
+        guard isIdleForWarmUp else { return }
+        if isReleasingIdleQwen {
+            await idleQwenRelease?.value
+        } else if isEngineLoaded {
+            await unloadQwen()
+        }
+        guard isIdleForWarmUp, !Task.isCancelled else { return }
+        await ParakeetEnglishEngine.shared.unload()
+    }
+
     private func unloadQwen() async {
         idleQwenRelease?.cancel()
         isReleasingIdleQwen = true

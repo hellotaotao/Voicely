@@ -56,6 +56,7 @@ extension TranscriptWordTiming {
 struct StoredTranscriptTimeline: Codable, Equatable, Sendable {
     var textDigest: String
     var spans: [TranscriptSpan]
+    var speakerTranscript: SpeakerTranscript?
     /// The audio revision that supplied the precise times. Empty until an
     /// imported recording's listening copy has been attached.
     var wordTimingAudioPath: String?

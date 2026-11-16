@@ -12,12 +12,14 @@ struct Acknowledgement: Identifiable {
         case apache2
         case mit(copyright: String)
         case ccBy4
+        case openMDW11
 
         var name: String {
             switch self {
             case .apache2: return "Apache License 2.0"
             case .mit: return "MIT License"
             case .ccBy4: return "CC BY 4.0"
+            case .openMDW11: return "OpenMDW 1.1"
             }
         }
     }
@@ -98,7 +100,28 @@ struct Acknowledgement: Identifiable {
             license: .apache2,
             url: URL(string: "https://github.com/apple/swift-numerics")!
         ),
-    ]
+    ] + speakerIdentificationModels
+
+    private static var speakerIdentificationModels: [Acknowledgement] {
+        #if targetEnvironment(macCatalyst)
+        [
+            Acknowledgement(
+                name: "Nemotron 3 Diarization",
+                credit: "Speaker identification model by NVIDIA, bundled with the Mac app in the Core ML conversion by FluidInference.",
+                license: .openMDW11,
+                url: URL(string: "https://huggingface.co/FluidInference/nemotron-3-diarization-coreml")!
+            ),
+            Acknowledgement(
+                name: "Qwen3-ForcedAligner 0.6B",
+                credit: "Text-to-audio alignment model by the Qwen team, Alibaba Cloud, downloaded on demand in the 4-bit MLX conversion by aufklarer.",
+                license: .apache2,
+                url: URL(string: "https://huggingface.co/aufklarer/Qwen3-ForcedAligner-0.6B-4bit")!
+            ),
+        ]
+        #else
+        []
+        #endif
+    }
 
     static let mitPermissionNotice = """
     Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -126,6 +149,12 @@ struct Acknowledgement: Identifiable {
         case .apache2: return Self.apache2Text
         case .mit(let copyright): return "\(copyright)\n\n\(Self.mitPermissionNotice)"
         case .ccBy4: return Self.ccBy4Notice
+        case .openMDW11:
+            guard let url = Bundle.main.url(forResource: "OpenMDW-1.1", withExtension: "txt"),
+                  let text = try? String(contentsOf: url, encoding: .utf8) else {
+                return "OpenMDW License Agreement, version 1.1: https://openmdw.ai/license/1-1/"
+            }
+            return text
         }
     }
 }

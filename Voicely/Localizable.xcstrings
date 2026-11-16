@@ -2556,6 +2556,688 @@
         }
       }
     },
+    "Download about 983 MB for the text alignment model. Speaker identification runs on this Mac without uploading your audio or transcript.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字對齊模型約 983 MB。說話人識別會在這部 Mac 上執行，不會上載錄音或文字稿。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字对齐模型约 983 MB。说话人识别会在这台 Mac 上运行，不会上传录音或文字稿。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字對齊模型約 983 MB。說話者辨識會在這部 Mac 上執行，不會上傳錄音或逐字稿。"
+          }
+        }
+      }
+    },
+    "Download and Identify": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下載並識別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载并识别"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下載並辨識"
+          }
+        }
+      }
+    },
+    "Download the text alignment model?": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下載文字稿對齊模型？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载文字稿对齐模型？"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要下載逐字稿對齊模型嗎？"
+          }
+        }
+      }
+    },
+    "Downloading text alignment model…": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在下載文字稿對齊模型…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在下载文字稿对齐模型…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在下載逐字稿對齊模型…"
+          }
+        }
+      }
+    },
+    "Identify Speakers": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "識別說話人"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "识别说话人"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "辨識說話者"
+          }
+        }
+      }
+    },
+    "Identifying speakers…": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在識別說話人…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在识别说话人…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在辨識說話者…"
+          }
+        }
+      }
+    },
+    "Loading speaker identification model…": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在載入說話人識別模型…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载说话人识别模型…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在載入說話者辨識模型…"
+          }
+        }
+      }
+    },
+    "Loading text alignment model…": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在載入文字稿對齊模型…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载文字稿对齐模型…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在載入逐字稿對齊模型…"
+          }
+        }
+      }
+    },
+    "Aligning transcript…": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在對齊文字稿…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在对齐文字稿…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在對齊逐字稿…"
+          }
+        }
+      }
+    },
+    "Applying speaker labels…": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在套用說話人標籤…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在应用说话人标签…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在套用說話者標籤…"
+          }
+        }
+      }
+    },
+    "Re-transcribe this recording to identify speakers.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新轉寫這段錄音後，即可識別說話人。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新转写这条录音后即可识别说话人。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新轉錄這段錄音後，即可辨識說話者。"
+          }
+        }
+      }
+    },
+    "Remove Speaker Labels": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除說話人標籤"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除说话人标签"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除說話者標籤"
+          }
+        }
+      }
+    },
+    "Speaker %lld": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話人 %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话人 %lld"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話者 %lld"
+          }
+        }
+      }
+    },
+    "Speaker Labels": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話人標籤"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话人标签"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話者標籤"
+          }
+        }
+      }
+    },
+    "Speaker identification can be run on a Mac.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可在 Mac 上識別說話人。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可以在 Mac 上识别说话人。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可在 Mac 上辨識說話者。"
+          }
+        }
+      }
+    },
+    "Speaker identification failed. Your transcript is unchanged.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話人識別失敗，文字稿未有更改。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话人识别失败，文字稿未更改。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話者辨識失敗，逐字稿未變更。"
+          }
+        }
+      }
+    },
+    "Speaker identification is already running.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話人識別正在執行。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话人识别正在运行。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話者辨識正在執行。"
+          }
+        }
+      }
+    },
+    "Stopping speaker identification…": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在停止說話人識別…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在停止说话人识别…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在停止說話者辨識…"
+          }
+        }
+      }
+    },
+    "The audio could not be read for speaker identification.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法讀取錄音來識別說話人。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取录音来识别说话人。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法讀取錄音來辨識說話者。"
+          }
+        }
+      }
+    },
+    "Tap Identify Speakers again to download the text alignment model.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再次點按「識別說話人」以下載文字稿對齊模型。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再次点击「识别说话人」以下载文字稿对齐模型。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再次點按「辨識說話者」以下載逐字稿對齊模型。"
+          }
+        }
+      }
+    },
+    "The audio isn't available on this Mac. Try again once it has synced.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "這部 Mac 上尚未有這段錄音。請在同步完成後重試。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 上还没有这段录音。请等同步完成后重试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "這部 Mac 上還沒有這段錄音。請等同步完成後再試。"
+          }
+        }
+      }
+    },
+    "The recording could not be read to identify speakers.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法讀取錄音來識別說話人。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取录音来识别说话人。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法讀取錄音來辨識說話者。"
+          }
+        }
+      }
+    },
+    "The speaker labels could not be saved. Your transcript is unchanged.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法儲存說話人標籤，文字稿未有更改。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存说话人标签，文字稿未更改。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法儲存說話者標籤，逐字稿未變更。"
+          }
+        }
+      }
+    },
+    "The speaker model could not analyze this recording.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話人識別模型無法分析這段錄音。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话人识别模型无法分析这段录音。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "說話者辨識模型無法分析這段錄音。"
+          }
+        }
+      }
+    },
+    "The speaker model is missing from this app build.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目前版本缺少說話人識別模型。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前版本缺少说话人识别模型。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目前版本缺少說話者辨識模型。"
+          }
+        }
+      }
+    },
+    "The transcript alignment model could not be installed or loaded.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法安裝或載入文字稿對齊模型。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法安装或加载文字稿对齐模型。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法安裝或載入逐字稿對齊模型。"
+          }
+        }
+      }
+    },
+    "The transcript could not be matched to speech in this recording.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法將文字稿與這段錄音中的語音對齊。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法将文字稿和这段录音中的语音对齐。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法將逐字稿與這段錄音中的語音對齊。"
+          }
+        }
+      }
+    },
+    "This recording changed during speaker identification. Try again.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "識別說話人期間錄音已更新，請重試。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "识别说话人期间录音已更新，请重试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "辨識說話者期間錄音已更新，請再試一次。"
+          }
+        }
+      }
+    },
+    "This recording needs to be transcribed again before identifying speakers.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "請先重新轉寫這段錄音，再識別說話人。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请重新转写这条录音，再识别说话人。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "請先重新轉錄這段錄音，再辨識說話者。"
+          }
+        }
+      }
+    },
+    "Uncertain speaker": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法確定說話人"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话人不确定"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法確定說話者"
+          }
+        }
+      }
+    },
+    "Voicely couldn't confidently match speakers to the transcript.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voicely 無法可靠地將說話人與文字稿對應。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voicely 无法可靠地把说话人和文字稿对应起来。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voicely 無法可靠地將說話者與逐字稿對應。"
+          }
+        }
+      }
+    },
     "available": {
       "localizations": {
         "de": {

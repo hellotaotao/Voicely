@@ -4,7 +4,7 @@
 #   Models/mlx/       Qwen3-ASR MLX 8-bit weights for the Mac app
 #   Models/coreml/    Qwen3-ASR CoreML models for the iPhone and iPad app
 #   Models/parakeet/  Parakeet TDT v2 CoreML models (English) for every platform
-#   Models/nemotron/  Nemotron 3 speaker detection (CoreML) for the Mac app
+#   Models/nemotron/  Nemotron 3 speaker detection (CoreML) for every platform
 #
 # The Qwen3-ASR folders carry the tokenizer files. Files already in the
 # Hugging Face cache that speech-swift uses (~/Library/Caches/qwen3-speech) or

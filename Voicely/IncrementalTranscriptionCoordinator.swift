@@ -313,6 +313,7 @@ final class IncrementalTranscriptionCoordinator {
         segmentTimer?.invalidate()
         segmentTimer = nil
         finalFrame = currentFrame
+        await finishSpeakers(at: currentFrame)
         await transcribeSegment(
             upToFrame: currentFrame,
             waitForCompletion: true,
@@ -330,6 +331,91 @@ final class IncrementalTranscriptionCoordinator {
     /// Transcribes one stretch of the recording with Parakeet. Tests replace it.
     var transcribeEnglish: (URL, AVAudioFramePosition, AVAudioFramePosition, @escaping @Sendable (Double) -> Void) async throws -> [TimedWord] = { url, start, end, progress in
         try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end, onProgress: progress)
+    }
+
+    // MARK: Speakers
+
+    /// Follows who is speaking while the recording is written. Nil in a build
+    /// without the speaker model; tests replace it.
+    var speakerTracker: LiveSpeakerTracking?
+    /// What the speaker model knew after its latest pass.
+    private(set) var speakerSnapshot: LiveSpeakerSnapshot?
+    private var isAdvancingSpeakers = false
+    private var speakerTrackingFinished = false
+    /// Slice boundaries placed at a change of speaker. A short final tail is
+    /// never decoded together with the slice before such a boundary.
+    private var speakerCutFrames = Set<AVAudioFramePosition>()
+
+    /// A slice ends at a speaker change only once it is at least this long.
+    static let minimumSpeakerSliceSeconds = 1.0
+    /// How long a full slice may wait past its usual cut for the speaker model
+    /// to judge it, before it is cut without knowing who spoke.
+    static let speakerWaitLimitSeconds = 20.0
+
+    /// Moves a speaker change into the nearest pause between the bounds.
+    /// Tests replace it.
+    var snapTurnChange: (URL, AVAudioFramePosition, AVAudioFramePosition, AVAudioFramePosition) async -> AVAudioFramePosition = { url, frame, lower, upper in
+        await Task.detached {
+            IncrementalTranscriptionCoordinator.pauseNearest(
+                fileURL: url, frame: frame, lowerBound: lower, upperBound: upper)
+        }.value
+    }
+
+    /// Who spoke when, as far as the speaker model has judged the recording.
+    var speakerRanges: [SpeakerTimeRange]? { speakerSnapshot?.ranges }
+
+    /// Qwen3-ASR slices carry no word times, so they are cut where the speaker
+    /// changes and each one is labelled as a whole. Parakeet's word times
+    /// label its slices word by word.
+    private var cutsAtSpeakerChanges: Bool {
+        speakerTracker != nil && !nextSliceGoesToParakeet
+    }
+
+    private func advanceSpeakers(to frame: AVAudioFramePosition) async {
+        guard let tracker = speakerTracker, !isAdvancingSpeakers, !speakerTrackingFinished else { return }
+        isAdvancingSpeakers = true
+        defer { isAdvancingSpeakers = false }
+        do {
+            let snapshot = try await tracker.advance(toFrame: frame)
+            if !speakerTrackingFinished { speakerSnapshot = snapshot }
+        } catch {
+            // Slices go back to cutting at pauses; labels found so far stay.
+            debugLog("⚠️ [IncrementalCoordinator] Live speaker detection stopped: \(error)")
+            speakerTracker = nil
+        }
+    }
+
+    private func finishSpeakers(at frame: AVAudioFramePosition) async {
+        guard let tracker = speakerTracker, !speakerTrackingFinished else { return }
+        speakerTrackingFinished = true
+        do {
+            speakerSnapshot = try await tracker.finish(atFrame: frame)
+        } catch {
+            debugLog("⚠️ [IncrementalCoordinator] Live speaker detection could not finish: \(error)")
+        }
+    }
+
+    /// The first speaker change after `start` and before `limit` that leaves
+    /// the slice long enough, in recording frames.
+    private func turnChangeFrame(after start: AVAudioFramePosition,
+                                 before limit: AVAudioFramePosition) -> AVAudioFramePosition? {
+        guard cutsAtSpeakerChanges, let snapshot = speakerSnapshot else { return nil }
+        let earliest = Double(start) / recordingSampleRate + Self.minimumSpeakerSliceSeconds
+        let latest = Double(limit) / recordingSampleRate
+        guard let change = snapshot.turnChanges.first(where: { $0 >= earliest && $0 < latest }) else {
+            return nil
+        }
+        return AVAudioFramePosition((change * recordingSampleRate).rounded())
+    }
+
+    /// A full live slice waits until the speaker model has judged all of it,
+    /// so a speaker change inside it is not missed, but not forever.
+    private func waitsForSpeakers(start: AVAudioFramePosition, requested: AVAudioFramePosition) -> Bool {
+        guard cutsAtSpeakerChanges, !speakerTrackingFinished else { return false }
+        let windowEnd = Double(start + targetIntervalFrames) / recordingSampleRate
+        guard (speakerSnapshot?.coveredSeconds ?? 0) < windowEnd else { return false }
+        let pending = Double(requested - start) / recordingSampleRate
+        return pending < Double(targetIntervalSeconds) + Self.speakerWaitLimitSeconds
     }
 
     /// Frees Parakeet once the recording is done with it. Tests replace it.
@@ -468,6 +554,8 @@ final class IncrementalTranscriptionCoordinator {
     /// Extract frames [lastSegmentEndFrame, upToFrame) into a temp WAV file,
     /// transcribe it, and append the result to accumulatedTranscript.
     func transcribeSegment(upToFrame: AVAudioFramePosition) async {
+        // The speaker model reads first, so the slice can end where the speaker changed.
+        await advanceSpeakers(to: upToFrame)
         await transcribeSegment(
             upToFrame: upToFrame,
             waitForCompletion: false,
@@ -488,7 +576,7 @@ final class IncrementalTranscriptionCoordinator {
             return
         }
 
-        guard upToFrame > lastSegmentEndFrame + requiredMinimumSegmentFrames(useVoiceActivityCut: useVoiceActivityCut) else { return }
+        guard hasSliceReady(upTo: upToFrame, useVoiceActivityCut: useVoiceActivityCut) else { return }
 
         isProcessingSegment = true
         defer {
@@ -502,7 +590,7 @@ final class IncrementalTranscriptionCoordinator {
         )
         while let request = nextRequest, !telemetryFinished {
             pendingSegmentRequest = nil
-            if request.frameEnd > lastSegmentEndFrame + requiredMinimumSegmentFrames(useVoiceActivityCut: request.useVoiceActivityCut) {
+            if hasSliceReady(upTo: request.frameEnd, useVoiceActivityCut: request.useVoiceActivityCut) {
                 await transcribeCurrentSegment(
                     upToFrame: request.frameEnd,
                     useVoiceActivityCut: request.useVoiceActivityCut
@@ -559,6 +647,7 @@ final class IncrementalTranscriptionCoordinator {
         session: TranscriptionTelemetrySession
     ) async -> Bool {
         guard Self.leavesShortTail(cutFrame: tailStart, endFrame: end, sampleRate: recordingSampleRate),
+              !speakerCutFrames.contains(tailStart),
               let previous = slices.last, previous.endFrame == tailStart else { return false }
 
         var bounds = [previous.startFrame, end]
@@ -776,6 +865,16 @@ final class IncrementalTranscriptionCoordinator {
         fileURL: URL,
         useVoiceActivityCut: Bool
     ) async -> AVAudioFramePosition? {
+        let windowEnd = min(requestedEndFrame, startFrame + targetIntervalFrames)
+        if let change = turnChangeFrame(after: startFrame, before: windowEnd) {
+            let halfSecond = AVAudioFramePosition(recordingSampleRate / 2)
+            let cut = await snapTurnChange(fileURL, change, startFrame + halfSecond, windowEnd)
+            speakerCutFrames.insert(cut)
+            return cut
+        }
+        if useVoiceActivityCut, waitsForSpeakers(start: startFrame, requested: requestedEndFrame) {
+            return nil
+        }
         guard useVoiceActivityCut else {
             // The recording has stopped, so the rest of it is known: cut at a
             // pause, and never so late that a short tail is left behind.
@@ -804,18 +903,21 @@ final class IncrementalTranscriptionCoordinator {
     }
 
     /// Periodic VAD cuts wait until a full batch has accumulated so the VAD
-    /// runs once per batch instead of probing every tick. The final flush
-    /// (non-VAD) must transcribe whatever remains, however short, otherwise
-    /// the tail of the recording is silently lost.
-    private func requiredMinimumSegmentFrames(useVoiceActivityCut: Bool) -> AVAudioFramePosition {
-        useVoiceActivityCut ? targetIntervalFrames : 0
+    /// runs once per batch instead of probing every tick, unless the speaker
+    /// changed earlier. The final flush (non-VAD) must transcribe whatever
+    /// remains, however short, otherwise the tail of the recording is
+    /// silently lost.
+    private func hasSliceReady(upTo frame: AVAudioFramePosition, useVoiceActivityCut: Bool) -> Bool {
+        guard useVoiceActivityCut else { return frame > lastSegmentEndFrame }
+        return frame > lastSegmentEndFrame + targetIntervalFrames
+            || turnChangeFrame(after: lastSegmentEndFrame, before: frame) != nil
     }
 
     private func queuePendingSegment(
         upToFrame: AVAudioFramePosition,
         useVoiceActivityCut: Bool
     ) {
-        guard upToFrame > lastSegmentEndFrame + requiredMinimumSegmentFrames(useVoiceActivityCut: useVoiceActivityCut) else { return }
+        guard hasSliceReady(upTo: upToFrame, useVoiceActivityCut: useVoiceActivityCut) else { return }
 
         if var pendingSegmentRequest {
             pendingSegmentRequest.frameEnd = max(pendingSegmentRequest.frameEnd, upToFrame)
@@ -1132,6 +1234,66 @@ final class IncrementalTranscriptionCoordinator {
             }
         }
         return bestCandidate
+    }
+
+    /// The middle of the pause nearest to `frame`, at most a second away and
+    /// inside the bounds; `frame` itself when no pause is that close.
+    nonisolated static func pauseNearest(
+        fileURL: URL,
+        frame: AVAudioFramePosition,
+        lowerBound: AVAudioFramePosition,
+        upperBound: AVAudioFramePosition,
+        configuration: IncrementalVoiceActivityCutConfiguration = .default,
+        neuralVoiceActivityDetector: NeuralVoiceActivityDetecting? = nil
+    ) -> AVAudioFramePosition {
+        let clamped = min(max(frame, lowerBound), upperBound)
+        do {
+            let sourceFile = try AVAudioFile(forReading: fileURL)
+            let format = sourceFile.processingFormat
+            let sampleRate = format.sampleRate
+            let reach = AVAudioFramePosition(sampleRate)
+            let start = max(lowerBound, clamped - reach)
+            let end = min(upperBound, clamped + reach, sourceFile.length)
+            guard end > start, let buffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: AVAudioFrameCount(end - start)) else { return clamped }
+            sourceFile.framePosition = start
+            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(end - start))
+            let samples = monoFloatSamples(from: buffer)
+            guard !samples.isEmpty else { return clamped }
+
+            let vadSampleRate = Double(SileroNeuralVoiceActivityDetector.sampleRate)
+            let vadSamples = sampleRate == vadSampleRate
+                ? samples
+                : try resampled(samples, from: sampleRate, to: vadSampleRate)
+            let detector = try neuralVoiceActivityDetector ?? SileroNeuralVoiceActivityDetector()
+            let vadFrames = try detector.speechProbabilities(in: vadSamples)
+            let target = Double(clamped - start) * vadSampleRate / sampleRate
+
+            var best: Double?
+            var runStart: Int?
+            var runEnd = 0
+            func closeRun() {
+                guard let first = runStart else { return }
+                runStart = nil
+                let middle = Double(first + runEnd) / 2
+                if best.map({ abs(middle - target) < abs($0 - target) }) ?? true { best = middle }
+            }
+            for vadFrame in vadFrames {
+                if vadFrame.speechProbability <= configuration.speechProbabilityThreshold {
+                    if runStart == nil { runStart = vadFrame.startFrame }
+                    runEnd = vadFrame.endFrame
+                } else {
+                    closeRun()
+                }
+            }
+            closeRun()
+            guard let best else { return clamped }
+            let cut = start + AVAudioFramePosition((best * sampleRate / vadSampleRate).rounded())
+            return min(max(cut, lowerBound), upperBound)
+        } catch {
+            debugLog("⚠️ [IncrementalCoordinator] Pause search at a speaker change failed: \(error)")
+            return clamped
+        }
     }
 
     /// The middle of the lowest-energy `windowSamples` stretch, scanned in

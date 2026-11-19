@@ -43,23 +43,34 @@ actor SpeakerDiarizationEngine {
         isRunning = true
         defer { isRunning = false }
 
-        guard let directory = Bundle.main.resourceURL?.appendingPathComponent("SpeakerDiarizationModel", isDirectory: true),
-              (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
-            throw EngineError.missingBundledModel
-        }
+        guard let directory = Self.bundledModelDirectory() else { throw EngineError.missingBundledModel }
         return try await Self.segments(for: url, modelDirectory: directory, onProgress: onProgress)
+    }
+
+    /// The Nemotron model shipped inside the app, nil in a build without it.
+    static func bundledModelDirectory() -> URL? {
+        guard let directory = Bundle.main.resourceURL?.appendingPathComponent("SpeakerDiarizationModel", isDirectory: true),
+              (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
+        return directory
+    }
+
+    /// Loads the 8-bit streaming model on CPU and Neural Engine, which iOS
+    /// also allows while the app is in the background.
+    static func loadModels(from directory: URL) async throws -> (Nemotron3Config, Nemotron3Models) {
+        guard let config = Nemotron3Config.preset(named: "c128-split-w8a8") else {
+            throw EngineError.invalidModelOutput
+        }
+        let models = try await Nemotron3Models.load(
+            config: config, directory: directory, computeUnits: .cpuAndNeuralEngine
+        )
+        return (config, models)
     }
 
     private static func segments(
         for url: URL, modelDirectory: URL, onProgress: @Sendable (SpeakerProcessingProgress) -> Void
     ) async throws -> [SpeakerTimeRange] {
         try Task.checkCancellation()
-        guard let config = Nemotron3Config.preset(named: "c128-split-w8a8") else {
-            throw EngineError.invalidModelOutput
-        }
-        let models = try await Nemotron3Models.load(
-            config: config, directory: modelDirectory, computeUnits: .cpuAndNeuralEngine
-        )
+        let (config, models) = try await loadModels(from: modelDirectory)
         try Task.checkCancellation()
 
         let diarizer = Nemotron3Diarizer(config: config, models: models)
@@ -213,6 +224,12 @@ struct SpeakerActivitySegments {
             }
             position += 1
         }
+    }
+
+    /// The ranges so far, with turns still running cut off at `duration`.
+    func snapshot(duration: Double) -> [SpeakerTimeRange] {
+        var copy = self
+        return copy.finish(duration: duration)
     }
 
     mutating func finish(duration: Double) -> [SpeakerTimeRange] {

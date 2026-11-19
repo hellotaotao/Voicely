@@ -68,16 +68,13 @@ struct SpeakerDiarizationEngineTests {
         #expect((0.25...0.35).contains(peak))
     }
 
-    @Test func macAppPackageContainsTheSpeakerModelAndMobileDoesNot() throws {
-        let root = try #require(Bundle.main.resourceURL?.appendingPathComponent("SpeakerDiarizationModel"))
-        #if targetEnvironment(macCatalyst)
+    @Test func appPackageContainsTheSpeakerModelOnEveryPlatform() throws {
+        // iPhone and iPad label speakers live too, so every build carries the model.
+        let root = try #require(SpeakerDiarizationEngine.bundledModelDirectory())
         let model = root.appendingPathComponent("Nemotron3Diarizer_c128_split_w8a8.mlmodelc")
         let weights = model.appendingPathComponent("weights/weight.bin")
         #expect(try weights.resourceValues(forKeys: [.fileSizeKey]).fileSize == 99_249_792)
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("learnable_sil_emb.bin").path))
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("pre_encode_proj_t.bin").path))
-        #else
-        #expect(!FileManager.default.fileExists(atPath: root.path))
-        #endif
     }
 }

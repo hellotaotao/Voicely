@@ -3,7 +3,7 @@
 #   SpeechModel/         Qwen3-ASR: the MLX weights in the Mac (Catalyst) app,
 #                        the CoreML models in the iPhone and iPad app
 #   EnglishSpeechModel/  Parakeet TDT v2 (CoreML), the same on every platform
-#   SpeakerDiarizationModel/  Nemotron 3 (CoreML), Mac Catalyst only
+#   SpeakerDiarizationModel/  Nemotron 3 (CoreML), the same on every platform
 # The source folders come from scripts/fetch-speech-models.sh.
 set -euo pipefail
 
@@ -24,7 +24,7 @@ verify_nemotron() {
     /usr/bin/python3 -I "$SRCROOT/scripts/nemotron-model.py" --verify "$1"
 }
 
-if [[ "$VARIANT" == "mlx" ]] && ! verify_nemotron "$SRCROOT/Models/nemotron"; then
+if ! verify_nemotron "$SRCROOT/Models/nemotron"; then
     echo "error: Nemotron model unavailable. Run scripts/fetch-speech-models.sh --nemotron-only."
     exit 1
 fi
@@ -49,11 +49,8 @@ embed() {
 
 embed "$VARIANT" SpeechModel
 embed parakeet EnglishSpeechModel
-
-if [[ "$VARIANT" == "mlx" ]]; then
-    embed nemotron SpeakerDiarizationModel
-    if ! verify_nemotron "$RESOURCES/SpeakerDiarizationModel"; then
-        echo "error: Bundled Nemotron model is invalid. Clean the build folder and rebuild."
-        exit 1
-    fi
+embed nemotron SpeakerDiarizationModel
+if ! verify_nemotron "$RESOURCES/SpeakerDiarizationModel"; then
+    echo "error: Bundled Nemotron model is invalid. Clean the build folder and rebuild."
+    exit 1
 fi

@@ -1,6 +1,6 @@
 import Foundation
 
-struct SpeakerTimeRange: Sendable {
+struct SpeakerTimeRange: Sendable, Equatable {
     var speaker: Int
     var start: TimeInterval
     var end: TimeInterval
@@ -96,13 +96,41 @@ struct SpeakerTranscript: Codable, Equatable, Sendable {
 }
 
 enum SpeakerTranscriptBuilder {
+    /// A span without word times that belongs to one speaker as a whole.
+    struct WholeSpan: Sendable {
+        var range: NSRange
+        var start: TimeInterval
+        var end: TimeInterval
+    }
+
+    /// Labels for a recording transcribed while it was made. Spans with word
+    /// times are labelled word by word. A slice from Qwen3-ASR has no word
+    /// times, but live transcription cuts slices where the speaker changes, so
+    /// the whole slice goes to the speaker who held most of it. Nil until at
+    /// least two speakers are heard: one speaker needs no headings.
+    static func makeLive(text: String, spans: [TranscriptSpan], audioPath: String,
+                         segments: [SpeakerTimeRange]) -> SpeakerTranscript? {
+        guard let plan = SpeakerTimingPlan(text: text, spans: spans) else { return nil }
+        let wholeSpans = plan.fallbackSpans.map {
+            WholeSpan(range: NSRange(location: $0.utf16Offset, length: $0.text.utf16.count),
+                      start: $0.start, end: $0.end)
+        }
+        guard let labels = make(text: text, spans: spans, audioPath: audioPath, tokens: plan.storedTokens,
+                                segments: segments, wholeSpans: wholeSpans),
+              labels.speakerIDs.count >= 2 else { return nil }
+        return labels
+    }
+
     static func make(text: String, spans: [TranscriptSpan], audioPath: String,
-                     tokens: [SpeakerAlignedToken], segments: [SpeakerTimeRange]) -> SpeakerTranscript? {
+                     tokens: [SpeakerAlignedToken], segments: [SpeakerTimeRange],
+                     wholeSpans: [WholeSpan] = []) -> SpeakerTranscript? {
         guard !audioPath.isEmpty else { return nil }
         let source = text as NSString
         let sentences = TranscriptTimeline.units(text: text, spans: spans)
         let index = SpeakerOverlapIndex(segments: segments)
         guard !sentences.isEmpty, !index.rangesBySpeaker.isEmpty else { return nil }
+        let orderedWholeSpans = wholeSpans.sorted { $0.range.location < $1.range.location }
+        var wholeSpanCursor = 0
 
         var lastEnd = 0
         let orderedTokens = tokens.sorted { $0.range.location < $1.range.location }.filter { token in
@@ -161,7 +189,18 @@ enum SpeakerTranscriptBuilder {
             }
 
             guard let start = words.map(\.start).min(), let stop = words.map(\.end).max() else {
-                append(length: sentence.range.length, time: nil, speaker: nil)
+                while wholeSpanCursor < orderedWholeSpans.count,
+                      NSMaxRange(orderedWholeSpans[wholeSpanCursor].range) <= sentence.range.location {
+                    wholeSpanCursor += 1
+                }
+                if wholeSpanCursor < orderedWholeSpans.count,
+                   NSLocationInRange(sentence.range.location, orderedWholeSpans[wholeSpanCursor].range) {
+                    let span = orderedWholeSpans[wholeSpanCursor]
+                    append(length: sentence.range.length, time: max(span.start, sentence.start),
+                           speaker: index.dominantSpeaker(start: span.start, end: span.end))
+                } else {
+                    append(length: sentence.range.length, time: nil, speaker: nil)
+                }
                 continue
             }
 
@@ -242,6 +281,22 @@ private struct SpeakerOverlapIndex {
     }
 
     func speaker(start: TimeInterval, end: TimeInterval) -> Int? {
+        let (best, total) = overlap(start: start, end: end)
+        guard let best, best.seconds >= 0.55 * total, best.seconds >= 0.55 * (end - start) else { return nil }
+        return best.speaker
+    }
+
+    /// The speaker who holds most of the speech in a whole slice. Unlike
+    /// `speaker`, the speech need not fill the stretch: a slice of one turn
+    /// also holds that speaker's pauses.
+    func dominantSpeaker(start: TimeInterval, end: TimeInterval) -> Int? {
+        let (best, total) = overlap(start: start, end: end)
+        guard let best, best.seconds >= 0.55 * total, best.seconds >= 0.3 else { return nil }
+        return best.speaker
+    }
+
+    private func overlap(start: TimeInterval, end: TimeInterval)
+        -> (best: (speaker: Int, seconds: TimeInterval)?, total: TimeInterval) {
         var total: TimeInterval = 0
         var best: (speaker: Int, seconds: TimeInterval)?
         for (speaker, ranges) in rangesBySpeaker {
@@ -254,8 +309,7 @@ private struct SpeakerOverlapIndex {
             total += seconds
             if seconds > (best?.seconds ?? 0) { best = (speaker, seconds) }
         }
-        guard let best, best.seconds >= 0.55 * total, best.seconds >= 0.55 * (end - start) else { return nil }
-        return best.speaker
+        return (best, total)
     }
 
     func continues(speaker: Int, from short: Range, into next: Range) -> Bool {

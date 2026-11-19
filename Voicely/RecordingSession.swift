@@ -211,6 +211,12 @@ final class RecordingSession: ObservableObject {
     /// Overridable so tests can supply a coordinator that does no real work.
     var coordinatorFactory: (URL) -> IncrementalTranscriptionCoordinator
 
+    /// Follows the speakers of a recording while it is made. Nil without the
+    /// bundled speaker model, and in unit tests unless a test supplies one.
+    var speakerTrackerFactory: (URL) -> LiveSpeakerTracking? = { url in
+        AppRuntime.isRunningTests ? nil : NemotronLiveSpeakerTracker(fileURL: url)
+    }
+
     var incrementalIntervalSeconds: Int = IncrementalTranscriptionTiming.defaultIntervalSeconds
 
     /// Where launch recovery looks for, and saves, audio of recordings that never stopped.
@@ -357,6 +363,9 @@ final class RecordingSession: ObservableObject {
         RecordingLiveActivityController.shared.start(recordingID: note.id, title: note.title)
 
         let coord = coordinatorFactory(pcmURL)
+        if coord.speakerTracker == nil {
+            coord.speakerTracker = speakerTrackerFactory(pcmURL)
+        }
         coord.transcribesWithParakeet = transcribesWithParakeet
         recordingUsesParakeet = transcribesWithParakeet
         coord.configureTelemetry(noteID: note.id)
@@ -370,7 +379,11 @@ final class RecordingSession: ObservableObject {
             guard let self, !self.transcriptionService.wasTakenOverElsewhere(note) else { return }
             guard let finalizedTranscript = LocalTranscriptFinalizer.finalizeTranscript(transcript) else { return }
 
-            note.setTranscript(finalizedTranscript.text, spans: nil)
+            // Finalizing only trims whitespace the slices never carry, so the
+            // live spans fit unless it changed the text.
+            let spans = finalizedTranscript.text == transcript ? coord?.accumulatedSpans : nil
+            note.setTranscript(finalizedTranscript.text, spans: spans)
+            Self.applyLiveSpeakerLabels(to: note, spans: spans, ranges: coord?.speakerRanges)
             note.isTranscribing = true
             let modelIdentifier = self.transcriptionService.modelManager?.currentModelIdentifier()
                 ?? self.transcriptionService.modelManager?.selectedModel
@@ -923,6 +936,7 @@ final class RecordingSession: ObservableObject {
                 // live spans fit unless it changed the text.
                 let spans = trimmedTranscript == accumulatedTranscript ? capturedCoordinator?.accumulatedSpans : nil
                 note.setTranscript(trimmedTranscript, spans: spans)
+                Self.applyLiveSpeakerLabels(to: note, spans: spans, ranges: capturedCoordinator?.speakerRanges)
                 let modelIdentifier = transcriptionService.modelManager?.currentModelIdentifier()
                     ?? transcriptionService.modelManager?.selectedModel
                 note.transcriptionModelIdentifier = capturedCoordinator?.modelIdentifier(qwenIdentifier: modelIdentifier)
@@ -941,6 +955,16 @@ final class RecordingSession: ObservableObject {
             note.queueTranscription(at: Date())
             await transcriptionService.processPendingTranscriptions(notes: [note])
         }
+    }
+
+    /// Labels the note's current text with the speakers heard so far. Without
+    /// two speakers, or without a timeline, the note keeps plain text.
+    static func applyLiveSpeakerLabels(to note: VoiceNote, spans: [TranscriptSpan]?,
+                                       ranges: [SpeakerTimeRange]?) {
+        guard let spans, let ranges else { return }
+        // The text just changed, so there are no earlier labels or names to keep.
+        note.setSpeakerTranscript(SpeakerTranscriptBuilder.makeLive(
+            text: note.transcription, spans: spans, audioPath: note.audioFilePath, segments: ranges))
     }
 
     private func makeRecordingNote(filePath: String) -> VoiceNote {

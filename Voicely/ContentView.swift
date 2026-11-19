@@ -1932,6 +1932,8 @@ struct VoiceNoteDetailView: View {
     @EnvironmentObject private var speakerLabeling: SpeakerLabelingController
     @State private var speakerPresentation: SpeakerTranscriptPresentation?
     @State private var speakerPlaybackTimeline: SpeakerPlaybackTimeline?
+    @State private var speakerNameEditRequest: SpeakerNameEditRequest?
+    @State private var speakerRenameError: String?
     @State private var showingAlignmentModelConfirmation = false
     @State private var speakerDownloadSource: SpeakerLabelingSource?
     @State private var showLoadModelPrompt = false
@@ -2134,6 +2136,12 @@ struct VoiceNoteDetailView: View {
         let spans: [TranscriptSpan]
     }
 
+    private struct SpeakerNameEditRequest: Identifiable {
+        let id: UUID
+        let text: String
+        let speakers: SpeakerTranscript
+    }
+
     private var speakerPlaybackSpans: [TranscriptSpan]? {
         guard let cached = speakerPlaybackTimeline, cached.input == speakerPresentationInput else { return nil }
         return cached.spans
@@ -2146,16 +2154,44 @@ struct VoiceNoteDetailView: View {
             && !isTranscribingHere && !isAwaitingTranscription && !isRemoteTranscribing
     }
 
+    private var canEditSpeakerNames: Bool {
+        !isEditing && !isTranscribingHere && !isAwaitingTranscription && !isRemoteTranscribing
+            && speakerLabeling.activeNoteID != note.id
+    }
+
+    private func makeSpeakerNameRequest() -> SpeakerNameEditRequest? {
+        guard canEditSpeakerNames, let speakers = note.speakerTranscript else { return nil }
+        return SpeakerNameEditRequest(id: note.id, text: note.transcription, speakers: speakers)
+    }
+
+    private func editSpeakerNames() {
+        speakerNameEditRequest = makeSpeakerNameRequest()
+    }
+
+    private func validateSpeakerNameRequest(_ request: SpeakerNameEditRequest) throws {
+        guard canEditSpeakerNames, note.id == request.id, note.transcription.utf8.elementsEqual(request.text.utf8)
+        else { throw SpeakerNameSaveError.changed }
+    }
+
+    private func startInlineSpeakerRename(_ speakerID: Int) -> TappableTranscriptView.SpeakerRenameSession? {
+        guard let request = makeSpeakerNameRequest(), request.speakers.speakerIDs.contains(speakerID) else {
+            return nil
+        }
+        return .init(initialName: request.speakers.customName(for: speakerID) ?? "",
+                     defaultName: String(localized: "Speaker \(speakerID)")) { name in
+            try validateSpeakerNameRequest(request)
+            try note.saveSpeakerName(name, for: speakerID, matching: request.speakers)
+        }
+    }
+
     private func refreshSpeakerPresentation(input: SpeakerPresentationInput) {
         // Playback updates continuously; do not decode a note's word timing
         // payload every time the playback cursor moves.
         let spans = note.transcriptSpans?.map { $0.withoutWordTimings() }
         speakerPlaybackTimeline = spans.map { SpeakerPlaybackTimeline(input: input, spans: $0) }
         speakerPresentation = note.speakerTranscript.flatMap {
-            SpeakerTranscriptPresentation(text: note.displayTranscription, speakers: $0, fallbackSpans: spans ?? []) { speaker in
-                if let speaker { return String(localized: "Speaker \(speaker)") }
-                return String(localized: "Uncertain speaker")
-            }
+            SpeakerTranscriptPresentation(text: note.displayTranscription, speakers: $0,
+                                          fallbackSpans: spans ?? [], label: $0.displayName(for:))
         }
     }
 
@@ -2224,6 +2260,9 @@ struct VoiceNoteDetailView: View {
 
             if speakerPresentation != nil {
                 Menu {
+                    Button("Edit Speaker Names", action: editSpeakerNames)
+                        .disabled(!canEditSpeakerNames)
+                        .accessibilityIdentifier("EditSpeakerNames")
                     Button("Remove Speaker Labels", role: .destructive) {
                         speakerLabeling.removeLabels(from: note)
                     }
@@ -2246,6 +2285,20 @@ struct VoiceNoteDetailView: View {
 
     var body: some View {
         detailPage
+        .sheet(item: $speakerNameEditRequest) { request in
+            SpeakerNameEditor(speakers: request.speakers) { names in
+                try validateSpeakerNameRequest(request)
+                try note.saveSpeakerNames(names, matching: request.speakers)
+            }
+        }
+        .alert("Could Not Rename Speaker", isPresented: Binding(
+            get: { speakerRenameError != nil },
+            set: { if !$0 { speakerRenameError = nil } }
+        )) {
+            Button("OK", role: .cancel) { speakerRenameError = nil }
+        } message: {
+            Text(speakerRenameError ?? "")
+        }
         .confirmationDialog("Download the text alignment model?",
                             isPresented: $showingAlignmentModelConfirmation, titleVisibility: .visible,
                             presenting: speakerDownloadSource) { source in
@@ -2283,6 +2336,10 @@ struct VoiceNoteDetailView: View {
                 findSearchMatches(jumpToFirst: false)
             }
             .onChange(of: speakerPresentationInput, initial: true) { old, new in
+                if old.noteID != new.noteID {
+                    speakerNameEditRequest = nil
+                    speakerRenameError = nil
+                }
                 if old.noteID != new.noteID || old.timeline != new.timeline || old.audioPath != new.audioPath {
                     showingAlignmentModelConfirmation = false
                     speakerDownloadSource = nil
@@ -3164,12 +3221,15 @@ struct VoiceNoteDetailView: View {
                 searchRanges: searchMatches,
                 currentSearchIndex: searchMatches.isEmpty ? nil : currentSearchMatch,
                 searchJump: searchJump,
+                onBeginSpeakerRename: canEditSpeakerNames ? startInlineSpeakerRename : nil,
+                onSpeakerRenameError: { speakerRenameError = $0.localizedDescription },
                 onSeek: { time in
                     guard shouldShowAudioPlayerCard else { return }
                     audioPlayer.seek(to: time)
                     audioPlayer.play()
                 }
             )
+            .id(note.id)
             .padding(.top, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if shouldShowAudioPlayerCard, let spans = speakerPlaybackSpans {

@@ -2798,6 +2798,138 @@
         }
       }
     },
+    "Could Not Rename Speaker": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未能重新命名說話人"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法重命名说话人"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法重新命名說話者"
+          }
+        }
+      }
+    },
+    "Rename %@": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新命名 %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重命名 %@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新命名 %@"
+          }
+        }
+      }
+    },
+    "Edit Speaker Names": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編輯說話人姓名"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "编辑说话人姓名"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編輯說話者姓名"
+          }
+        }
+      }
+    },
+    "Leave a name blank to use the default label.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "留空即可使用預設標籤。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "留空即可使用默认标签。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "留空即可使用預設標籤。"
+          }
+        }
+      }
+    },
+    "Speaker labels changed while you were editing. Open the editor again to try again.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編輯期間說話人標籤已變更，請重新開啟編輯畫面再試。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "编辑期间说话人标签已更改，请重新打开编辑界面再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編輯期間說話者標籤已變更，請重新開啟編輯畫面再試。"
+          }
+        }
+      }
+    },
+    "The speaker names could not be saved.": {
+      "localizations": {
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法儲存說話人姓名。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存说话人姓名。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法儲存說話者姓名。"
+          }
+        }
+      }
+    },
     "Remove Speaker Labels": {
       "localizations": {
         "zh-HK": {

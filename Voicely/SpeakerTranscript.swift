@@ -22,6 +22,51 @@ struct SpeakerTranscript: Codable, Equatable, Sendable {
 
     var audioPath: String
     var units: [Unit]
+    var customNames: [Int: String]?
+
+    init(audioPath: String, units: [Unit], customNames: [Int: String]? = nil) {
+        self.audioPath = audioPath
+        self.units = units
+        self.customNames = customNames
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case audioPath, units, customNames
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        audioPath = try values.decode(String.self, forKey: .audioPath)
+        units = try values.decode([Unit].self, forKey: .units)
+        // Bad optional names must not erase a valid transcript timeline.
+        customNames = try? values.decode([Int: String].self, forKey: .customNames)
+    }
+
+    var speakerIDs: [Int] {
+        Set(units.compactMap { unit -> Int? in
+            guard let speaker = unit.speaker, speaker > 0, unit.start != nil else { return nil }
+            return speaker
+        }).sorted()
+    }
+
+    func customName(for id: Int) -> String? {
+        guard let name = customNames?[id], id > 0,
+              units.contains(where: { $0.speaker == id && $0.start != nil }) else { return nil }
+        return Self.normalizedName(name)
+    }
+
+    func displayName(for speaker: Int?) -> String {
+        guard let speaker else { return String(localized: "Uncertain speaker") }
+        return customName(for: speaker) ?? String(localized: "Speaker \(speaker)")
+    }
+
+    static func normalizedName(_ value: String) -> String? {
+        let name = value.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return name.isEmpty ? nil : name
+    }
 
     func fits(text: String, audioPath: String) -> Bool {
         guard !audioPath.isEmpty, self.audioPath == audioPath else { return false }
@@ -239,8 +284,14 @@ struct SpeakerTranscriptPresentation: Equatable {
         var display: NSRange
     }
 
+    struct EditableHeading: Equatable {
+        let range: NSRange
+        let speakerID: Int
+    }
+
     let text: String
     let headings: [NSRange]
+    let editableHeadings: [EditableHeading]
     let playbackUnits: [TranscriptUnit]
     private let pieces: [Piece]
 
@@ -258,6 +309,7 @@ struct SpeakerTranscriptPresentation: Equatable {
         var anchorIndex = 0
         var rendered = ""
         var headingRanges: [NSRange] = []
+        var editable: [EditableHeading] = []
         var playback: [TranscriptUnit] = []
         var pieces: [Piece] = []
         var offset = 0
@@ -268,7 +320,11 @@ struct SpeakerTranscriptPresentation: Equatable {
             if firstInTurn {
                 let separator = offset == 0 ? "" : "\n\n"
                 let name = label(unit.speaker)
-                headingRanges.append(NSRange(location: displayedOffset + separator.utf16.count, length: name.utf16.count))
+                let heading = NSRange(location: displayedOffset + separator.utf16.count, length: name.utf16.count)
+                headingRanges.append(heading)
+                if let speaker = unit.speaker, heading.length > 0 {
+                    editable.append(EditableHeading(range: heading, speakerID: speaker))
+                }
                 let inserted = separator + name + "\n"
                 rendered.append(inserted)
                 displayedOffset += inserted.utf16.count
@@ -307,6 +363,7 @@ struct SpeakerTranscriptPresentation: Equatable {
         }
         self.text = rendered
         headings = headingRanges
+        editableHeadings = editable
         playbackUnits = playback
         self.pieces = pieces
     }

@@ -97,6 +97,20 @@ enum AudioDurationMetadata {
     }
 }
 
+enum SpeakerNameSaveError: LocalizedError, Equatable {
+    case changed
+    case couldNotSave
+
+    var errorDescription: String? {
+        switch self {
+        case .changed:
+            String(localized: "Speaker labels changed while you were editing. Open the editor again to try again.")
+        case .couldNotSave:
+            String(localized: "The speaker names could not be saved.")
+        }
+    }
+}
+
 extension VoiceNote {
     var knownDuration: TimeInterval? { AudioDurationMetadata.known(duration) }
 
@@ -126,6 +140,39 @@ extension VoiceNote {
         guard let data = try? JSONEncoder().encode(timeline) else { return false }
         transcriptSpansData = data
         return true
+    }
+
+    /// Replace the name map only if the labels still match the editor snapshot.
+    @MainActor
+    func saveSpeakerNames(_ names: [Int: String], matching expected: SpeakerTranscript) throws {
+        guard !isDeleted, let context = modelContext, let current = speakerTranscript,
+              current == expected, let previous = transcriptSpansData else {
+            throw SpeakerNameSaveError.changed
+        }
+        var normalized: [Int: String] = [:]
+        for id in current.speakerIDs {
+            if let name = names[id], let cleanName = SpeakerTranscript.normalizedName(name) {
+                normalized[id] = cleanName
+            }
+        }
+        var updated = current
+        updated.customNames = normalized.isEmpty ? nil : normalized
+        guard updated != current else { return }
+        guard setSpeakerTranscript(updated) else { throw SpeakerNameSaveError.couldNotSave }
+        do {
+            try context.save()
+        } catch {
+            transcriptSpansData = previous
+            throw SpeakerNameSaveError.couldNotSave
+        }
+    }
+
+    @MainActor
+    func saveSpeakerName(_ name: String, for speakerID: Int, matching expected: SpeakerTranscript) throws {
+        guard expected.speakerIDs.contains(speakerID) else { throw SpeakerNameSaveError.changed }
+        var names = expected.customNames ?? [:]
+        names[speakerID] = name
+        try saveSpeakerNames(names, matching: expected)
     }
 
     /// The one way to change the transcript, so its spans never describe

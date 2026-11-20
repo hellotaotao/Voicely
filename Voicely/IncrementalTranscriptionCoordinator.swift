@@ -1236,13 +1236,14 @@ final class IncrementalTranscriptionCoordinator {
         return bestCandidate
     }
 
-    /// The middle of the pause nearest to `frame`, at most a second away and
-    /// inside the bounds; `frame` itself when no pause is that close.
+    /// The middle of the pause nearest to `frame`, at most `reachSeconds`
+    /// away and inside the bounds; `frame` itself when no pause is that close.
     nonisolated static func pauseNearest(
         fileURL: URL,
         frame: AVAudioFramePosition,
         lowerBound: AVAudioFramePosition,
         upperBound: AVAudioFramePosition,
+        reachSeconds: Double = 1.0,
         configuration: IncrementalVoiceActivityCutConfiguration = .default,
         neuralVoiceActivityDetector: NeuralVoiceActivityDetecting? = nil
     ) -> AVAudioFramePosition {
@@ -1251,7 +1252,8 @@ final class IncrementalTranscriptionCoordinator {
             let sourceFile = try AVAudioFile(forReading: fileURL)
             let format = sourceFile.processingFormat
             let sampleRate = format.sampleRate
-            let reach = AVAudioFramePosition(sampleRate)
+            let reach = AVAudioFramePosition(sampleRate * reachSeconds)
+            guard reach > 0 else { return clamped }
             let start = max(lowerBound, clamped - reach)
             let end = min(upperBound, clamped + reach, sourceFile.length)
             guard end > start, let buffer = AVAudioPCMBuffer(

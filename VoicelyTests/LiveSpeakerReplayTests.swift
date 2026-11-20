@@ -67,7 +67,7 @@ struct LiveSpeakerReplayTests {
         #expect(accuracy > 0.8)
     }
 
-    @MainActor private func replay(url: URL, utterances: [Utterance], tracksSpeakers: Bool, pauseReach: Double? = nil) async throws -> Result {
+    @MainActor private func replay(url: URL, utterances: [Utterance], tracksSpeakers: Bool) async throws -> Result {
         let file = try AVAudioFile(forReading: url)
         let rate = file.processingFormat.sampleRate
         let totalFrames = file.length
@@ -75,7 +75,6 @@ struct LiveSpeakerReplayTests {
             transcriptionService: TranscriptionService(), recordingFileURL: url)
         if tracksSpeakers {
             coordinator.speakerTracker = try #require(NemotronLiveSpeakerTracker(fileURL: url))
-            if let pauseReach { coordinator.snapTurnChange = Self.snap(reach: pauseReach) }
         }
         let placeholder = PlaceholderText()
         coordinator.transcribeOverride = { @Sendable _ in await placeholder.next() }
@@ -174,70 +173,6 @@ struct LiveSpeakerReplayTests {
             }
         }
         await modelManager.unloadModel()
-    }
-
-    /// How far a speaker cut may move to reach a pause: 0, 0.5, 1 and 2 s,
-    /// compared on who each slice goes to and on Qwen3-ASR's error rate.
-    /// Slow (real Qwen on all four conversations per reach); opt in with
-    /// `VOICELY_RUN_PAUSE_REACH=1`.
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["VOICELY_RUN_PAUSE_REACH"] == "1"))
-    @MainActor func pauseReachComparison() async throws {
-        let reaches = [0.0, 0.5, 1.0, 2.0]
-        for reach in reaches {
-            var all = Result()
-            for name in LiveSpeakerReplayFixture.names {
-                let url = LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).caf")
-                let utterances = try JSONDecoder().decode([Utterance].self, from: Data(
-                    contentsOf: LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).utts.json")))
-                let one = try await replay(url: url, utterances: utterances, tracksSpeakers: true, pauseReach: reach)
-                print("📊 reach \(reach) s \(name): \(summary(one))")
-                all.merge(one)
-            }
-            print("📊 reach \(reach) s all: \(summary(all))")
-        }
-
-        let modelManager = ModelManager()
-        await modelManager.loadModel()
-        try #require(modelManager.isModelLoaded(), "The speech model could not be loaded")
-        let service = TranscriptionService(modelManager: modelManager)
-        for reach in reaches {
-            var errors = 0
-            var reference = 0
-            for name in LiveSpeakerReplayFixture.names {
-                let url = LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).caf")
-                let utterances = try JSONDecoder().decode([Utterance].self, from: Data(
-                    contentsOf: LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).utts.json")))
-                let expected = utterances.flatMap { Self.tokens($0.text) }
-                let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
-                coordinator.speakerTracker = try #require(NemotronLiveSpeakerTracker(fileURL: url))
-                coordinator.snapTurnChange = Self.snap(reach: reach)
-                let total = try AVAudioFile(forReading: url).length
-                var frame: AVAudioFramePosition = 16_000
-                while frame < total {
-                    await coordinator.transcribeSegment(upToFrame: frame)
-                    frame += 16_000
-                }
-                let text = await coordinator.stop(currentFrame: total)
-                let distance = Self.editDistance(expected, Self.tokens(text))
-                print(String(format: "📊 qwen reach %.1f s %@: error %.2f%% (%d/%d), slices %d, unavailable %d",
-                             reach, name, Double(distance) / Double(expected.count) * 100, distance, expected.count,
-                             coordinator.accumulatedSpans?.count ?? 0, coordinator.unrecoveredSliceCount))
-                errors += distance
-                reference += expected.count
-            }
-            print(String(format: "📊 qwen reach %.1f s all: error %.2f%% (%d/%d)",
-                         reach, Double(errors) / Double(reference) * 100, errors, reference))
-        }
-        await modelManager.unloadModel()
-    }
-
-    private static func snap(reach: Double) -> (URL, AVAudioFramePosition, AVAudioFramePosition, AVAudioFramePosition) async -> AVAudioFramePosition {
-        { url, frame, lower, upper in
-            await Task.detached {
-                IncrementalTranscriptionCoordinator.pauseNearest(
-                    fileURL: url, frame: frame, lowerBound: lower, upperBound: upper, reachSeconds: reach)
-            }.value
-        }
     }
 
     /// Memory with the speaker model running next to Qwen3-ASR, one setup

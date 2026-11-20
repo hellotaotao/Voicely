@@ -352,15 +352,6 @@ final class IncrementalTranscriptionCoordinator {
     /// to judge it, before it is cut without knowing who spoke.
     static let speakerWaitLimitSeconds = 20.0
 
-    /// Moves a speaker change into the nearest pause between the bounds.
-    /// Tests replace it.
-    var snapTurnChange: (URL, AVAudioFramePosition, AVAudioFramePosition, AVAudioFramePosition) async -> AVAudioFramePosition = { url, frame, lower, upper in
-        await Task.detached {
-            IncrementalTranscriptionCoordinator.pauseNearest(
-                fileURL: url, frame: frame, lowerBound: lower, upperBound: upper)
-        }.value
-    }
-
     /// Who spoke when, as far as the speaker model has judged the recording.
     var speakerRanges: [SpeakerTimeRange]? { speakerSnapshot?.ranges }
 
@@ -867,10 +858,11 @@ final class IncrementalTranscriptionCoordinator {
     ) async -> AVAudioFramePosition? {
         let windowEnd = min(requestedEndFrame, startFrame + targetIntervalFrames)
         if let change = turnChangeFrame(after: startFrame, before: windowEnd) {
-            let halfSecond = AVAudioFramePosition(recordingSampleRate / 2)
-            let cut = await snapTurnChange(fileURL, change, startFrame + halfSecond, windowEnd)
-            speakerCutFrames.insert(cut)
-            return cut
+            // Cut right at the change: moving it to the nearest pause (0.5,
+            // 1 or 2 s away) measured no different on speaker accuracy or
+            // Qwen3-ASR's error rate.
+            speakerCutFrames.insert(change)
+            return change
         }
         if useVoiceActivityCut, waitsForSpeakers(start: startFrame, requested: requestedEndFrame) {
             return nil
@@ -1234,68 +1226,6 @@ final class IncrementalTranscriptionCoordinator {
             }
         }
         return bestCandidate
-    }
-
-    /// The middle of the pause nearest to `frame`, at most `reachSeconds`
-    /// away and inside the bounds; `frame` itself when no pause is that close.
-    nonisolated static func pauseNearest(
-        fileURL: URL,
-        frame: AVAudioFramePosition,
-        lowerBound: AVAudioFramePosition,
-        upperBound: AVAudioFramePosition,
-        reachSeconds: Double = 1.0,
-        configuration: IncrementalVoiceActivityCutConfiguration = .default,
-        neuralVoiceActivityDetector: NeuralVoiceActivityDetecting? = nil
-    ) -> AVAudioFramePosition {
-        let clamped = min(max(frame, lowerBound), upperBound)
-        do {
-            let sourceFile = try AVAudioFile(forReading: fileURL)
-            let format = sourceFile.processingFormat
-            let sampleRate = format.sampleRate
-            let reach = AVAudioFramePosition(sampleRate * reachSeconds)
-            guard reach > 0 else { return clamped }
-            let start = max(lowerBound, clamped - reach)
-            let end = min(upperBound, clamped + reach, sourceFile.length)
-            guard end > start, let buffer = AVAudioPCMBuffer(
-                pcmFormat: format, frameCapacity: AVAudioFrameCount(end - start)) else { return clamped }
-            sourceFile.framePosition = start
-            try sourceFile.read(into: buffer, frameCount: AVAudioFrameCount(end - start))
-            let samples = monoFloatSamples(from: buffer)
-            guard !samples.isEmpty else { return clamped }
-
-            let vadSampleRate = Double(SileroNeuralVoiceActivityDetector.sampleRate)
-            let vadSamples = sampleRate == vadSampleRate
-                ? samples
-                : try resampled(samples, from: sampleRate, to: vadSampleRate)
-            let detector = try neuralVoiceActivityDetector ?? SileroNeuralVoiceActivityDetector()
-            let vadFrames = try detector.speechProbabilities(in: vadSamples)
-            let target = Double(clamped - start) * vadSampleRate / sampleRate
-
-            var best: Double?
-            var runStart: Int?
-            var runEnd = 0
-            func closeRun() {
-                guard let first = runStart else { return }
-                runStart = nil
-                let middle = Double(first + runEnd) / 2
-                if best.map({ abs(middle - target) < abs($0 - target) }) ?? true { best = middle }
-            }
-            for vadFrame in vadFrames {
-                if vadFrame.speechProbability <= configuration.speechProbabilityThreshold {
-                    if runStart == nil { runStart = vadFrame.startFrame }
-                    runEnd = vadFrame.endFrame
-                } else {
-                    closeRun()
-                }
-            }
-            closeRun()
-            guard let best else { return clamped }
-            let cut = start + AVAudioFramePosition((best * sampleRate / vadSampleRate).rounded())
-            return min(max(cut, lowerBound), upperBound)
-        } catch {
-            debugLog("⚠️ [IncrementalCoordinator] Pause search at a speaker change failed: \(error)")
-            return clamped
-        }
     }
 
     /// The middle of the lowest-energy `windowSamples` stretch, scanned in

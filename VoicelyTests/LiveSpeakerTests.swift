@@ -170,7 +170,6 @@ struct LiveSpeakerTests {
         let coordinator = IncrementalTranscriptionCoordinator(
             transcriptionService: TranscriptionService(), recordingFileURL: url)
         coordinator.speakerTracker = tracker
-        coordinator.snapTurnChange = { _, frame, _, _ in frame }
         coordinator.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
         coordinator.transcribeOverride = { @Sendable path in await recorder.record(path) }
         return (coordinator, url)
@@ -276,7 +275,6 @@ struct LiveSpeakerTests {
         var coordinator: IncrementalTranscriptionCoordinator?
         session.coordinatorFactory = { url in
             let created = IncrementalTranscriptionCoordinator(transcriptionService: transcription, recordingFileURL: url)
-            created.snapTurnChange = { _, frame, _, _ in frame }
             created.resolveVoiceActivityCut = { _, start, _, _ in start + 14 * 16_000 }
             created.transcribeOverride = { @Sendable _ in await texts.next() }
             coordinator = created

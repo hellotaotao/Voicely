@@ -51,6 +51,12 @@ final class SegmentedAudioTranscriber {
     /// Frees Parakeet once a run is done with it. Tests replace it.
     var releaseEnglishEngine: () async -> Void
 
+    /// Who spoke when in the file and where the speaker changes. Tests replace it.
+    var findSpeakerTurns: (URL) async -> LiveSpeakerSnapshot?
+    /// This run's speakers: Qwen3-ASR slices end where the speaker changes and
+    /// each goes to whoever held it, as in a live recording.
+    private var speakerTurns: LiveSpeakerSnapshot?
+
     /// Set for a note the user chose English for, which saves the Qwen3-ASR
     /// pass: Parakeet transcribes the file in one go, as it does a long English
     /// stretch, and each slice takes its words. Qwen3-ASR takes over only when
@@ -87,6 +93,7 @@ final class SegmentedAudioTranscriber {
         self.nowProvider = nowProvider
         self.transcribeEnglish = transcriptionService.transcribeEnglish
         self.releaseEnglishEngine = transcriptionService.releaseEnglishEngine
+        self.findSpeakerTurns = transcriptionService.findSpeakerTurns
         self.transcribeSegmentOutcome = { [weak self] url in
             await transcriptionService.transcribeAudioOutcome(
                 filePath: url.path,
@@ -95,10 +102,14 @@ final class SegmentedAudioTranscriber {
         }
     }
 
-    func transcribe(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession? = nil) async {
+    /// `speakerTurns` is what a caller already found in the file, nil inside
+    /// when it found none; left out, this run looks for itself.
+    func transcribe(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession? = nil,
+                    speakerTurns suppliedTurns: LiveSpeakerSnapshot?? = nil) async {
         transcriptionService.logLanguageDecision(noteID: note.id, trigger: "run")
         parakeetFirst = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id)) == .english
-        await run(note: note, sourceURL: sourceURL, telemetrySession: suppliedSession)
+        await run(note: note, sourceURL: sourceURL, telemetrySession: suppliedSession, speakerTurns: suppliedTurns)
+        speakerTurns = nil
         if parakeetFirst { await releaseEnglishEngine() }
         // A paused import keeps its choice for when it resumes.
         if transcriptionService.isDiscarded(noteID: note.id) || note.transcriptionState == .completed {
@@ -106,7 +117,8 @@ final class SegmentedAudioTranscriber {
         }
     }
 
-    private func run(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession?) async {
+    private func run(note: VoiceNote, sourceURL: URL, telemetrySession suppliedSession: TranscriptionTelemetrySession?,
+                     speakerTurns suppliedTurns: LiveSpeakerSnapshot??) async {
         guard !transcriptionService.isLocalRecording(noteID: note.id),
               !transcriptionService.isDiscarded(noteID: note.id),
               !transcriptionService.isUserPaused(note),
@@ -180,7 +192,16 @@ final class SegmentedAudioTranscriber {
         transcriptionService.beginExternalTranscription(noteID: note.id)
         defer { transcriptionService.endExternalTranscription(noteID: note.id) }
 
-        if info.totalFrames <= singlePassFrameLimit(info.sampleRate) {
+        if let suppliedTurns {
+            speakerTurns = suppliedTurns
+        } else {
+            speakerTurns = await findSpeakerTurns(sourceURL)
+            if transcriptionService.isDiscarded(noteID: note.id) { return }
+            guard ownsRun(note) else { return }
+        }
+
+        if info.totalFrames <= singlePassFrameLimit(info.sampleRate),
+           parakeetFirst || !Self.hasSpeakerTurn(in: speakerTurns, endingAt: duration) {
             let outcome = await sliceOutcome(sourceURL, of: sourceURL, from: 0, to: info.totalFrames, info: info)
             if transcriptionService.isDiscarded(noteID: note.id) { return }
             guard ownsRun(note) else { return }
@@ -200,6 +221,7 @@ final class SegmentedAudioTranscriber {
                 if case .transcribed(let result) = outcome, routed.slices[0].text != nil {
                     let english = EnglishStretchRouting.transcript(of: routed.slices)
                     note.setTranscript(english.text, spans: english.spans)
+                    applySpeakerLabels(to: note)
                     note.lastTranscriptionDuration = result.duration
                     // One slice, which Parakeet's text replaced.
                     note.transcriptionModelIdentifier = EnglishStretchRouting.parakeetOnlyModelIdentifier
@@ -271,6 +293,8 @@ final class SegmentedAudioTranscriber {
             return true
         }
         note.attachImportedAudio(path)
+        // Labels belong to an audio file, which an import has only now.
+        if note.speakerTranscript == nil { applySpeakerLabels(to: note) }
         try? note.modelContext?.save()
         return true
     }
@@ -307,6 +331,7 @@ final class SegmentedAudioTranscriber {
         if case .transcribed(let result) = outcome {
             note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(
                 for: result.text, duration: duration, wordTimings: result.wordTimings))
+            applySpeakerLabels(to: note)
             note.lastTranscriptionDuration = result.duration
             note.transcriptionModelIdentifier = result.modelIdentifier
             persistTelemetry(on: note)
@@ -383,7 +408,11 @@ final class SegmentedAudioTranscriber {
             let targetFrame = min(start + batchFrames, info.totalFrames)
             let isLastBatch = targetFrame >= info.totalFrames
             var end = targetFrame
-            if !isLastBatch {
+            if let change = turnChangeFrame(after: start, before: targetFrame, sampleRate: info.sampleRate) {
+                // A slice that ends where the speaker changes keeps its own
+                // speaker, so a short slice after it is not merged back.
+                end = change
+            } else if !isLastBatch {
                 let cut = await nextCutFrame(sourceURL, start, targetFrame)
                 if cut > start { end = cut }
                 // Never leave a last slice too short to decode well on its own.
@@ -530,6 +559,7 @@ final class SegmentedAudioTranscriber {
         }
 
         note.setTranscript(accumulatedText, spans: spans.spans)
+        applySpeakerLabels(to: note)
         note.transcriptionModelIdentifier = lastModelIdentifier
         note.lastTranscriptionDuration = accumulatedDuration
         if producedAnyText {
@@ -547,6 +577,39 @@ final class SegmentedAudioTranscriber {
             note.transcriptionOutcome = .transcribed
         }
         note.clearTransientTranscriptionFlags()
+    }
+
+    // MARK: - Speakers
+
+    /// True when the speaker changes somewhere a slice could end, at least the
+    /// shortest speaker slice into the file and before `duration`.
+    static func hasSpeakerTurn(in turns: LiveSpeakerSnapshot?, endingAt duration: TimeInterval) -> Bool {
+        turns?.turnChanges.contains {
+            $0 >= IncrementalTranscriptionCoordinator.minimumSpeakerSliceSeconds && $0 < duration
+        } == true
+    }
+
+    /// The first speaker change that leaves the slice from `start` long enough
+    /// and falls before `limit`, in frames of the file. Parakeet's words carry
+    /// their own times, so an English choice is not cut at changes.
+    private func turnChangeFrame(after start: Int64, before limit: Int64, sampleRate: Double) -> Int64? {
+        guard !parakeetFirst, let turns = speakerTurns else { return nil }
+        let earliest = Double(start) / sampleRate + IncrementalTranscriptionCoordinator.minimumSpeakerSliceSeconds
+        let latest = Double(limit) / sampleRate
+        guard let change = turns.turnChanges.first(where: { $0 >= earliest && $0 < latest }) else { return nil }
+        let frame = Int64((change * sampleRate).rounded())
+        return frame > start && frame < limit ? frame : nil
+    }
+
+    private func applySpeakerLabels(to note: VoiceNote) {
+        Self.applySpeakerLabels(speakerTurns, to: note)
+    }
+
+    /// Labels the note's new text as a live recording's are; without two
+    /// speakers, or without audio of its own yet, it keeps plain text.
+    static func applySpeakerLabels(_ turns: LiveSpeakerSnapshot?, to note: VoiceNote) {
+        guard let turns, !note.audioFilePath.isEmpty else { return }
+        RecordingSession.applyLiveSpeakerLabels(to: note, spans: note.transcriptSpans, ranges: turns.ranges)
     }
 
     /// The result for the slice `[start, end)` of the file, which `sliceURL`

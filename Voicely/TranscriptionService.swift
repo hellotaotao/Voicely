@@ -485,6 +485,12 @@ class TranscriptionService: ObservableObject {
     var releaseEnglishEngine: () async -> Void = {
         await ParakeetEnglishEngine.shared.unload()
     }
+
+    /// Who spoke when in a saved file, for re-transcription and imports, so
+    /// their slices are cut and labelled like a live recording's. Nil without
+    /// the speaker model, when it fails, or while a recording runs its own
+    /// speaker model. Tests replace it; by default they run none.
+    var findSpeakerTurns: (URL) async -> LiveSpeakerSnapshot? = { _ in nil }
     var deviceIDProvider: () -> String = { DeviceIdentity.currentDeviceID }
     var nowProvider: () -> Date = { Date() }
     var audioDurationProvider: (String) async -> TimeInterval? = { filePath in
@@ -572,6 +578,19 @@ class TranscriptionService: ObservableObject {
             // Each step counts as decode work for the background task.
             try await ParakeetEnglishEngine.shared.transcribe(fileURL: url, startFrame: start, endFrame: end) { _ in
                 counter.withLock { $0 &+= 1 }
+            }
+        }
+        if !AppRuntime.isRunningTests {
+            self.findSpeakerTurns = { [weak self, counter = decodeWorkCounter] url in
+                guard let self, self.localRecordingNoteIDs.isEmpty,
+                      SpeakerDiarizationEngine.bundledModelDirectory() != nil else { return nil }
+                do {
+                    // Each stretch counts as decode work for the background task.
+                    return try await SpeakerDiarizationEngine.turns(for: url) { counter.withLock { $0 &+= 1 } }
+                } catch {
+                    debugLog("⚠️ [TranscriptionService] Speaker detection skipped: \(error)")
+                    return nil
+                }
             }
         }
         // Starts watching the network now, so its state is known by the time
@@ -1692,11 +1711,16 @@ private extension TranscriptionService {
         }
         note.duration = resolvedDuration
         setTelemetryAudioDuration(resolvedDuration, session: session)
-        if shouldSegmentTranscription(audioDuration: resolvedDuration) {
+        // Where the speaker changes decides where slices are cut, so it comes first.
+        let speakerTurns = await findSpeakerTurns(url)
+        guard stillOwnsAttempt() else { return }
+        let englishChoice = EnglishStretchRouting.Mode(languageHint: languageHint(for: note.id)) == .english
+        if shouldSegmentTranscription(audioDuration: resolvedDuration)
+            || (!englishChoice && SegmentedAudioTranscriber.hasSpeakerTurn(in: speakerTurns, endingAt: resolvedDuration)) {
             stopLeaseHeartbeat()
             endLocalTranscription(for: note.id)
             await SegmentedAudioTranscriber(transcriptionService: self, progressStore: segmentProgressStore)
-                .transcribe(note: note, sourceURL: url, telemetrySession: session)
+                .transcribe(note: note, sourceURL: url, telemetrySession: session, speakerTurns: .some(speakerTurns))
             return
         }
 
@@ -1767,6 +1791,8 @@ private extension TranscriptionService {
                 note.setTranscript(result.text, spans: TranscriptTimeline.singleSpan(for: result.text, duration: resolvedDuration))
                 note.transcriptionModelIdentifier = result.modelIdentifier
             }
+            // Parakeet's word times can tell speakers apart within this one pass.
+            SegmentedAudioTranscriber.applySpeakerLabels(speakerTurns, to: note)
             note.lastTranscriptionDuration = result.duration
             if let snapshot = telemetryState.snapshot(for: note.id) { note.replaceCumulativeTranscriptionTelemetry(snapshot) }
             note.completeTranscription()

@@ -47,6 +47,51 @@ actor SpeakerDiarizationEngine {
         return try await Self.segments(for: url, modelDirectory: directory, onProgress: onProgress)
     }
 
+    /// Who spoke when across a whole saved file, and where the speaker
+    /// changes, found the same way as while recording, so re-transcription and
+    /// imports cut and label slices like a live recording. The model gets
+    /// `loadDeadlineSeconds` to load; `onWork` runs after each stretch it judges.
+    static func turns(
+        for url: URL, loadDeadlineSeconds: Double = 30, onWork: @escaping @Sendable () -> Void = {}
+    ) async throws -> LiveSpeakerSnapshot {
+        try await shared.analyzeTurns(url, loadDeadlineSeconds: loadDeadlineSeconds, onWork: onWork)
+    }
+
+    private func analyzeTurns(
+        _ url: URL, loadDeadlineSeconds: Double, onWork: @Sendable () -> Void
+    ) async throws -> LiveSpeakerSnapshot {
+        guard !isRunning else { throw EngineError.alreadyRunning }
+        isRunning = true
+        defer { isRunning = false }
+
+        guard let directory = Self.bundledModelDirectory() else { throw EngineError.missingBundledModel }
+        let loaded = try await SpeakerModelDeadline.run(seconds: loadDeadlineSeconds) {
+            LoadedModels(try await Self.loadModels(from: directory))
+        }
+        try Task.checkCancellation()
+        let diarizer = Nemotron3Diarizer(config: loaded.config, models: loaded.models)
+        var timeline = SpeakerTurnTimeline(speakerCount: loaded.config.numSpeakers)
+        _ = try Self.readAudio(url) { samples in
+            diarizer.appendAudio(samples)
+            try timeline.append(try autoreleasepool { try diarizer.processBufferedAudio() })
+            onWork()
+        }
+        try Task.checkCancellation()
+        try timeline.append(diarizer.finishStream())
+        return timeline.snapshot()
+    }
+
+    /// Carries the loaded model out of the deadline's task; only this actor uses it.
+    private struct LoadedModels: @unchecked Sendable {
+        let config: Nemotron3Config
+        let models: Nemotron3Models
+
+        init(_ loaded: (Nemotron3Config, Nemotron3Models)) {
+            config = loaded.0
+            models = loaded.1
+        }
+    }
+
     /// The Nemotron model shipped inside the app, nil in a build without it.
     static func bundledModelDirectory() -> URL? {
         guard let directory = Bundle.main.resourceURL?.appendingPathComponent("SpeakerDiarizationModel", isDirectory: true),

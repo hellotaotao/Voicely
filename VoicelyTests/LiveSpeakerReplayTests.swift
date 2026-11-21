@@ -102,7 +102,14 @@ struct LiveSpeakerReplayTests {
         guard tracksSpeakers else { return result }
         let labels = try #require(SpeakerTranscriptBuilder.makeLive(
             text: text, spans: spans, audioPath: url.path, segments: coordinator.speakerRanges ?? []))
-        // Placeholder text is one sentence per slice, so units and spans line up.
+        try score(&result, spans: spans, labels: labels, utterances: utterances)
+        return result
+    }
+
+    /// Adds how many tokens went to the right speaker. Placeholder text is one
+    /// sentence per slice, so label units and slices line up.
+    private func score(_ result: inout Result, spans: [TranscriptSpan], labels: SpeakerTranscript,
+                       utterances: [Utterance]) throws {
         let sliceLabels = labels.units.map(\.speaker)
         try #require(sliceLabels.count == spans.count)
 
@@ -133,7 +140,71 @@ struct LiveSpeakerReplayTests {
             }
             if mapping[label] == utterance.speaker { result.correct += count }
         }
-        return result
+    }
+
+    /// Re-transcription and imports: the speaker model judges the whole file
+    /// first, slices end at its turn changes, and the note is labelled as a
+    /// live recording's would be.
+    @Test @MainActor func retranscribedSlicesGoToTheRightSpeaker() async throws {
+        var all = Result()
+        for name in LiveSpeakerReplayFixture.names {
+            let url = LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).caf")
+            let utterances = try JSONDecoder().decode([Utterance].self, from: Data(
+                contentsOf: LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).utts.json")))
+            let transcriber = SegmentedAudioTranscriber(
+                transcriptionService: TranscriptionService(),
+                progressStore: SegmentProgressStore(rootDirectory: TestTemporaryDirectory.directoryURL(prefix: "speaker_retranscribe_")))
+            transcriber.findSpeakerTurns = { url in try? await SpeakerDiarizationEngine.turns(for: url) }
+            let placeholder = PlaceholderText()
+            transcriber.transcribeSegmentOutcome = { _ in
+                .transcribed(.init(text: await placeholder.next(), duration: 0, modelIdentifier: "m"))
+            }
+            let note = VoiceNote(title: name, audioFilePath: url.path)
+            let started = Date()
+            await transcriber.transcribe(note: note, sourceURL: url)
+
+            let spans = try #require(note.transcriptSpans)
+            var one = Result()
+            one.slices = spans.map { $0.end - $0.start }
+            try score(&one, spans: spans, labels: try #require(note.speakerTranscript), utterances: utterances)
+            print(String(format: "📊 re-transcribe %@: %@, %.1f s", name, summary(one), Date().timeIntervalSince(started)))
+            all.merge(one)
+        }
+        print("📊 re-transcribe all: \(summary(all))")
+        #expect(Double(all.correct) / Double(max(all.tokens, 1)) > 0.8)
+    }
+
+    /// The whole re-transcription with real Qwen3-ASR, as the queue runs it.
+    @Test @MainActor func retranscriptionWithQwenWritesTextAndLabels() async throws {
+        let modelManager = ModelManager()
+        await modelManager.loadModel()
+        try #require(modelManager.isModelLoaded(), "The speech model could not be loaded")
+        let service = TranscriptionService(modelManager: modelManager)
+        service.findSpeakerTurns = { url in try? await SpeakerDiarizationEngine.turns(for: url) }
+        service.prepareAudioFileForReading = { URL(fileURLWithPath: $0) }
+        for name in ["test-2-sports", "validation-2-education"] {
+            let url = LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).caf")
+            let utterances = try JSONDecoder().decode([Utterance].self, from: Data(
+                contentsOf: LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).utts.json")))
+            let reference = utterances.flatMap { Self.tokens($0.text) }
+            let note = VoiceNote(title: name, audioFilePath: url.path)
+            note.transcriptionOriginDeviceID = service.deviceIDProvider()
+            note.setTranscript("old text", spans: nil)
+            note.completeTranscription()
+            note.transcriptionOutcome = .transcribed
+            let started = Date()
+            #expect(await service.requestTranscription(for: note, force: true))
+
+            let errors = Self.editDistance(reference, Self.tokens(note.transcription))
+            let speakers = note.speakerTranscript
+            print(String(format: "📊 re-transcribe qwen %@: error %.2f%% (%d/%d), slices %d, labelled speakers %d, %.0f s",
+                         name, Double(errors) / Double(reference.count) * 100, errors, reference.count,
+                         note.transcriptSpans?.count ?? 0, speakers?.speakerIDs.count ?? 0,
+                         Date().timeIntervalSince(started)))
+            #expect(note.transcriptionOutcome == .transcribed)
+            #expect((speakers?.speakerIDs.count ?? 0) >= 2)
+        }
+        await modelManager.unloadModel()
     }
 
     /// Real Qwen3-ASR on the slices: cutting at every speaker change makes

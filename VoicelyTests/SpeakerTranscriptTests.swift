@@ -199,27 +199,3 @@ struct SpeakerTranscriptTests {
     }
 }
 
-@MainActor
-struct SpeakerLabelingSourceTests {
-    @Test func snapshotRejectsRetimedNotesWithTheSameAudioAndText() throws {
-        let note = VoiceNote(title: "Note", audioFilePath: "example.m4a")
-        note.setTranscript("Hi.", spans: [.init(length: 3, start: 1, end: 2)])
-        let source = try #require(SpeakerLabelingSource(note: note))
-        #expect(source.matches(note))
-        note.setTranscript("Hi.", spans: [.init(length: 3, start: 2, end: 3)])
-        #expect(!source.matches(note))
-    }
-
-    @Test func editInvalidatesPendingWorkWithoutChangingNoteIdentity() throws {
-        let note = VoiceNote(title: "Note", audioFilePath: "example.m4a")
-        note.setTranscript("Hi.", spans: [.init(length: 3, start: 1, end: 2)])
-        let source = try #require(SpeakerLabelingSource(note: note))
-        note.applyEditedTranscript("Hello.")
-        #expect(!source.matches(note))
-    }
-
-    @Test func oldNoteWithoutTimelineCannotStartSpeakerLabeling() {
-        let note = VoiceNote(title: "Note", audioFilePath: "example.m4a", transcription: "Hi.")
-        #expect(SpeakerLabelingSource(note: note) == nil)
-    }
-}

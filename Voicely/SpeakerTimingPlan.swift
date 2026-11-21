@@ -1,7 +1,8 @@
 import Foundation
 
-/// Reuse precise times that the transcription model already calculated; send
-/// only uncovered spans to forced alignment. All resulting token offsets are
+/// Splits a transcript into words with times the transcription model already
+/// calculated (Parakeet) and whole spans without word times (Qwen3-ASR
+/// slices), which go to one speaker each. All resulting token offsets are
 /// relative to the original transcript, including the spans we skip.
 struct SpeakerTimingPlan: Sendable {
     struct FallbackSpan: Sendable {
@@ -14,12 +15,7 @@ struct SpeakerTimingPlan: Sendable {
     let storedTokens: [SpeakerAlignedToken]
     let fallbackSpans: [FallbackSpan]
 
-    var requiresForcedAlignment: Bool { !fallbackSpans.isEmpty }
-
-    func needsAlignmentDownload(alignmentInstalled: Bool) -> Bool {
-        requiresForcedAlignment && !alignmentInstalled
-    }
-    var hasSpeech: Bool { requiresForcedAlignment || !storedTokens.isEmpty }
+    var hasSpeech: Bool { !fallbackSpans.isEmpty || !storedTokens.isEmpty }
 
     init?(text: String, spans: [TranscriptSpan]) {
         guard !spans.isEmpty else { return nil }
@@ -102,7 +98,7 @@ struct SpeakerTimingPlan: Sendable {
         }
 
         // Match the speaker assignment threshold: isolated missing words
-        // stay unlabelled without forcing a second pass over usable timing.
+        // stay unlabelled instead of discarding otherwise usable timing.
         return Double(covered) >= 0.8 * Double(significantCount) ? tokens : nil
     }
 

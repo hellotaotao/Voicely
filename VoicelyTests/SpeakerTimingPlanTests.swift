@@ -3,7 +3,7 @@ import Testing
 @testable import Voicely
 
 struct SpeakerTimingPlanTests {
-    @Test func storedTimingUsesAbsoluteSecondsAndExcludesTheAlignerDownload() async throws {
+    @Test func storedTimingUsesAbsoluteSeconds() throws {
         let text = "Hello world."
         let spans = [TranscriptSpan(length: text.utf16.count, start: 0, end: 2700, wordTimings: [
             TranscriptWordTiming(offset: 0, length: 5, start: 2501, end: 2502),
@@ -11,18 +11,13 @@ struct SpeakerTimingPlanTests {
         ])]
         let plan = try #require(SpeakerTimingPlan(text: text, spans: spans))
         #expect(plan.fallbackSpans.isEmpty)
-        #expect(!plan.needsAlignmentDownload(alignmentInstalled: false))
 
-        // No audio or alignment model is consulted when we already have all the timing.
-        let missingAudio = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let tokens = try await SpeakerTranscriptAligner.align(
-            audioURL: missingAudio, plan: plan, isEnglish: true
-        )
+        let tokens = plan.storedTokens
         #expect(tokens.map(\.start) == [2501, 2503])
         #expect(tokens.map(\.range) == [NSRange(location: 0, length: 5), NSRange(location: 6, length: 5)])
     }
 
-    @Test func onlyUntimedSpeechNeedsAlignmentAndKeepsOriginalUTF16Offsets() throws {
+    @Test func untimedSpeechBecomesAWholeSpanAtItsOriginalUTF16Offset() throws {
         let opener = "🙂 Yes.\n"
         let unavailable = "[0:30–0:35 transcription unavailable]\n"
         let gap = "早上好。\n"
@@ -47,11 +42,9 @@ struct SpeakerTimingPlanTests {
             NSRange(location: 3, length: 3),
             NSRange(location: (opener + unavailable + gap).utf16.count, length: 6)
         ])
-        #expect(plan.needsAlignmentDownload(alignmentInstalled: false))
-        #expect(!plan.needsAlignmentDownload(alignmentInstalled: true))
     }
 
-    @Test func corruptAndInsufficientCoverageDoNotSilentlySuppressAlignment() throws {
+    @Test func corruptAndInsufficientCoverageFallBackToWholeSpans() throws {
         let text = "Hello world."
         let corruptRanges: [[TranscriptWordTiming]] = [
             [TranscriptWordTiming(offset: Int.max, length: 4, start: 1, end: 2)],
@@ -77,12 +70,11 @@ struct SpeakerTimingPlanTests {
         #expect(plan.storedTokens.first?.start == 9.8)
     }
 
-    @Test func placeholderOnlyDoesNotPromptForTheAlignmentModel() throws {
+    @Test func placeholderOnlyHasNoSpeech() throws {
         let unavailable = "[0:30–0:35 transcription unavailable]"
         let plan = try #require(SpeakerTimingPlan(text: unavailable, spans: [
             TranscriptSpan(length: unavailable.utf16.count, start: 30, end: 35)
         ]))
         #expect(!plan.hasSpeech)
-        #expect(!plan.needsAlignmentDownload(alignmentInstalled: false))
     }
 }

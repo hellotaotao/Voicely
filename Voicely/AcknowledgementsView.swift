@@ -103,24 +103,14 @@ struct Acknowledgement: Identifiable {
     ] + speakerIdentificationModels
 
     private static var speakerIdentificationModels: [Acknowledgement] {
-        #if targetEnvironment(macCatalyst)
         [
             Acknowledgement(
                 name: "Nemotron 3 Diarization",
-                credit: "Speaker identification model by NVIDIA, bundled with the Mac app in the Core ML conversion by FluidInference.",
+                credit: "Speaker identification model by NVIDIA, bundled with the app in the Core ML conversion by FluidInference.",
                 license: .openMDW11,
                 url: URL(string: "https://huggingface.co/FluidInference/nemotron-3-diarization-coreml")!
             ),
-            Acknowledgement(
-                name: "Qwen3-ForcedAligner 0.6B",
-                credit: "Text-to-audio alignment model by the Qwen team, Alibaba Cloud, downloaded on demand in the 4-bit MLX conversion by aufklarer.",
-                license: .apache2,
-                url: URL(string: "https://huggingface.co/aufklarer/Qwen3-ForcedAligner-0.6B-4bit")!
-            ),
         ]
-        #else
-        []
-        #endif
     }
 
     static let mitPermissionNotice = """

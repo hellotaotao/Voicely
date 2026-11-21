@@ -143,7 +143,7 @@ struct ParakeetRealModelTests {
         let spans = try #require(coordinator.accumulatedSpans)
         let timing = try #require(SpeakerTimingPlan(text: whole, spans: spans))
         #expect(timing.storedTokens.count > Int(audioSeconds))
-        #expect(!timing.requiresForcedAlignment)
+        #expect(timing.fallbackSpans.isEmpty)
     }
 
     /// A recording with English chosen that switches to Auto Detect halfway,
@@ -231,7 +231,7 @@ struct ParakeetRealModelTests {
         let spans = try #require(note.transcriptSpans)
         let timing = try #require(SpeakerTimingPlan(text: note.transcription, spans: spans))
         #expect(!timing.storedTokens.isEmpty)
-        #expect(!timing.requiresForcedAlignment)
+        #expect(timing.fallbackSpans.isEmpty)
     }
 
     /// Re-transcribing a short saved recording end to end with both real models.
@@ -261,7 +261,7 @@ struct ParakeetRealModelTests {
         let spans = try #require(note.transcriptSpans)
         let timing = try #require(SpeakerTimingPlan(text: note.transcription, spans: spans))
         #expect(!timing.storedTokens.isEmpty)
-        #expect(!timing.requiresForcedAlignment)
+        #expect(timing.fallbackSpans.isEmpty)
     }
 
     /// Writes a minute into the recording, short enough for one pass, to an

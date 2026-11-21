@@ -36,6 +36,28 @@ private actor ScriptedSpeakerTracker: LiveSpeakerTracking {
     }
 }
 
+/// Speaker model stand-in whose model never finishes loading, as if Core ML
+/// hung: `advance` (or only `finish`) waits until it is cancelled.
+private actor HangingSpeakerTracker: LiveSpeakerTracking {
+    let hangsWhileRecording: Bool
+    let ranges: [SpeakerTimeRange]
+
+    init(hangsWhileRecording: Bool, ranges: [SpeakerTimeRange] = []) {
+        self.hangsWhileRecording = hangsWhileRecording
+        self.ranges = ranges
+    }
+
+    func advance(toFrame frame: AVAudioFramePosition) async throws -> LiveSpeakerSnapshot {
+        if hangsWhileRecording { try await Task.sleep(for: .seconds(3600)) }
+        return LiveSpeakerSnapshot(coveredSeconds: Double(frame) / 16_000, ranges: ranges)
+    }
+
+    func finish(atFrame frame: AVAudioFramePosition) async throws -> LiveSpeakerSnapshot {
+        try await Task.sleep(for: .seconds(3600))
+        return LiveSpeakerSnapshot()
+    }
+}
+
 private actor SliceRecorder {
     private(set) var durations: [Double] = []
 
@@ -160,7 +182,7 @@ struct LiveSpeakerTests {
 
     // MARK: Slicing at speaker changes
 
-    @MainActor private func coordinator(seconds: Double, tracker: ScriptedSpeakerTracker,
+    @MainActor private func coordinator(seconds: Double, tracker: any LiveSpeakerTracking,
                                         recorder: SliceRecorder) throws -> (IncrementalTranscriptionCoordinator, URL) {
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(seconds * 16_000))!
@@ -318,5 +340,37 @@ struct LiveSpeakerTests {
         #expect(await recorder.durations.isEmpty)
         await coordinator.transcribeSegment(upToFrame: 15 * 16_000)
         #expect(await recorder.durations == [14])
+    }
+
+    // MARK: A speaker model that never returns
+
+    @Test @MainActor func speakerModelThatNeverLoadsIsDroppedAndSlicingCarriesOn() async throws {
+        let recorder = SliceRecorder()
+        let (coordinator, url) = try coordinator(
+            seconds: 40, tracker: HangingSpeakerTracker(hangsWhileRecording: true), recorder: recorder)
+        defer { try? FileManager.default.removeItem(at: url) }
+        coordinator.speakerAdvanceDeadlineSeconds = 0.1
+
+        // Without the deadline this pass would never return, and the batch
+        // would then wait for the speaker model to judge it.
+        await coordinator.transcribeSegment(upToFrame: 16 * 16_000)
+        #expect(coordinator.speakerTracker == nil)
+        #expect(await recorder.durations == [14])
+    }
+
+    @Test @MainActor func stopDoesNotWaitForeverAndKeepsTheLabelsFoundSoFar() async throws {
+        let recorder = SliceRecorder()
+        let ranges = [SpeakerTimeRange(speaker: 0, start: 0, end: 5), SpeakerTimeRange(speaker: 1, start: 5.5, end: 9)]
+        let (coordinator, url) = try coordinator(
+            seconds: 13, tracker: HangingSpeakerTracker(hangsWhileRecording: false, ranges: ranges), recorder: recorder)
+        defer { try? FileManager.default.removeItem(at: url) }
+        coordinator.speakerFinishDeadlineSeconds = 0.1
+
+        await coordinator.transcribeSegment(upToFrame: 9 * 16_000)
+        let started = ContinuousClock.now
+        _ = await coordinator.stop(currentFrame: 12 * 16_000)
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(coordinator.speakerRanges == ranges)
+        #expect(await recorder.durations == [12])
     }
 }

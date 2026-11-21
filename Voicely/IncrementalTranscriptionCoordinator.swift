@@ -362,17 +362,27 @@ final class IncrementalTranscriptionCoordinator {
         speakerTracker != nil && !nextSliceGoesToParakeet
     }
 
+    /// The longest one pass of the speaker model may take while recording.
+    /// The first pass loads the model, which takes a few seconds; a pass that
+    /// runs past this ends speaker detection for the recording.
+    var speakerAdvanceDeadlineSeconds = 30.0
+    /// The longest stopping waits for the speaker model. It is normally about
+    /// 10 s of audio behind, which takes well under a second to catch up.
+    var speakerFinishDeadlineSeconds = 10.0
+
     private func advanceSpeakers(to frame: AVAudioFramePosition) async {
         guard let tracker = speakerTracker, !isAdvancingSpeakers, !speakerTrackingFinished else { return }
         isAdvancingSpeakers = true
         defer { isAdvancingSpeakers = false }
         do {
-            let snapshot = try await tracker.advance(toFrame: frame)
+            let snapshot = try await SpeakerModelDeadline.run(seconds: speakerAdvanceDeadlineSeconds) {
+                try await tracker.advance(toFrame: frame)
+            }
             if !speakerTrackingFinished { speakerSnapshot = snapshot }
         } catch {
             // Slices go back to cutting at pauses; labels found so far stay.
             debugLog("⚠️ [IncrementalCoordinator] Live speaker detection stopped: \(error)")
-            speakerTracker = nil
+            if speakerTracker === tracker { speakerTracker = nil }
         }
     }
 
@@ -380,8 +390,11 @@ final class IncrementalTranscriptionCoordinator {
         guard let tracker = speakerTracker, !speakerTrackingFinished else { return }
         speakerTrackingFinished = true
         do {
-            speakerSnapshot = try await tracker.finish(atFrame: frame)
+            speakerSnapshot = try await SpeakerModelDeadline.run(seconds: speakerFinishDeadlineSeconds) {
+                try await tracker.finish(atFrame: frame)
+            }
         } catch {
+            // Labels cover what the model judged before; the tail goes without.
             debugLog("⚠️ [IncrementalCoordinator] Live speaker detection could not finish: \(error)")
         }
     }

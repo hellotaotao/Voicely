@@ -71,11 +71,21 @@ actor NemotronLiveSpeakerTracker: LiveSpeakerTracking {
 
     private func loadedDiarizer() async throws -> Nemotron3Diarizer {
         if let diarizer { return diarizer }
-        let (config, models) = try await SpeakerDiarizationEngine.loadModels(from: modelDirectory)
-        let diarizer = Nemotron3Diarizer(config: config, models: models)
-        self.diarizer = diarizer
-        timeline = SpeakerTurnTimeline(speakerCount: config.numSpeakers)
+        // A call that arrives while the model is loading waits for that load
+        // instead of starting a second copy.
+        let loading = self.loading ?? Task { try await self.loadModel() }
+        self.loading = loading
+        try await loading.value
+        guard let diarizer else { throw TrackerError.finished }
         return diarizer
+    }
+
+    private var loading: Task<Void, Error>?
+
+    private func loadModel() async throws {
+        let (config, models) = try await SpeakerDiarizationEngine.loadModels(from: modelDirectory)
+        diarizer = Nemotron3Diarizer(config: config, models: models)
+        timeline = SpeakerTurnTimeline(speakerCount: config.numSpeakers)
     }
 
     private func read(upTo frame: AVAudioFramePosition, into diarizer: Nemotron3Diarizer) throws {
@@ -99,6 +109,70 @@ actor NemotronLiveSpeakerTracker: LiveSpeakerTracking {
             readFrame += AVAudioFramePosition(buffer.frameLength)
             let results = try autoreleasepool { try diarizer.processBufferedAudio() }
             try timeline?.append(results)
+        }
+    }
+}
+
+/// Waits for speaker model work only so long. A Core ML load that never
+/// returns cannot be stopped from outside, so on expiry the work is cancelled
+/// and left to end on its own, and its result is dropped.
+enum SpeakerModelDeadline {
+    struct Expired: Error {}
+
+    static func run<T: Sendable>(seconds: Double,
+                                 _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        let race = Race<T>()
+        return try await withCheckedThrowingContinuation { continuation in
+            race.begin(
+                continuation,
+                work: Task {
+                    do {
+                        race.end(with: .success(try await operation()))
+                    } catch {
+                        race.end(with: .failure(error))
+                    }
+                },
+                timer: Task {
+                    try? await Task.sleep(for: .seconds(seconds))
+                    guard !Task.isCancelled else { return }
+                    race.end(with: .failure(Expired()))
+                })
+        }
+    }
+
+    /// Resumes the caller once, with whichever of the work or the timer ends first.
+    private final class Race<T: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T, Error>?
+        private var result: Result<T, Error>?
+        private var work: Task<Void, Never>?
+        private var timer: Task<Void, Never>?
+
+        func begin(_ continuation: CheckedContinuation<T, Error>, work: Task<Void, Never>, timer: Task<Void, Never>) {
+            lock.lock()
+            if let result {
+                lock.unlock()
+                timer.cancel()
+                continuation.resume(with: result)
+                return
+            }
+            self.continuation = continuation
+            self.work = work
+            self.timer = timer
+            lock.unlock()
+        }
+
+        func end(with outcome: Result<T, Error>) {
+            lock.lock()
+            guard result == nil else { lock.unlock(); return }
+            result = outcome
+            let continuation = self.continuation
+            self.continuation = nil
+            let work = self.work, timer = self.timer
+            lock.unlock()
+            timer?.cancel()
+            if case .failure(let error) = outcome, error is Expired { work?.cancel() }
+            continuation?.resume(with: outcome)
         }
     }
 }

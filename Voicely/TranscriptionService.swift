@@ -1996,7 +1996,11 @@ private extension TranscriptionService {
         guard !samples.isEmpty else { return .noSpeech }
         progressCallback(0.1)
 
-        let languageHint = self.languageHint(for: decodingNoteID)
+        // Qwen3-ASR always detects the language itself. The "English" hint only
+        // says the note goes to Parakeet first; when Qwen3-ASR takes over, the
+        // recording may be in any language Parakeet Ultra knows, and the hint
+        // would make it write French or German as English.
+        let languageHint: String? = nil
         let pieces: [String]
         do {
             guard let decoded = try await decodePasses(

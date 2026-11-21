@@ -146,8 +146,9 @@ enum Qwen3ASRDefaults {
         key == "english" ? "english" : "auto"
     }
 
-    /// Maps the stored "selectedLanguage" key to the model's language hint:
-    /// "English" with English chosen, nil (Auto Detect) for anything else.
+    /// Maps the stored "selectedLanguage" key to the run's language: "English"
+    /// with English & European chosen (Parakeet transcribes the recording),
+    /// nil (Auto Detect) for anything else. Qwen3-ASR is never given it.
     nonisolated static func languageHint(forSelectedLanguageKey key: String?) -> String? {
         languageKey(key) == "english" ? "English" : nil
     }

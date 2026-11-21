@@ -215,7 +215,7 @@ struct SettingsView: View {
         .accessibilityIdentifier(AccessibilityIdentifiers.Settings.activeModelCard)
     }
 
-    /// With English chosen every recording is transcribed by Parakeet, so the
+    /// With English & European chosen every recording is transcribed by Parakeet, so the
     /// card names it instead of Qwen3-ASR, which then only waits unloaded.
     private var usesEnglishEngine: Bool {
         EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguage)) == .english
@@ -379,7 +379,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Speech Language")
                     .font(.subheadline.weight(.medium))
-                Text("Choose English only if all your recordings are in English.")
+                Text("Choose English & European only if your recordings are all in English or other European languages.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -390,7 +390,7 @@ struct SettingsView: View {
                 set: { selectedLanguage = $0 }
             )) {
                 ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { language in
-                    Text(language == "english" ? String(localized: "English") : String(localized: "Auto Detect")).tag(language)
+                    Text(language == "english" ? String(localized: "English & European") : String(localized: "Auto Detect")).tag(language)
                 }
             }
             .pickerStyle(.menu)

@@ -1630,7 +1630,7 @@ struct RecordingControls: View {
     }
 
     private func languageLabel(for key: String) -> String {
-        Qwen3ASRDefaults.languageKey(key) == "english" ? String(localized: "English") : String(localized: "Auto Detect")
+        Qwen3ASRDefaults.languageKey(key) == "english" ? String(localized: "English & European") : String(localized: "Auto Detect")
     }
 
     private var languageChoice: Binding<String> {
@@ -1749,18 +1749,18 @@ struct RecordingControls: View {
         }
     }
 
-    /// A recording with English chosen says so, and can switch to Auto Detect
-    /// once when it turns out not to be English only.
+    /// A recording with English & European chosen says so, and can switch to
+    /// Auto Detect once when it turns out to need Qwen3-ASR.
     private var recordingLanguageRow: some View {
         HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "character.bubble")
-                Text("English")
+                Text("English & European")
                     .lineLimit(1)
             }
             .foregroundStyle(.orange)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Speech language: English")
+            .accessibilityLabel("Speech language: English & European")
 
             Spacer(minLength: 4)
 
@@ -2070,7 +2070,7 @@ struct VoiceNoteDetailView: View {
     }
 
     static func retranscribeButtonTitle(languageKey: String) -> String {
-        languageKey == "english" ? String(localized: "Re-transcribe in English") : String(localized: "Re-transcribe with Auto Detect")
+        languageKey == "english" ? String(localized: "Re-transcribe in English & European") : String(localized: "Re-transcribe with Auto Detect")
     }
 
     /// The engine that writes the text for `languageKey`.
@@ -2080,7 +2080,7 @@ struct VoiceNoteDetailView: View {
 
     private var retranscribeConfirmationMessage: String {
         let engines = retranscribeLanguage.key == "english"
-            ? String(localized: "English uses \(SpeechModelKind.parakeet.displayName).")
+            ? String(localized: "English & European uses \(SpeechModelKind.parakeet.displayName).")
             : String(localized: "Auto Detect uses \(Qwen3ASRDefaults.modelDisplayName); English passages go to \(SpeechModelKind.parakeet.displayName).")
         return String(localized: "\(engines) The new text replaces the current transcript, and speakers are labeled when more than one is heard.")
     }

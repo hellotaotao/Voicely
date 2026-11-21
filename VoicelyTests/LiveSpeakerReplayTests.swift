@@ -207,6 +207,48 @@ struct LiveSpeakerReplayTests {
         await modelManager.unloadModel()
     }
 
+    /// Real Qwen3-ASR text of each conversation, cut at speaker changes and at
+    /// pauses only, saved slice by slice with times for judging by meaning:
+    /// `<tmp>/qwen-cut-texts/<name>.<speakers|pauses>.json`. Run with
+    /// `VOICELY_SAVE_QWEN_CUT_TEXTS=1`.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VOICELY_SAVE_QWEN_CUT_TEXTS"] == "1"))
+    @MainActor func saveQwenTextsForJudging() async throws {
+        let modelManager = ModelManager()
+        await modelManager.loadModel()
+        try #require(modelManager.isModelLoaded(), "The speech model could not be loaded")
+        let service = TranscriptionService(modelManager: modelManager)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("qwen-cut-texts", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for name in LiveSpeakerReplayFixture.names {
+            let url = LiveSpeakerReplayFixture.directory.appendingPathComponent("\(name).caf")
+            for tracksSpeakers in [true, false] {
+                let coordinator = IncrementalTranscriptionCoordinator(transcriptionService: service, recordingFileURL: url)
+                if tracksSpeakers {
+                    coordinator.speakerTracker = try #require(NemotronLiveSpeakerTracker(fileURL: url))
+                }
+                let total = try AVAudioFile(forReading: url).length
+                var frame: AVAudioFramePosition = 16_000
+                while frame < total {
+                    await coordinator.transcribeSegment(upToFrame: frame)
+                    frame += 16_000
+                }
+                let text = await coordinator.stop(currentFrame: total) as NSString
+                let spans = try #require(coordinator.accumulatedSpans)
+                var offset = 0
+                var slices: [[String: Any]] = []
+                for span in spans {
+                    let piece = text.substring(with: NSRange(location: offset, length: span.length))
+                    offset += span.length
+                    slices.append(["start": span.start, "end": span.end, "text": piece])
+                }
+                let output = directory.appendingPathComponent("\(name).\(tracksSpeakers ? "speakers" : "pauses").json")
+                try JSONSerialization.data(withJSONObject: ["slices": slices]).write(to: output)
+                print("📊 saved \(output.lastPathComponent): \(slices.count) slices")
+            }
+        }
+        await modelManager.unloadModel()
+    }
+
     /// Real Qwen3-ASR on the slices: cutting at every speaker change makes
     /// many short slices, and the app's speech gate must not drop them.
     @Test @MainActor func shortSpeakerSlicesKeepTheirText() async throws {

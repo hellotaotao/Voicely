@@ -14,9 +14,9 @@
 
 ### 版本
 
-当前版本 **1.2.0 build 10**（提交 `b09af1f`，以 `Config/Version.xcconfig` 为准；tag `v1.2.0` 还指着 build 9 的 `31d6722`，1.2.0 中间还会传几个 TestFlight 包，定版时再挪 tag）：2026-11-20 iOS 和 Mac 两个包已传 TestFlight，没提交审核。1.2.0 的主功能是说话人标签，还在开发中（见"上架后的顺序"）。商店上的是 1.1.0 build 8：iPhone/iPad 版已上线（2026-11-17 记），Mac 版还在审核。
+当前版本 **1.2.0 build 11**（提交 `16fd744`，以 `Config/Version.xcconfig` 为准；tag `v1.2.0` 还指着 build 9 的 `31d6722`，1.2.0 中间还会传几个 TestFlight 包，定版时再挪 tag）：2026-11-22 iOS 和 Mac 两个包已传 TestFlight，没提交审核。1.2.0 的主功能是说话人标签，还在开发中（见"上架后的顺序"）。商店上的是 1.1.0 build 8：iPhone/iPad 版已上线（2026-11-17 记），Mac 版还在审核。
 
-- **1.2.0 build 11（2026-11-22 已打包，还没传）**：重转和导入也出说话人标签；删掉 Mac 上的补标签按钮和千问对齐模型下载，旧笔记统一靠重转出标签。从 `16fd744` 的干净源码打包，iOS 和 Mac 两个 archive 都成功，已放进 Xcode Organizer（`~/Library/Developer/Xcode/Archives/2026-11-22/`）。上传失败：Xcode 里的 Apple 账号登录过期（钥匙串缺 Xcode-Token），要在 Xcode → Settings → Accounts 重新登录后从 Organizer 上传。没改 CloudKit schema。
+- **1.2.0 build 11（2026-11-22 传 TestFlight）**：重转和导入也出说话人标签；删掉 Mac 上的补标签按钮和千问对齐模型下载，旧笔记统一靠重转出标签。从 `16fd744` 的干净源码打包，两个包并行传，各约 26 分钟。第一次上传因 Xcode 的 Apple 账号登录过期失败，重新登录后从同一对 archive 传成功。没改 CloudKit schema。
 - **1.2.0 build 10（2026-11-20 传 TestFlight）**：加了边录边出说话人标签，iPhone/iPad 也有（iPhone/iPad 包从这版起带 Nemotron，iOS 包大 97 MB）。从 `b09af1f` 的干净源码打包，两个包并行传，iOS 32 分钟、Mac 34 分钟。没改 CloudKit schema。
 - **1.2.0 build 9（2026-11-20 传 TestFlight）**：Mac 上录完以后手动识别说话人（Nemotron 3 模型随 Mac 包交付），可以给说话人改名；录音、导入、重转都保留 Parakeet 的逐词时间；iPhone/iPad 能显示 Mac 同步过来的标签。从 tag 的干净源码打包，两个包并行传，iOS 28 分钟、Mac 29 分钟。没改 CloudKit schema。
 

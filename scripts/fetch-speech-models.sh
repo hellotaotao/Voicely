@@ -3,7 +3,7 @@
 #
 #   Models/mlx/       Qwen3-ASR MLX 8-bit weights for the Mac app
 #   Models/coreml/    Qwen3-ASR CoreML models for the iPhone and iPad app
-#   Models/parakeet/  Parakeet TDT v2 CoreML models (English) for every platform
+#   Models/parakeet/  Parakeet Ultra CoreML models (English) for every platform
 #   Models/nemotron/  Nemotron 3 speaker detection (CoreML) for every platform
 #
 # The Qwen3-ASR folders carry the tokenizer files. Files already in the
@@ -39,8 +39,9 @@ MLX = ("mlx-community/Qwen3-ASR-0.6B-8bit", "89e96d92ba34aca20b3e29fb10cc284097d
 COREML = ("aufklarer/Qwen3-ASR-CoreML", "8c6bc87b87856930b435550e94ce47de710ce4ed")
 TOKENIZER = ["vocab.json", "merges.txt", "tokenizer_config.json"]
 COREML_BUNDLES = ["encoder.mlmodelc", "embedding.mlmodelc", "decoder_part1.mlmodelc", "decoder_part2.mlmodelc"]
-PARAKEET = ("FluidInference/parakeet-tdt-0.6b-v2-coreml", "ee09c569f73759e6d44c9bd16766f477b2b36d39")
-PARAKEET_BUNDLES = ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecision.mlmodelc"]
+# moondream's post-training of NVIDIA's Parakeet TDT 0.6B v3 (FluidAudio's `.ultra`).
+PARAKEET = ("FluidInference/parakeet-ultra-coreml", "95eaa59a39d4394f047a4dc5cce480388a60d1b6")
+PARAKEET_BUNDLES = ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc"]
 
 def tree(repo, revision):
     url = f"https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true"
@@ -68,6 +69,17 @@ def fetch(repo, revision, files, sizes, target, cache):
         if os.path.getsize(out) != sizes[path]:
             sys.exit(f"size mismatch for {repo}/{path}")
 
+def prune(target, files):
+    """Removes files a previous model left in `target`, so they are not bundled."""
+    keep = {os.path.normpath(path) for path in files}
+    for folder, _, names in os.walk(target, topdown=False):
+        for name in names:
+            path = os.path.join(folder, name)
+            if os.path.relpath(path, target) not in keep:
+                os.remove(path)
+        if folder != target and not os.listdir(folder):
+            os.rmdir(folder)
+
 mlx_sizes = tree(*MLX)
 coreml_sizes = tree(*COREML)
 
@@ -81,7 +93,8 @@ fetch(*MLX, TOKENIZER, mlx_sizes, os.path.join(dest, "coreml"), os.path.join(qwe
 parakeet_sizes = tree(*PARAKEET)
 parakeet_files = ["parakeet_vocab.json"] + [p for p in parakeet_sizes if p.split("/")[0] in PARAKEET_BUNDLES]
 fetch(*PARAKEET, parakeet_files, parakeet_sizes, os.path.join(dest, "parakeet"),
-      os.path.join(fluid_cache, "parakeet-tdt-0.6b-v2"))
+      os.path.join(fluid_cache, "parakeet-ultra"))
+prune(os.path.join(dest, "parakeet"), parakeet_files)
 
 for name in ("mlx", "coreml", "parakeet"):
     folder = os.path.join(dest, name)

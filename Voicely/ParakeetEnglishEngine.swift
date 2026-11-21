@@ -3,7 +3,8 @@ import FluidAudio
 import Foundation
 import os
 
-/// Parakeet TDT v2 (FluidAudio, CoreML on CPU + Neural Engine): transcribes
+/// Parakeet Ultra (FluidAudio, CoreML on CPU + Neural Engine), moondream's
+/// post-training of Parakeet TDT 0.6B v3: transcribes
 /// the English stretches of a recording again after Qwen3-ASR has run, see
 /// `EnglishStretchRouting`, and recordings and files with English chosen,
 /// which skip Qwen3-ASR. It ships inside the app like Qwen3-ASR, is loaded
@@ -46,7 +47,7 @@ actor ParakeetEnglishEngine {
     }
 
     nonisolated static func isComplete(_ directory: URL, fileManager: FileManager = .default) -> Bool {
-        (["parakeet_vocab.json"] + ModelNames.ASR.requiredModels.sorted()).allSatisfy {
+        ([ModelNames.ASR.vocabularyFile] + ModelNames.ASR.requiredModelsV3().sorted()).allSatisfy {
             fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
         }
     }
@@ -180,7 +181,7 @@ actor ParakeetEnglishEngine {
             throw EngineError.modelMissing(Self.defaultModelDirectory())
         }
         let started = ProcessInfo.processInfo.systemUptime
-        let models = try AsrModels.loadLocal(from: directory, version: .v2)
+        let models = try AsrModels.loadLocal(from: directory, version: .ultra)
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         Self.log.notice("loaded seconds=\(ProcessInfo.processInfo.systemUptime - started) \(MemoryFootprint.summary, privacy: .public)")

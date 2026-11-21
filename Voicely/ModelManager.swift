@@ -143,6 +143,9 @@ class ModelManager: ObservableObject {
         if modelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier {
             return SpeechModelKind.parakeet.displayName
         }
+        if modelIdentifier == EnglishStretchRouting.legacyParakeetOnlyModelIdentifier {
+            return "Parakeet TDT 0.6B v2"
+        }
         let normalized = modelIdentifier
             .replacingOccurrences(of: "openai_whisper-", with: "Whisper-")
             .replacingOccurrences(of: "_", with: "-")

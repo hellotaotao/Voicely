@@ -41,10 +41,16 @@ struct Acknowledgement: Identifiable {
             url: URL(string: "https://huggingface.co/Qwen/Qwen3-ASR-0.6B")!
         ),
         Acknowledgement(
-            name: "Parakeet TDT 0.6B v2",
-            credit: "English speech recognition model by NVIDIA, used in the Core ML conversion by FluidInference (converted from the original; no other changes).",
+            name: "Parakeet Ultra",
+            credit: "Speech recognition model by Moondream, a post-training of NVIDIA's Parakeet TDT 0.6B v3. Used in the Core ML conversion by FluidInference (converted from the original, with the encoder quantized to 8 bits; no other changes).",
             license: .ccBy4,
-            url: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2")!
+            url: URL(string: "https://huggingface.co/moondream/parakeet-ultra")!
+        ),
+        Acknowledgement(
+            name: "Parakeet TDT 0.6B v3",
+            credit: "Speech recognition model by NVIDIA that Parakeet Ultra is trained from.",
+            license: .ccBy4,
+            url: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")!
         ),
         Acknowledgement(
             name: "Silero VAD",

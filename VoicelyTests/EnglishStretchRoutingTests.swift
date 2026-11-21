@@ -225,7 +225,15 @@ struct EnglishStretchRoutingTests {
         note.transcriptionModelIdentifier = EnglishStretchRouting.parakeetOnlyModelIdentifier
         #expect(note.usedParakeetForEnglish)
         #expect(note.transcribedByParakeetAlone)
+        #expect(note.transcriptionModelDisplayName == "Parakeet Ultra")
+
+        // Notes the app's earlier Parakeet (v2) wrote keep counting as Parakeet's.
+        note.transcriptionModelIdentifier = EnglishStretchRouting.legacyParakeetOnlyModelIdentifier
+        #expect(note.usedParakeetForEnglish)
+        #expect(note.transcribedByParakeetAlone)
         #expect(note.transcriptionModelDisplayName == "Parakeet TDT 0.6B v2")
+        #expect(EnglishStretchRouting.modelIdentifier(afterParakeet: note.transcriptionModelIdentifier)
+                == Qwen3Backend.current.modelIdentifier + EnglishStretchRouting.parakeetModelSuffix)
     }
 }
 
@@ -477,7 +485,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(run.note.transcribedByParakeetAlone)
-        #expect(run.note.transcriptionModelDisplayName == "Parakeet TDT 0.6B v2")
+        #expect(run.note.transcriptionModelDisplayName == "Parakeet Ultra")
     }
 
     /// A file imported with English chosen, cut into 14 s slices when it does
@@ -541,7 +549,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.note.transcription == expected)
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(run.note.transcribedByParakeetAlone)
-        #expect(run.note.transcriptionModelDisplayName == "Parakeet TDT 0.6B v2")
+        #expect(run.note.transcriptionModelDisplayName == "Parakeet Ultra")
         #expect(run.released)
         // The choice was for this run: a later Re-transcribe follows the setting.
         #expect(run.service.languageHint(for: run.note.id) == nil)
@@ -613,7 +621,7 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.qwenCalls == 0)
         #expect(run.stretches.count == 1 && run.stretches[0] == (0, 10 * 16_000))
         #expect(run.released)
-        #expect(run.service.telemetryState.snapshot(for: run.note.id)?.modelName == "Parakeet TDT 0.6B v2")
+        #expect(run.service.telemetryState.snapshot(for: run.note.id)?.modelName == "Parakeet Ultra")
         #expect(run.note.transcription == "parakeet")
         #expect(run.note.transcriptionOutcome == .transcribed)
         #expect(run.note.transcriptSpans?.count == 1)

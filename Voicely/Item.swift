@@ -244,7 +244,7 @@ extension VoiceNote {
 
     /// True when Parakeet wrote all of the transcript.
     var transcribedByParakeetAlone: Bool {
-        transcriptionModelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier
+        EnglishStretchRouting.isParakeetOnly(transcriptionModelIdentifier)
     }
 
     var averageTranscriptionSpeedLabel: String? {

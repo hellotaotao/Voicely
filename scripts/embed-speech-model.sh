@@ -2,7 +2,7 @@
 # Xcode build phase: copies the speech models into the app's resources.
 #   SpeechModel/         Qwen3-ASR: the MLX weights in the Mac (Catalyst) app,
 #                        the CoreML models in the iPhone and iPad app
-#   EnglishSpeechModel/  Parakeet TDT v2 (CoreML), the same on every platform
+#   EnglishSpeechModel/  Parakeet Ultra (CoreML), the same on every platform
 #   SpeakerDiarizationModel/  Nemotron 3 (CoreML), the same on every platform
 # The source folders come from scripts/fetch-speech-models.sh.
 set -euo pipefail
@@ -15,7 +15,8 @@ fi
 RESOURCES="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
 
 if [[ ! -f "$SRCROOT/Models/$VARIANT/vocab.json" || ! -f "$SRCROOT/Models/$VARIANT/config.json"
-      || ! -f "$SRCROOT/Models/parakeet/parakeet_vocab.json" ]]; then
+      || ! -f "$SRCROOT/Models/parakeet/parakeet_vocab.json"
+      || ! -d "$SRCROOT/Models/parakeet/JointDecisionv3.mlmodelc" ]]; then
     echo "error: A speech model is missing from $SRCROOT/Models. Run scripts/fetch-speech-models.sh once."
     exit 1
 fi

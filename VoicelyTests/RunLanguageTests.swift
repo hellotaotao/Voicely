@@ -51,6 +51,9 @@ struct RunLanguageTests {
         #expect(TranscriptionService.noteLanguage(
             transcriptionModelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier, settingKey: "auto")
             == Entry(key: "english", source: .noteLanguage))
+        #expect(TranscriptionService.noteLanguage(
+            transcriptionModelIdentifier: EnglishStretchRouting.legacyParakeetOnlyModelIdentifier, settingKey: "auto")
+            == Entry(key: "english", source: .noteLanguage))
         // Qwen3-ASR wrote it, alone or with English passages from Parakeet: Auto Detect.
         #expect(TranscriptionService.noteLanguage(transcriptionModelIdentifier: "qwen3-asr-0.6b-coreml", settingKey: "english")
             == Entry(key: "auto", source: .noteLanguage))

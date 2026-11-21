@@ -165,7 +165,7 @@ class TranscriptionService: ObservableObject {
     nonisolated static func noteLanguage(
         transcriptionModelIdentifier: String?, transcriptReadsAsEnglish: Bool? = nil, settingKey: String?
     ) -> RunLanguageStore.Entry {
-        if transcriptionModelIdentifier == EnglishStretchRouting.parakeetOnlyModelIdentifier {
+        if EnglishStretchRouting.isParakeetOnly(transcriptionModelIdentifier) {
             return .init(key: "english", source: .noteLanguage)
         }
         if let transcriptReadsAsEnglish {

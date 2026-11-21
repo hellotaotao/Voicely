@@ -91,7 +91,7 @@ enum SpeechModelKind: Int, Comparable {
     var displayName: String {
         switch self {
         case .qwen3: return Qwen3ASRDefaults.modelDisplayName
-        case .parakeet: return "Parakeet TDT 0.6B v2"
+        case .parakeet: return "Parakeet Ultra"
         }
     }
 

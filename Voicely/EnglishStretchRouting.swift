@@ -24,8 +24,9 @@ struct TimedWord: Equatable, Sendable {
 
 /// Which slices of a recording Parakeet transcribes again.
 ///
-/// Parakeet TDT v2 is more accurate than Qwen3-ASR on English and only knows
-/// English, so it takes over long English stretches and nothing else:
+/// Parakeet Ultra is more accurate than Qwen3-ASR on English and cannot write
+/// Chinese at all, so in Auto Detect it takes over long English stretches and
+/// nothing else:
 /// - Reading the slices in order, consecutive English slices form a stretch.
 ///   A slice tagged with any other language, or whose text does not read as
 ///   English (`readsAsEnglish`), ends it and stays with Qwen3-ASR; English
@@ -59,12 +60,20 @@ enum EnglishStretchRouting {
     /// Added to a note's model identifier when Parakeet replaced part of its text.
     static let parakeetModelSuffix = "+parakeet"
     /// A note's model identifier when Parakeet wrote all of its text.
-    static let parakeetOnlyModelIdentifier = "parakeet-tdt-0.6b-v2"
+    static let parakeetOnlyModelIdentifier = "parakeet-ultra"
+    /// What notes Parakeet TDT 0.6B v2 wrote all of carry; the app shipped v2
+    /// before Ultra.
+    static let legacyParakeetOnlyModelIdentifier = "parakeet-tdt-0.6b-v2"
+
+    /// True when the identifier says Parakeet, of any version, wrote all of a note.
+    static func isParakeetOnly(_ identifier: String?) -> Bool {
+        identifier == parakeetOnlyModelIdentifier || identifier == legacyParakeetOnlyModelIdentifier
+    }
 
     /// The model identifier of a note whose text Parakeet replaced in part.
     /// Qwen3-ASR names no model when it hears no speech: `nil` means this device's.
     static func modelIdentifier(afterParakeet identifier: String?) -> String {
-        let qwen = identifier == parakeetOnlyModelIdentifier ? nil : identifier
+        let qwen = isParakeetOnly(identifier) ? nil : identifier
         let identifier = qwen ?? Qwen3Backend.current.modelIdentifier
         return identifier.hasSuffix(parakeetModelSuffix) ? identifier : identifier + parakeetModelSuffix
     }

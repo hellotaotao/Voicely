@@ -19,11 +19,16 @@ enum DefaultSpeechLanguage {
         return parakeetOnly ? "english" : "auto"
     }
 
-    /// The preferred languages and the languages of the enabled keyboards.
+    /// The preferred languages, the system's own list and the languages of
+    /// the enabled keyboards. `Locale.preferredLanguages` follows a language
+    /// set for this app alone, which can hide a Chinese system language behind
+    /// an English app; the global domain still holds the system's list.
     @MainActor static func deviceLanguages() -> [String] {
+        let system = UserDefaults.standard.persistentDomain(forName: UserDefaults.globalDomain)?["AppleLanguages"]
+            as? [String] ?? []
         let keyboards = UITextInputMode.activeInputModes.compactMap(\.primaryLanguage)
             .filter { $0 != "emoji" && $0 != "dictation" }
-        return Locale.preferredLanguages + keyboards
+        return Locale.preferredLanguages + system + keyboards
     }
 
     /// Makes the device's default the setting's value until the user picks one.

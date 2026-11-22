@@ -29,10 +29,20 @@ struct EnglishStretchRoutingTests {
         #expect(EnglishStretchRouting.stretches(in: mixed, mode: .automatic).isEmpty)
     }
 
-    @Test func anyOtherLanguageEndsTheStretchAndEnglishAfterItStartsAgain() {
-        let tags = ["English", "English", "English", "Chinese", "English", "English", "French",
+    @Test func aLanguageParakeetLacksEndsTheStretchAndItsLanguagesAfterItStartAgain() {
+        let tags = ["English", "English", "English", "Chinese", "English", "English", "Japanese",
                     "English", "English", "English", "English"]
         #expect(EnglishStretchRouting.stretches(in: Self.slices(tags), mode: .automatic) == [0...2, 7...10])
+    }
+
+    /// French, German and English are all Parakeet's: switching between them
+    /// keeps one stretch.
+    @Test func parakeetsLanguagesShareAStretch() {
+        let tags = ["French", "English", "German", "Chinese", "Russian", "Spanish", "English", "Turkish"]
+        #expect(EnglishStretchRouting.stretches(in: Self.slices(tags), mode: .automatic) == [0...2, 4...6])
+        // A recording in one European language goes to Parakeet whole, however short.
+        #expect(EnglishStretchRouting.stretches(in: Self.slices(["-", "French", "None"], seconds: 10),
+                                                mode: .automatic) == [1...1])
     }
 
     @Test func untaggedAndNoneSlicesStayInsideAStretchButNeverAtItsEdges() {
@@ -58,21 +68,34 @@ struct EnglishStretchRoutingTests {
         // Words Qwen3-ASR's own failure placeholder uses must not end a stretch.
         "[12:30–12:59 transcription unavailable]",
     ])
-    func englishReadsAsEnglish(text: String) {
-        #expect(EnglishStretchRouting.readsAsEnglish(text))
+    func englishReadsAsParakeetLanguage(text: String) {
+        #expect(EnglishStretchRouting.readsAsParakeetLanguage(text))
+    }
+
+    @Test(arguments: [
+        "We should ship it завтра and see how it goes.",
+        "The meeting starts at noon. Je ne sais pas si nous pouvons terminer ce travail avant la fin de la semaine.",
+        "The meeting starts at noon. No sé si podemos terminar este trabajo antes del final de la semana que viene.",
+        "The meeting starts at noon. Ich weiß nicht, ob wir diese Arbeit bis zum Ende der Woche schaffen können.",
+        "Нам стоит перенести релиз на следующую неделю, потому что сборка ещё не готова.",
+        "Θα πρέπει να μεταφέρουμε την κυκλοφορία στην επόμενη εβδομάδα γιατί η έκδοση δεν είναι έτοιμη.",
+        // Polish speech Qwen3-ASR wrote as garbled Russian, which the recognizer reads as Kazakh.
+        "Пред появлением си отделов войсковых Хайти не дошёл к проблемам, связанным с тонхоробом отчества 19-го столетия.",
+        "Атомная фission бомб работает на том принципе, что для того чтобы много протонов и нейтронов находили в одном ядроу с необходимой энергией.",
+    ])
+    func europeanLanguagesReadAsParakeetLanguages(text: String) {
+        #expect(EnglishStretchRouting.readsAsParakeetLanguage(text))
     }
 
     @Test(arguments: [
         "We should ship it 下周 and see how it goes.",
         "We should ship it すぐに and see how it goes.",
         "We should ship it 다음주 and see how it goes.",
-        "We should ship it завтра and see how it goes.",
-        "The meeting starts at noon. Je ne sais pas si nous pouvons terminer ce travail avant la fin de la semaine.",
-        "The meeting starts at noon. No sé si podemos terminar este trabajo antes del final de la semana que viene.",
-        "The meeting starts at noon. Ich weiß nicht, ob wir diese Arbeit bis zum Ende der Woche schaffen können.",
+        "The meeting starts at noon. Bu işi hafta sonundan önce bitirip bitiremeyeceğimizi bilmiyorum.",
+        "The meeting starts at noon. Chúng ta nên dời bản phát hành sang tuần sau vì bản dựng chưa sẵn sàng.",
     ])
-    func otherLanguagesDoNotReadAsEnglish(text: String) {
-        #expect(!EnglishStretchRouting.readsAsEnglish(text))
+    func languagesParakeetLacksDoNotReadAsItsLanguages(text: String) {
+        #expect(!EnglishStretchRouting.readsAsParakeetLanguage(text))
     }
 
     private static let englishMeeting = Array(repeating: [
@@ -93,7 +116,7 @@ struct EnglishStretchRoutingTests {
         #expect(EnglishStretchRouting.transcriptSuitsParakeet(Self.englishMeeting))
         #expect(EnglishStretchRouting.transcriptSuitsParakeet(text))
         // The per-slice check, which decides what Parakeet re-does, stays strict.
-        #expect(!EnglishStretchRouting.readsAsEnglish(text))
+        #expect(!EnglishStretchRouting.readsAsParakeetLanguage(text))
     }
 
     /// European languages, and English mixed with them, go to Parakeet Ultra.
@@ -138,13 +161,13 @@ struct EnglishStretchRoutingTests {
         #expect(beats.withLock { $0 } == stopped)
     }
 
-    @Test func aSliceWhoseTextIsNotEnglishEndsTheStretchEvenWhenTaggedEnglish() {
+    @Test func aSliceWhoseTextParakeetCannotWriteEndsTheStretchEvenWhenTaggedEnglish() {
         var slices = Self.slices(["English", "English", "English", "English", "English", "English", "English"])
-        slices[3].text = "Nous devons absolument terminer ce travail avant la fin de la semaine prochaine."
+        slices[3].text = "Bu işi hafta sonundan önce bitirip bitiremeyeceğimizi bilmiyorum."
         #expect(EnglishStretchRouting.stretches(in: slices, mode: .automatic) == [0...2, 4...6])
     }
 
-    @Test func aSliceWithoutATagEndsTheStretchWhenItsTextIsNotEnglish() {
+    @Test func aSliceWithoutATagEndsTheStretchWhenItsTextIsChinese() {
         var slices = Self.slices(["English", "English", "English", "None", "English"])
         slices[3].text = "嗯哼，嗯哼。"
         #expect(EnglishStretchRouting.stretches(in: slices, mode: .automatic) == [0...2])
@@ -152,7 +175,7 @@ struct EnglishStretchRoutingTests {
 
     @Test func aShortRecordingWithForeignTextStaysWithQwenThroughout() {
         var slices = Self.slices(["English", "English"], seconds: 10)
-        slices[1].text = "No sé si podemos terminar este trabajo antes del final de la semana que viene."
+        slices[1].text = "Bu işi hafta sonundan önce bitirip bitiremeyeceğimizi bilmiyorum."
         #expect(EnglishStretchRouting.stretches(in: slices, mode: .automatic).isEmpty)
     }
 

@@ -24,36 +24,42 @@ struct TimedWord: Equatable, Sendable {
 
 /// Which slices of a recording Parakeet transcribes again.
 ///
-/// Parakeet Ultra is more accurate than Qwen3-ASR on English and cannot write
-/// Chinese at all, so in Auto Detect it takes over long English stretches and
-/// nothing else:
-/// - Reading the slices in order, consecutive English slices form a stretch.
-///   A slice tagged with any other language, or whose text does not read as
-///   English (`readsAsEnglish`), ends it and stays with Qwen3-ASR; English
-///   after that starts a new one.
+/// Parakeet Ultra is more accurate than Qwen3-ASR on English and the
+/// European languages it knows, and cannot write Chinese at all, so with
+/// Qwen3-ASR chosen it takes over long stretches in its languages and nothing
+/// else:
+/// - Reading the slices in order, consecutive slices tagged with one of
+///   Parakeet's languages (`parakeetLanguageTags`: English, French and German
+///   alike) form a stretch. A slice tagged with any other language, or whose
+///   text shows a language Parakeet lacks (`readsAsParakeetLanguage`), ends it
+///   and stays with Qwen3-ASR; Parakeet's languages after that start a new one.
 /// - Slices tagged "None" or without a tag (silence, gated slices, failures)
-///   neither end a stretch nor start one. Between two English slices they go
-///   to Parakeet with the stretch; before its first or after its last English
-///   slice they stay with Qwen3-ASR.
+///   neither end a stretch nor start one. Between two of Parakeet's slices
+///   they go to Parakeet with the stretch; before its first or after its last
+///   such slice they stay with Qwen3-ASR.
 /// - A stretch counts only when it runs at least `minimumStretchSeconds`
-///   from its first English slice's start to its last one's end, so
+///   from its first tagged slice's start to its last one's end, so
 ///   recordings that switch back and forth keep Qwen3-ASR throughout.
-/// - A recording with no other language needs no minimum: its English goes
-///   to Parakeet however short it is.
+/// - A recording with no other language needs no minimum: all of it goes to
+///   Parakeet however short it is.
 ///
 /// The tag and the text both count because each catches what the other
-/// misses: a slice that mixes another language into English is often tagged
-/// English, and Qwen3-ASR sometimes writes foreign speech as English while
-/// still naming the language.
+/// misses: a slice that mixes Chinese into English is often tagged English,
+/// and Qwen3-ASR sometimes writes foreign speech as English while still
+/// naming the right language.
 enum EnglishStretchRouting {
     static let minimumStretchSeconds: TimeInterval = 180
     static let englishTag = "English"
+    /// Qwen3-ASR's language tags for the languages Parakeet Ultra knows. The
+    /// European languages Qwen3-ASR does not know (Ukrainian, Croatian,
+    /// Bulgarian…) come tagged as a neighbour, often one of these.
+    static let parakeetLanguageTags: Set<String> = [
+        "English", "German", "French", "Spanish", "Portuguese", "Italian", "Russian", "Dutch",
+        "Swedish", "Danish", "Finnish", "Polish", "Czech", "Greek", "Romanian", "Hungarian",
+    ]
     /// The language recognizer is unreliable on shorter sentences: it reads
     /// "Bye." as Danish.
     static let minimumCheckedSentenceWords = 5
-    /// A sentence the recognizer gives to another language still counts as
-    /// English when it rates English at least this high.
-    static let englishConfidenceToKeepSentence = 0.5
     /// Spoken fillers, which the recognizer reads as words of other languages:
     /// "um" as Portuguese.
     private static let fillerPattern = #"\b(um+|uh+|er+m?|ah+|hm+|mm+)\b[,.]?\s*"#
@@ -100,9 +106,9 @@ enum EnglishStretchRouting {
 
     /// How the language for a recording was chosen.
     enum Mode: Equatable, Sendable {
-        /// Auto-detect: Parakeet takes the long English stretches.
+        /// Qwen3-ASR first: Parakeet takes the long stretches in its languages.
         case automatic
-        /// The user chose English: Parakeet transcribes the whole recording.
+        /// The user chose English & European: Parakeet transcribes the whole recording.
         case english
 
         init(languageHint: String?) {
@@ -136,8 +142,8 @@ enum EnglishStretchRouting {
         case .automatic:
             break
         }
-        let mayBeEnglish = slices.map(Self.mayBeEnglish)
-        let minimumSeconds = mayBeEnglish.allSatisfy { $0 } ? 0 : minimumSeconds
+        let mayGoToParakeet = slices.map(Self.mayGoToParakeet)
+        let minimumSeconds = mayGoToParakeet.allSatisfy { $0 } ? 0 : minimumSeconds
         var result: [ClosedRange<Int>] = []
         var first: Int?
         var last: Int?
@@ -149,9 +155,9 @@ enum EnglishStretchRouting {
             last = nil
         }
         for (index, slice) in slices.enumerated() {
-            if !mayBeEnglish[index] {
+            if !mayGoToParakeet[index] {
                 close()
-            } else if slice.language == englishTag {
+            } else if let tag = slice.language, parakeetLanguageTags.contains(tag) {
                 if first == nil { first = index }
                 last = index
             }
@@ -166,28 +172,29 @@ enum EnglishStretchRouting {
         await Task.detached(priority: .utility) { stretches(in: slices, mode: mode) }.value
     }
 
-    /// False when the slice's tag or its text points to another language.
-    private static func mayBeEnglish(_ slice: LanguageTaggedSlice) -> Bool {
-        switch slice.language {
-        case englishTag?, nil, "None"?: return slice.text.map(readsAsEnglish) ?? true
-        default: return false
-        }
+    /// False when the slice's tag or its text points to a language Parakeet lacks.
+    private static func mayGoToParakeet(_ slice: LanguageTaggedSlice) -> Bool {
+        if let tag = slice.language, tag != "None", !parakeetLanguageTags.contains(tag) { return false }
+        return slice.text.map(readsAsParakeetLanguage) ?? true
     }
 
-    /// False when the text shows another language: a letter outside the Latin
-    /// alphabet, or a sentence the system's language recognizer gives to
-    /// another language. The recognizer has to be asked sentence by sentence:
-    /// asked about a whole slice, it names the language most of it is in and
-    /// answers English even for half English, half Chinese. It cannot see a
-    /// few foreign words inside an English sentence.
-    static func readsAsEnglish(_ text: String) -> Bool {
-        guard !hasNonLatinLetters(text) else { return false }
+    /// False when the text shows a language Parakeet lacks: a letter outside
+    /// the Latin, Cyrillic and Greek alphabets (Chinese, Japanese, Korean,
+    /// Arabic…), or a sentence the system's language recognizer gives to a
+    /// language outside `parakeetLanguageCodes` (Turkish, Vietnamese…). The
+    /// recognizer has to be asked sentence by sentence: asked about a whole
+    /// slice, it names the language most of it is in and answers English even
+    /// for half English, half Chinese. It cannot see a few foreign words
+    /// inside a sentence.
+    static func readsAsParakeetLanguage(_ text: String) -> Bool {
+        guard !hasLettersOutsideParakeetScripts(text) else { return false }
         let text = text.replacingOccurrences(
             of: fillerPattern, with: "", options: [.regularExpression, .caseInsensitive])
         let tokenizer = NLTokenizer(unit: .sentence)
         tokenizer.string = text
         return !tokenizer.tokens(for: text.startIndex..<text.endIndex).contains {
-            isInAnotherLanguage(text[$0].trimmingCharacters(in: .whitespacesAndNewlines))
+            let sentence = text[$0].trimmingCharacters(in: .whitespacesAndNewlines)
+            return isChecked(sentence) && isGivenToLanguageParakeetLacks(sentence)
         }
     }
 
@@ -201,10 +208,12 @@ enum EnglishStretchRouting {
     /// The languages Parakeet Ultra transcribes, as `NLLanguage` codes:
     /// English and 24 European languages. The recognizer does not know
     /// Slovenian, Latvian, Lithuanian, Estonian or Maltese and reads them as
-    /// neighbours in this set (Croatian, Czech, Polish, Finnish).
+    /// neighbours in this set (Croatian, Czech, Polish, Finnish). It reads the
+    /// garbled Russian Qwen3-ASR writes for Polish or Russian mixed with
+    /// English as Kazakh, which Qwen3-ASR does not know either, so "kk" counts.
     static let parakeetLanguageCodes: Set<String> = [
         "en", "de", "fr", "es", "it", "pt", "ru", "uk", "hr", "sl", "lv", "lt", "et",
-        "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt",
+        "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt", "kk",
     ]
     /// A sentence the recognizer gives to another language still counts when
     /// it rates Parakeet's languages together at least this high.
@@ -261,26 +270,6 @@ enum EnglishStretchRouting {
         return tokenizer.tokens(for: sentence.startIndex..<sentence.endIndex).count >= minimumCheckedSentenceWords
     }
 
-    private static func hasNonLatinLetters(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            !scalar.isASCII && scalar.properties.isAlphabetic
-                && !(scalar.properties.name?.hasPrefix("LATIN") ?? false)
-        }
-    }
-
-    private static func isInAnotherLanguage(_ sentence: String) -> Bool {
-        guard isChecked(sentence) else { return false }
-        return isGivenToAnotherLanguage(sentence)
-    }
-
-    private static func isGivenToAnotherLanguage(_ sentence: String) -> Bool {
-        let recognizer = NLLanguageRecognizer()
-        recognizer.processString(sentence)
-        guard let language = recognizer.dominantLanguage, language != .english, language != .undetermined else {
-            return false
-        }
-        return (recognizer.languageHypotheses(withMaximum: 30)[.english] ?? 0) < englishConfidenceToKeepSentence
-    }
 
     /// Transcribes one stretch of a file with Parakeet: the file, its first
     /// and end frame. Returns the words timed from the start of the file.

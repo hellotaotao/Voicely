@@ -2382,118 +2382,118 @@
         }
       }
     },
-    "Auto Detect": {
+    "Qwen": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Automatisch erkennen"
+            "value": "Qwen"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Detección automática"
+            "value": "Qwen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Détection auto"
+            "value": "Qwen"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動検出"
+            "value": "Qwen"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "자동 감지"
+            "value": "Qwen"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Detecção automática"
+            "value": "Qwen"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動偵測"
+            "value": "千問"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "自动检测"
+            "value": "千问"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動偵測"
+            "value": "千問"
           }
         }
       }
     },
-    "Auto Detect uses %@; English passages go to %@.": {
+    "Qwen uses %@; passages in English and European languages go to %@.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Automatisch erkennen nutzt %@; englische Passagen gehen an %@."
+            "value": "Qwen nutzt %@; Passagen auf Englisch und in europäischen Sprachen gehen an %@."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "La detección automática usa %@; los fragmentos en inglés van a %@."
+            "value": "Qwen usa %@; los fragmentos en inglés y en idiomas europeos van a %@."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La détection auto utilise %@ ; les passages en anglais vont à %@."
+            "value": "Qwen utilise %@ ; les passages en anglais et dans les langues européennes vont à %@."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動検出では %@ を使い、英語の部分は %@ で処理します。"
+            "value": "Qwen では %@ を使い、英語とヨーロッパの言語の部分は %@ で処理します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "자동 감지는 %@을(를) 사용하고, 영어 구간은 %@(으)로 처리합니다."
+            "value": "Qwen은 %@을(를) 사용하고, 영어 및 유럽 언어 구간은 %@(으)로 처리합니다."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A detecção automática usa %@; os trechos em inglês vão para %@."
+            "value": "Qwen usa %@; os trechos em inglês e em idiomas europeus vão para %@."
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動偵測使用 %1$@；英文段落交給 %2$@。"
+            "value": "千問使用 %1$@；英文和歐洲語言的段落交給 %2$@。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "自动检测使用 %1$@；英文段落交给 %2$@。"
+            "value": "千问使用 %1$@；英文和欧洲语言的段落交给 %2$@。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動偵測使用 %1$@；英文段落交給 %2$@。"
+            "value": "千問使用 %1$@；英文和歐洲語言的段落交給 %2$@。"
           }
         }
       }
@@ -12225,60 +12225,60 @@
         }
       }
     },
-    "Re-transcribe with Auto Detect": {
+    "Re-transcribe with Qwen": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mit automatischer Erkennung neu transkribieren"
+            "value": "Mit Qwen neu transkribieren"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Volver a transcribir con detección automática"
+            "value": "Volver a transcribir con Qwen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Retranscrire avec la détection auto"
+            "value": "Retranscrire avec Qwen"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動検出で再文字起こし"
+            "value": "Qwen で再文字起こし"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "자동 감지로 다시 전사"
+            "value": "Qwen으로 다시 전사"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Transcrever de novo com detecção automática"
+            "value": "Transcrever de novo com Qwen"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "用自動偵測重新轉寫"
+            "value": "用千問重新轉寫"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用自动检测重新转写"
+            "value": "用千问重新转写"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "用自動偵測重新轉寫"
+            "value": "用千問重新轉寫"
           }
         }
       }
@@ -16401,60 +16401,60 @@
         }
       }
     },
-    "Switch to Auto Detect": {
+    "Switch to Qwen": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zu automatischer Erkennung wechseln"
+            "value": "Zu Qwen wechseln"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cambiar a detección automática"
+            "value": "Cambiar a Qwen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Passer à la détection auto"
+            "value": "Passer à Qwen"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動検出に切り替える"
+            "value": "Qwen に切り替える"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "자동 감지로 전환"
+            "value": "Qwen으로 전환"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mudar para detecção automática"
+            "value": "Mudar para Qwen"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "切換到自動偵測"
+            "value": "切換到千問"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "切换到自动检测"
+            "value": "切换到千问"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "切換到自動偵測"
+            "value": "切換到千問"
           }
         }
       }

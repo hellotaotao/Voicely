@@ -12,6 +12,15 @@ enum SpeechLanguageCopy {
             : String(localized: "All supported languages")
     }
 
+    /// The choice's name where only one line fits: the language button next to
+    /// the record button and the recording's language row. The full names do
+    /// not fit there on a 6.1-inch iPhone in English, French or German.
+    static func shortName(for key: String) -> String {
+        Qwen3ASRDefaults.languageKey(key) == "english"
+            ? String(localized: "English & European")
+            : String(localized: "All languages")
+    }
+
     /// What the choice does, under the picker in Settings and when asking
     /// whether to re-transcribe.
     static func description(for key: String) -> String {

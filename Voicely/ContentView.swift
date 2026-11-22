@@ -1662,7 +1662,7 @@ struct RecordingControls: View {
                         Text("Language")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-                        Text(languageLabel(for: nextRecordingLanguageKey))
+                        Text(SpeechLanguageCopy.shortName(for: nextRecordingLanguageKey))
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -1755,8 +1755,9 @@ struct RecordingControls: View {
         HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "character.bubble")
-                Text(SpeechLanguageCopy.name(for: "english"))
+                Text(SpeechLanguageCopy.shortName(for: "english"))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .foregroundStyle(.orange)
             .accessibilityElement(children: .combine)
@@ -1770,6 +1771,9 @@ struct RecordingControls: View {
                 Text("Other languages? Switch")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
+                    // German and French need about 40 pt more than a
+                    // 6.1-inch iPhone gives this row; shrink before truncating.
+                    .minimumScaleFactor(0.8)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(Capsule().fill(Color.primary.opacity(0.08)))

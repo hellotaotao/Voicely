@@ -55,6 +55,12 @@ struct VoicelyApp: App {
     @StateObject private var syncMonitor = CloudKitSyncMonitor()
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        if !AppRuntime.isRunningTests {
+            DefaultSpeechLanguage.register()
+        }
+    }
+
     @StateObject private var modelContainerLoader = ModelContainerLoader(
         make: VoicelyApp.makeModelContainer,
         isProtectedDataAvailable: { UIApplication.shared.isProtectedDataAvailable }

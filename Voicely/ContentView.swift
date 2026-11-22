@@ -1630,7 +1630,7 @@ struct RecordingControls: View {
     }
 
     private func languageLabel(for key: String) -> String {
-        Qwen3ASRDefaults.languageKey(key) == "english" ? String(localized: "English & European") : String(localized: "Qwen")
+        SpeechLanguageCopy.name(for: key)
     }
 
     private var languageChoice: Binding<String> {
@@ -1750,24 +1750,24 @@ struct RecordingControls: View {
     }
 
     /// A recording with English & European chosen says so, and can switch to
-    /// Auto Detect once when it turns out to need Qwen3-ASR.
+    /// All supported languages (Qwen3-ASR first) once when it turns out to need it.
     private var recordingLanguageRow: some View {
         HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "character.bubble")
-                Text("English & European")
+                Text(SpeechLanguageCopy.name(for: "english"))
                     .lineLimit(1)
             }
             .foregroundStyle(.orange)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Speech language: English & European")
+            .accessibilityLabel("Speech language: \(SpeechLanguageCopy.name(for: "english"))")
 
             Spacer(minLength: 4)
 
             Button {
                 session.switchRecordingToAutoDetect()
             } label: {
-                Text("Switch to Qwen")
+                Text("Other languages? Switch")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
                     .padding(.horizontal, 10)
@@ -2070,7 +2070,7 @@ struct VoiceNoteDetailView: View {
     }
 
     static func retranscribeButtonTitle(languageKey: String) -> String {
-        languageKey == "english" ? String(localized: "Re-transcribe in English & European") : String(localized: "Re-transcribe with Qwen")
+        SpeechLanguageCopy.retranscribeTitle(for: languageKey)
     }
 
     /// The engine that writes the text for `languageKey`.
@@ -2079,9 +2079,7 @@ struct VoiceNoteDetailView: View {
     }
 
     private var retranscribeConfirmationMessage: String {
-        let engines = retranscribeLanguage.key == "english"
-            ? String(localized: "English & European uses \(SpeechModelKind.parakeet.displayName).")
-            : String(localized: "Qwen uses \(Qwen3ASRDefaults.modelDisplayName); passages in English and European languages go to \(SpeechModelKind.parakeet.displayName).")
+        let engines = SpeechLanguageCopy.description(for: retranscribeLanguage.key)
         return String(localized: "\(engines) The new text replaces the current transcript, and speakers are labeled when more than one is heard.")
     }
 

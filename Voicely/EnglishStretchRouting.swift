@@ -205,16 +205,19 @@ enum EnglishStretchRouting {
     /// (0.06–0.31%), while notes with real foreign passages ran 4% and up.
     static let foreignShareForParakeetTranscript = 0.01
 
-    /// The languages Parakeet Ultra transcribes, as `NLLanguage` codes:
-    /// English and 24 European languages. The recognizer does not know
-    /// Slovenian, Latvian, Lithuanian, Estonian or Maltese and reads them as
-    /// neighbours in this set (Croatian, Czech, Polish, Finnish). It reads the
-    /// garbled Russian Qwen3-ASR writes for Polish or Russian mixed with
-    /// English as Kazakh, which Qwen3-ASR does not know either, so "kk" counts.
+    /// The languages Parakeet Ultra transcribes, as ISO 639-1 codes (the
+    /// ones `NLLanguage` and `Locale` use): English and 24 European languages.
     static let parakeetLanguageCodes: Set<String> = [
         "en", "de", "fr", "es", "it", "pt", "ru", "uk", "hr", "sl", "lv", "lt", "et",
-        "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt", "kk",
+        "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt",
     ]
+    /// What the system's language recognizer answers for text in Parakeet's
+    /// languages. It does not know Slovenian, Latvian, Lithuanian, Estonian or
+    /// Maltese and reads them as neighbours in the set (Croatian, Czech,
+    /// Polish, Finnish). It reads the garbled Russian Qwen3-ASR writes for
+    /// Polish or Russian mixed with English as Kazakh, which Qwen3-ASR does
+    /// not know either, so "kk" counts too.
+    private static let recognizedAsParakeetLanguage = parakeetLanguageCodes.union(["kk"])
     /// A sentence the recognizer gives to another language still counts when
     /// it rates Parakeet's languages together at least this high.
     static let parakeetConfidenceToKeepSentence = 0.5
@@ -255,11 +258,11 @@ enum EnglishStretchRouting {
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(sentence)
         guard let language = recognizer.dominantLanguage, language != .undetermined,
-              !parakeetLanguageCodes.contains(language.rawValue) else {
+              !recognizedAsParakeetLanguage.contains(language.rawValue) else {
             return false
         }
         let known = recognizer.languageHypotheses(withMaximum: 30)
-            .filter { parakeetLanguageCodes.contains($0.key.rawValue) }
+            .filter { recognizedAsParakeetLanguage.contains($0.key.rawValue) }
             .reduce(0) { $0 + $1.value }
         return known < parakeetConfidenceToKeepSentence
     }

@@ -2382,118 +2382,60 @@
         }
       }
     },
-    "Qwen": {
+    "All supported languages": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen"
+            "value": "Alle unterstützten Sprachen"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen"
+            "value": "Todos los idiomas compatibles"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen"
+            "value": "Toutes les langues prises en charge"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen"
+            "value": "日本語と他の言語"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen"
+            "value": "한국어 및 기타 언어"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen"
+            "value": "Todos os idiomas compatíveis"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "千問"
+            "value": "中文和其他語言"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "千问"
+            "value": "中文和其他语言"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "千問"
-          }
-        }
-      }
-    },
-    "Qwen uses %@; passages in English and European languages go to %@.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Qwen nutzt %@; Passagen auf Englisch und in europäischen Sprachen gehen an %@."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Qwen usa %@; los fragmentos en inglés y en idiomas europeos van a %@."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Qwen utilise %@ ; les passages en anglais et dans les langues européennes vont à %@."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Qwen では %@ を使い、英語とヨーロッパの言語の部分は %@ で処理します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Qwen은 %@을(를) 사용하고, 영어 및 유럽 언어 구간은 %@(으)로 처리합니다."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Qwen usa %@; os trechos em inglês e em idiomas europeus vão para %@."
-          }
-        },
-        "zh-HK": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "千問使用 %1$@；英文和歐洲語言的段落交給 %2$@。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "千问使用 %1$@；英文和欧洲语言的段落交给 %2$@。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "千問使用 %1$@；英文和歐洲語言的段落交給 %2$@。"
+            "value": "中文和其他語言"
           }
         }
       }
@@ -3814,60 +3756,60 @@
         }
       }
     },
-    "Choose English & European only if your recordings are all in English or other European languages.": {
+    "English and 24 European languages, mixed freely (like French with English). Choose it when nothing else is spoken.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wähle „Englisch & europäische Sprachen“ nur, wenn deine Aufnahmen alle auf Englisch oder in anderen europäischen Sprachen sind."
+            "value": "Englisch und 24 europäische Sprachen, auch gemischt (etwa Französisch mit Englisch). Wähle es, wenn keine andere Sprache gesprochen wird."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Elige «Inglés e idiomas europeos» solo si todas tus grabaciones están en inglés o en otros idiomas europeos."
+            "value": "Inglés y 24 idiomas europeos, también mezclados (como francés con inglés). Elígelo cuando no se hable ningún otro idioma."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Choisissez « Anglais et langues européennes » seulement si tous vos enregistrements sont en anglais ou dans d’autres langues européennes."
+            "value": "L’anglais et 24 langues européennes, même mélangées (comme le français avec l’anglais). Choisissez-le quand aucune autre langue n’est parlée."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "録音がすべて英語またはほかのヨーロッパの言語の場合のみ「英語とヨーロッパの言語」を選んでください。"
+            "value": "英語と24のヨーロッパの言語。混ぜて話しても大丈夫です（フランス語に英語が混じるなど）。他の言語を話さないときに選んでください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "모든 녹음이 영어나 다른 유럽 언어일 때만 '영어 및 유럽 언어'를 선택하세요."
+            "value": "영어와 24개 유럽 언어. 섞어서 말해도 됩니다(프랑스어에 영어가 섞이는 경우 등). 다른 언어를 쓰지 않을 때 선택하세요."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Escolha “Inglês e idiomas europeus” só se todas as suas gravações forem em inglês ou em outros idiomas europeus."
+            "value": "Inglês e 24 idiomas europeus, também misturados (como francês com inglês). Escolha quando nenhum outro idioma for falado."
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "只有錄音全部是英文或其他歐洲語言時才選「英文和歐洲語言」。"
+            "value": "英文和 24 種歐洲語言，混著說也可以（比如法語夾英語）。錄音裡沒有其他語言時選它。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "只有录音全部是英文或其他欧洲语言时才选“英语和欧洲语言”。"
+            "value": "英语和 24 种欧洲语言，混着说也可以（比如法语夹英语）。录音里没有其他语言时选它。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "只有錄音全部是英文或其他歐洲語言時才選「英文和歐洲語言」。"
+            "value": "英文和 24 種歐洲語言，混著說也可以（比如法語夾英語）。錄音裡沒有其他語言時選它。"
           }
         }
       }
@@ -6076,118 +6018,118 @@
         }
       }
     },
-    "English & European": {
+    "English & European (faster)": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Englisch & europäische Sprachen"
+            "value": "Englisch & europäische Sprachen (schneller)"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Inglés e idiomas europeos"
+            "value": "Inglés e idiomas europeos (más rápido)"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anglais et langues européennes"
+            "value": "Anglais et langues européennes (plus rapide)"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "英語とヨーロッパの言語"
+            "value": "英語とヨーロッパの言語（高速）"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "영어 및 유럽 언어"
+            "value": "영어 및 유럽 언어(더 빠름)"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Inglês e idiomas europeus"
+            "value": "Inglês e idiomas europeus (mais rápido)"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "英文和歐洲語言"
+            "value": "英文和歐洲語言（更快）"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "英语和欧洲语言"
+            "value": "英语和欧洲语言（更快）"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "英文和歐洲語言"
+            "value": "英文和歐洲語言（更快）"
           }
         }
       }
     },
-    "English & European uses %@.": {
+    "30+ languages, mixed freely. English and European passages automatically go to a more accurate model.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "„Englisch & europäische Sprachen“ nutzt %@."
+            "value": "Über 30 Sprachen, auch gemischt. Passagen auf Englisch und in europäischen Sprachen gehen automatisch an ein genaueres Modell."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "«Inglés e idiomas europeos» usa %@."
+            "value": "Más de 30 idiomas, también mezclados. Los fragmentos en inglés y en idiomas europeos pasan automáticamente a un modelo más preciso."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "« Anglais et langues européennes » utilise %@."
+            "value": "Plus de 30 langues, même mélangées. Les passages en anglais et dans les langues européennes passent automatiquement à un modèle plus précis."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "「英語とヨーロッパの言語」では %@ を使います。"
+            "value": "日本語、中国語、英語など30以上の言語。混ぜて話しても大丈夫です。英語とヨーロッパの言語の部分は、より正確なモデルに自動で回します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "'영어 및 유럽 언어'는 %@을(를) 사용합니다."
+            "value": "한국어, 중국어, 영어 등 30개 이상의 언어. 섞어서 말해도 됩니다. 영어와 유럽 언어 구간은 더 정확한 모델로 자동 전달됩니다."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "“Inglês e idiomas europeus” usa %@."
+            "value": "Mais de 30 idiomas, também misturados. Os trechos em inglês e em idiomas europeus vão automaticamente para um modelo mais preciso."
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "「英文和歐洲語言」使用 %@。"
+            "value": "中文、英文、日文等 30 多種語言，可以混著說；其中英文和歐洲語言的部分會自動交給更準的模型。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "“英语和欧洲语言”使用 %@。"
+            "value": "中文、英文、日文等 30 多种语言，可以混着说；其中英语和欧洲语言的部分会自动交给更准的模型。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "「英文和歐洲語言」使用 %@。"
+            "value": "中文、英文、日文等 30 多種語言，可以混著說；其中英文和歐洲語言的部分會自動交給更準的模型。"
           }
         }
       }
@@ -12051,7 +11993,7 @@
         }
       }
     },
-    "Re-transcribe in English & European": {
+    "Re-transcribe: English & European": {
       "localizations": {
         "de": {
           "stringUnit": {
@@ -12062,49 +12004,49 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Volver a transcribir en inglés e idiomas europeos"
+            "value": "Volver a transcribir: inglés e idiomas europeos"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Retranscrire en anglais et langues européennes"
+            "value": "Retranscrire : anglais et langues européennes"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "英語とヨーロッパの言語で再文字起こし"
+            "value": "再文字起こし：英語とヨーロッパの言語"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "영어 및 유럽 언어로 다시 전사"
+            "value": "다시 전사: 영어 및 유럽 언어"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Transcrever de novo em inglês e idiomas europeus"
+            "value": "Transcrever de novo: inglês e idiomas europeus"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "用英文和歐洲語言重新轉寫"
+            "value": "重新轉寫：英文和歐洲語言"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用英语和欧洲语言重新转写"
+            "value": "重新转写：英语和欧洲语言"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "用英文和歐洲語言重新轉寫"
+            "value": "重新轉寫：英文和歐洲語言"
           }
         }
       }
@@ -12225,60 +12167,60 @@
         }
       }
     },
-    "Re-transcribe with Qwen": {
+    "Re-transcribe: All supported languages": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mit Qwen neu transkribieren"
+            "value": "Neu transkribieren: alle unterstützten Sprachen"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Volver a transcribir con Qwen"
+            "value": "Volver a transcribir: todos los idiomas compatibles"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Retranscrire avec Qwen"
+            "value": "Retranscrire : toutes les langues prises en charge"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen で再文字起こし"
+            "value": "再文字起こし：日本語と他の言語"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen으로 다시 전사"
+            "value": "다시 전사: 한국어 및 기타 언어"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Transcrever de novo com Qwen"
+            "value": "Transcrever de novo: todos os idiomas compatíveis"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "用千問重新轉寫"
+            "value": "重新轉寫：中文和其他語言"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用千问重新转写"
+            "value": "重新转写：中文和其他语言"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "用千問重新轉寫"
+            "value": "重新轉寫：中文和其他語言"
           }
         }
       }
@@ -15299,64 +15241,6 @@
         }
       }
     },
-    "Speech language: English & European": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gesprochene Sprache: Englisch & europäische Sprachen"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Idioma de la voz: inglés e idiomas europeos"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Langue parlée : anglais et langues européennes"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "音声の言語: 英語とヨーロッパの言語"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "음성 언어: 영어 및 유럽 언어"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Idioma da fala: inglês e idiomas europeus"
-          }
-        },
-        "zh-HK": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "語音語言：英文和歐洲語言"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "语音语言：英语和欧洲语言"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "語音語言：英文和歐洲語言"
-          }
-        }
-      }
-    },
     "Speech model didn’t load": {
       "localizations": {
         "de": {
@@ -16401,60 +16285,60 @@
         }
       }
     },
-    "Switch to Qwen": {
+    "Other languages? Switch": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zu Qwen wechseln"
+            "value": "Andere Sprachen? Wechseln"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cambiar a Qwen"
+            "value": "¿Otros idiomas? Cambiar"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Passer à Qwen"
+            "value": "Autres langues ? Changer"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen に切り替える"
+            "value": "他の言語も？切り替え"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qwen으로 전환"
+            "value": "다른 언어도? 전환"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mudar para Qwen"
+            "value": "Outros idiomas? Mudar"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "切換到千問"
+            "value": "有其他語言？切換"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "切换到千问"
+            "value": "有其他语言？切换"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "切換到千問"
+            "value": "有其他語言？切換"
           }
         }
       }

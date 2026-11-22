@@ -379,7 +379,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Speech Language")
                     .font(.subheadline.weight(.medium))
-                Text("Choose English & European only if your recordings are all in English or other European languages.")
+                Text(SpeechLanguageCopy.description(for: selectedLanguage))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -390,7 +390,7 @@ struct SettingsView: View {
                 set: { selectedLanguage = $0 }
             )) {
                 ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { language in
-                    Text(language == "english" ? String(localized: "English & European") : String(localized: "Qwen")).tag(language)
+                    Text(SpeechLanguageCopy.name(for: language)).tag(language)
                 }
             }
             .pickerStyle(.menu)

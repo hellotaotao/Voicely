@@ -76,6 +76,7 @@ If xcodebuild fails with "scheme not found", open Xcode and mark the `Voicely` s
 - Unit tests use **Swift Testing** (`import Testing`, `@Test` functions) in `VoicelyTests/`
 - UI tests use XCTest in `VoicelyUITests/`
 - Mock ModelManager by subclassing and overriding `isModelLoaded()`
+- The shared scheme's Test action runs the test host in English (`language = "en"`), so tests that compare English copy pass on a Mac where Voicely's own language is set to Chinese.
 
 ## Coding Conventions
 

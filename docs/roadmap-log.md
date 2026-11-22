@@ -493,3 +493,4 @@ build 4（2026-11-08，从 `ef50820` 的干净源码打包，各约 5 分钟；i
 
 - 用户定：选项不出现模型名，按录音里有哪些语言来叫；默认值按系统语言和输入法定。名字和说明集中在新的 `SpeechLanguageCopy`，默认值在新的 `DefaultSpeechLanguage`（`VoicelyApp.init` 里注册成 UserDefaults 默认值，测试进程不注册）。Ultra 的 25 种语言代码挪成 `EnglishStretchRouting.parakeetLanguageCodes`，文字检查另用加了 kk 的集合。`Localizable.xcstrings` 里换掉 7 条、删掉 2 条文案，9 种界面语言补齐。
 - 验证：Mac Catalyst 上读输入法的接口可用（这台 Mac 读到 zh-Hans、emoji、en-US；因为 app 单独设了简体中文，`Locale.preferredLanguages` 在 app 里是 ["zh-Hans"]）。单元测试 617 项，新加的默认值用例（只有英语和欧洲语言 4 组 → Ultra；有中文、日文、韩文、土耳其、阿拉伯、挪威语或什么都没有 8 组 → 千问）通过，失败的还是那 13 项（22 处）英文界面文案测试。Mac app 里语言按钮显示"中文和其他语言"，设置页显示对应说明。
+- 同日，那 13 项一直失败的英文界面文案测试修好了：原因是这台 Mac 给 Voicely 单独设了简体中文界面，测试进程就是 app 本身，比对英文原文的测试拿到的是中文。共享 scheme 的测试设置里把测试进程的界面语言固定为英文（`language = "en"`、`region = "US"`），测试本身没改，app 自己的中文设置也没动。单元测试 617 项全部通过。

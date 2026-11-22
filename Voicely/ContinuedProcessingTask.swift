@@ -224,6 +224,9 @@ private final class SystemContinuedProcessingHandle: ContinuedProcessingHandle {
     func complete(success: Bool) {
         task.expirationHandler = nil
         reportedProgress.complete(success: success)
+        // The running subtitle stops at 99%; the system keeps showing the
+        // last subtitle after completion, so say the work is done.
+        if success { task.updateTitle(task.title, subtitle: String(localized: "Transcription complete")) }
         log.notice("task=\(self.task.identifier, privacy: .public) event=completed success=\(success)")
         task.setTaskCompleted(success: success)
     }

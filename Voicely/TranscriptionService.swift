@@ -154,22 +154,22 @@ class TranscriptionService: ObservableObject {
 
     /// The language a new run of `note` uses unless the user picks another:
     /// the one it was last transcribed in, so a Chinese meeting is not run
-    /// through Parakeet because English is the setting now. Text all
-    /// Parakeet wrote is English. Other text that reads as English (see
-    /// `EnglishStretchRouting.transcriptReadsAsEnglish(_:)`) goes to English,
-    /// so an English meeting Qwen3-ASR once wrote is not run through it again
-    /// only to be handed to Parakeet; other text goes to Auto Detect.
-    /// `transcriptReadsAsEnglish` is nil when that is not known (no text, or
+    /// through Parakeet because English & European is the setting now. Text
+    /// all Parakeet wrote goes to English & European. Other text in languages
+    /// Parakeet Ultra knows (see `EnglishStretchRouting.transcriptSuitsParakeet(_:)`)
+    /// goes there too, so an English or French meeting Qwen3-ASR once wrote is
+    /// run by the model that is better at it; other text goes to Auto Detect.
+    /// `transcriptSuitsParakeet` is nil when that is not known (no text, or
     /// not read yet): then Qwen3-ASR's notes go to Auto Detect and the rest
     /// follow the setting.
     nonisolated static func noteLanguage(
-        transcriptionModelIdentifier: String?, transcriptReadsAsEnglish: Bool? = nil, settingKey: String?
+        transcriptionModelIdentifier: String?, transcriptSuitsParakeet: Bool? = nil, settingKey: String?
     ) -> RunLanguageStore.Entry {
         if EnglishStretchRouting.isParakeetOnly(transcriptionModelIdentifier) {
             return .init(key: "english", source: .noteLanguage)
         }
-        if let transcriptReadsAsEnglish {
-            return .init(key: transcriptReadsAsEnglish ? "english" : "auto", source: .noteLanguage)
+        if let transcriptSuitsParakeet {
+            return .init(key: transcriptSuitsParakeet ? "english" : "auto", source: .noteLanguage)
         }
         if transcriptionModelIdentifier?.hasPrefix("qwen3-asr") == true {
             return .init(key: "auto", source: .noteLanguage)
@@ -177,28 +177,28 @@ class TranscriptionService: ObservableObject {
         return .init(key: Qwen3ASRDefaults.languageKey(settingKey), source: .setting)
     }
 
-    /// `noteLanguage(transcriptionModelIdentifier:transcriptReadsAsEnglish:settingKey:)`
+    /// `noteLanguage(transcriptionModelIdentifier:transcriptSuitsParakeet:settingKey:)`
     /// for `note`, with its text as last read by `readTranscriptLanguage(of:)`
     /// unless the caller has the answer.
-    func noteLanguage(for note: VoiceNote, transcriptReadsAsEnglish: Bool? = nil) -> RunLanguageStore.Entry {
+    func noteLanguage(for note: VoiceNote, transcriptSuitsParakeet: Bool? = nil) -> RunLanguageStore.Entry {
         Self.noteLanguage(
             transcriptionModelIdentifier: note.transcriptionModelIdentifier,
-            transcriptReadsAsEnglish: transcriptReadsAsEnglish ?? cachedTranscriptLanguage(for: note),
+            transcriptSuitsParakeet: transcriptSuitsParakeet ?? cachedTranscriptLanguage(for: note),
             settingKey: languageSettingKey())
     }
 
-    /// Whether each note's text reads as English, with the text it was read
-    /// from; nil for no text.
+    /// Whether each note's text is in languages Parakeet knows, with the text
+    /// it was read from; nil for no text.
     private var transcriptLanguageByNoteID: [UUID: (text: String, english: Bool?)] = [:]
 
-    /// Reads whether a transcript is English, off the main actor: an hour of
+    /// Reads whether a transcript is in languages Parakeet knows, off the main actor: an hour of
     /// text takes about half a second on the Mac. Nil for no text. Tests
     /// replace it; by default they read nothing.
     var transcriptLanguageReader: (String) async -> Bool? = { text in
         guard !AppRuntime.isRunningTests,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return await Task.detached(priority: .userInitiated) {
-            EnglishStretchRouting.transcriptReadsAsEnglish(text)
+            EnglishStretchRouting.transcriptSuitsParakeet(text)
         }.value
     }
 
@@ -207,7 +207,7 @@ class TranscriptionService: ObservableObject {
         return cached.english
     }
 
-    /// Reads whether `note`'s text is English and keeps the answer until the
+    /// Reads whether `note`'s text suits Parakeet and keeps the answer until the
     /// text changes. A note's detail view reads it on opening, before the
     /// user can ask for a re-transcription.
     @discardableResult

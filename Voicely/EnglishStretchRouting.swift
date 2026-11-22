@@ -191,20 +191,34 @@ enum EnglishStretchRouting {
         }
     }
 
-    /// A whole transcript still reads as English with up to this share of its
-    /// checked sentences, by characters, given to another language. Across
-    /// the Latin-only notes on the Mac (2026-11-08) the recognizer misread
-    /// one English sentence in a few long English notes (0.06–0.31%), while
-    /// notes with real foreign passages ran 4% and up.
-    static let foreignShareForEnglishTranscript = 0.01
+    /// A whole transcript still suits Parakeet with up to this share of its
+    /// checked sentences, by characters, given to a language Parakeet does
+    /// not know. Across the Latin-only notes on the Mac (2026-11-08) the
+    /// recognizer misread one English sentence in a few long English notes
+    /// (0.06–0.31%), while notes with real foreign passages ran 4% and up.
+    static let foreignShareForParakeetTranscript = 0.01
 
-    /// Whether a note's whole transcript reads as English, which picks the
-    /// language a re-transcription uses. Any letter outside the Latin alphabet
-    /// rules it out, as in `readsAsEnglish(_:)`; sentences of another language
-    /// rule it out only above `foreignShareForEnglishTranscript`, because one
-    /// misread sentence in an hour of English is not a second language.
-    static func transcriptReadsAsEnglish(_ text: String) -> Bool {
-        guard !hasNonLatinLetters(text) else { return false }
+    /// The languages Parakeet Ultra transcribes, as `NLLanguage` codes:
+    /// English and 24 European languages. The recognizer does not know
+    /// Slovenian, Latvian, Lithuanian, Estonian or Maltese and reads them as
+    /// neighbours in this set (Croatian, Czech, Polish, Finnish).
+    static let parakeetLanguageCodes: Set<String> = [
+        "en", "de", "fr", "es", "it", "pt", "ru", "uk", "hr", "sl", "lv", "lt", "et",
+        "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt",
+    ]
+    /// A sentence the recognizer gives to another language still counts when
+    /// it rates Parakeet's languages together at least this high.
+    static let parakeetConfidenceToKeepSentence = 0.5
+
+    /// Whether a note's whole transcript is in languages Parakeet Ultra knows,
+    /// which picks the language a re-transcription offers first: English &
+    /// European when it is, Auto Detect (Qwen3-ASR) when it is not. Any letter
+    /// outside the Latin, Cyrillic and Greek alphabets (Chinese, Japanese,
+    /// Arabic…) rules it out; sentences of another language rule it out only
+    /// above `foreignShareForParakeetTranscript`, because one misread sentence
+    /// in an hour of speech is not a second language.
+    static func transcriptSuitsParakeet(_ text: String) -> Bool {
+        guard !hasLettersOutsideParakeetScripts(text) else { return false }
         let text = text.replacingOccurrences(
             of: fillerPattern, with: "", options: [.regularExpression, .caseInsensitive])
         let tokenizer = NLTokenizer(unit: .sentence)
@@ -215,9 +229,30 @@ enum EnglishStretchRouting {
             let sentence = text[range].trimmingCharacters(in: .whitespacesAndNewlines)
             guard isChecked(sentence) else { continue }
             checked += sentence.count
-            if isGivenToAnotherLanguage(sentence) { foreign += sentence.count }
+            if isGivenToLanguageParakeetLacks(sentence) { foreign += sentence.count }
         }
-        return Double(foreign) <= Double(checked) * foreignShareForEnglishTranscript
+        return Double(foreign) <= Double(checked) * foreignShareForParakeetTranscript
+    }
+
+    private static func hasLettersOutsideParakeetScripts(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            guard !scalar.isASCII, scalar.properties.isAlphabetic else { return false }
+            let name = scalar.properties.name ?? ""
+            return !(name.hasPrefix("LATIN") || name.hasPrefix("CYRILLIC") || name.hasPrefix("GREEK"))
+        }
+    }
+
+    private static func isGivenToLanguageParakeetLacks(_ sentence: String) -> Bool {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sentence)
+        guard let language = recognizer.dominantLanguage, language != .undetermined,
+              !parakeetLanguageCodes.contains(language.rawValue) else {
+            return false
+        }
+        let known = recognizer.languageHypotheses(withMaximum: 30)
+            .filter { parakeetLanguageCodes.contains($0.key.rawValue) }
+            .reduce(0) { $0 + $1.value }
+        return known < parakeetConfidenceToKeepSentence
     }
 
     private static func isChecked(_ sentence: String) -> Bool {

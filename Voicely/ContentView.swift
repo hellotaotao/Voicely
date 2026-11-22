@@ -1926,9 +1926,9 @@ struct VoiceNoteDetailView: View {
     /// to the transcript that stays in place until the new one completes.
     @State private var showsCurrentTranscriptDuringRetranscription = false
     @State private var showingRetranscribeConfirmation = false
-    /// Whether the note's text reads as English, which picks the language a
-    /// re-transcription offers first. Read off the main actor on opening.
-    @State private var transcriptReadsAsEnglish: Bool?
+    /// Whether the note's text is in languages Parakeet knows, which picks the
+    /// language a re-transcription offers first. Read off the main actor on opening.
+    @State private var transcriptSuitsParakeet: Bool?
     @State private var editedTitle = ""
     @State private var editedTranscription = ""
     @State private var copyConfirmVisible = false
@@ -2060,7 +2060,7 @@ struct VoiceNoteDetailView: View {
     /// The language a re-run uses unless the user picks the other one: the
     /// note's own, which `TranscriptionService.noteLanguage(for:)` reads.
     private var retranscribeLanguage: RunLanguageStore.Entry {
-        transcriptionService.noteLanguage(for: note, transcriptReadsAsEnglish: transcriptReadsAsEnglish)
+        transcriptionService.noteLanguage(for: note, transcriptSuitsParakeet: transcriptSuitsParakeet)
     }
 
     /// Changes when the text to read does; empty while it is still being
@@ -2323,7 +2323,7 @@ struct VoiceNoteDetailView: View {
             Button(Self.retranscribeButtonTitle(languageKey: language.key)) {
                 requestTranscription(force: true, language: language)
             }
-            // English that was the wrong choice only makes it worse on a rerun;
+            // English & European that was the wrong choice only makes it worse on a rerun;
             // Auto Detect also hands English passages to Parakeet, so it is the way out.
             if language.key == "english" {
                 Button(Self.retranscribeButtonTitle(languageKey: "auto")) {
@@ -2382,9 +2382,9 @@ struct VoiceNoteDetailView: View {
             #endif
         }
         .task(id: transcriptLanguageReadID) {
-            transcriptReadsAsEnglish = nil
+            transcriptSuitsParakeet = nil
             guard !transcriptLanguageReadID.isEmpty else { return }
-            transcriptReadsAsEnglish = await transcriptionService.readTranscriptLanguage(of: note)
+            transcriptSuitsParakeet = await transcriptionService.readTranscriptLanguage(of: note)
         }
         .onChange(of: isLocallyTranscribing) { _, active in
             if !active { refreshRetainedAttempts() }

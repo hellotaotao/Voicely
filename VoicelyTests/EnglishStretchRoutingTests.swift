@@ -84,22 +84,39 @@ struct EnglishStretchRoutingTests {
     ].joined(separator: " "), count: 30).joined(separator: " ")
     private static let frenchSentence = "Je ne sais pas si nous pouvons terminer ce travail avant la fin de la semaine."
 
+    private static let turkishSentence = "Bu işi hafta sonundan önce bitirip bitiremeyeceğimizi bilmiyorum."
+
     /// One foreign sentence in a long English transcript is a misreading or
-    /// an aside, not a second language; the note still re-runs in English.
-    @Test func aLongEnglishTranscriptWithOneForeignSentenceReadsAsEnglish() {
-        let text = Self.englishMeeting + " " + Self.frenchSentence
-        #expect(EnglishStretchRouting.transcriptReadsAsEnglish(Self.englishMeeting))
-        #expect(EnglishStretchRouting.transcriptReadsAsEnglish(text))
+    /// an aside, not a second language; the note still re-runs with Parakeet.
+    @Test func aLongEnglishTranscriptWithOneForeignSentenceSuitsParakeet() {
+        let text = Self.englishMeeting + " " + Self.turkishSentence
+        #expect(EnglishStretchRouting.transcriptSuitsParakeet(Self.englishMeeting))
+        #expect(EnglishStretchRouting.transcriptSuitsParakeet(text))
         // The per-slice check, which decides what Parakeet re-does, stays strict.
         #expect(!EnglishStretchRouting.readsAsEnglish(text))
     }
 
+    /// European languages, and English mixed with them, go to Parakeet Ultra.
     @Test(arguments: [
-        "Thanks everyone. " + String(repeating: frenchSentence + " ", count: 10),
-        englishMeeting + " 我们下周再看一下数字。",
+        String(repeating: frenchSentence + " ", count: 10),
+        englishMeeting + " " + String(repeating: frenchSentence + " ", count: 30),
+        String(repeating: "Wir sollten die Veröffentlichung auf nächste Woche verschieben, weil der Build noch nicht fertig ist. ", count: 5),
+        String(repeating: "Нам стоит перенести релиз на следующую неделю, потому что сборка ещё не готова. ", count: 5),
+        String(repeating: "Θα πρέπει να μεταφέρουμε την κυκλοφορία στην επόμενη εβδομάδα γιατί η έκδοση δεν είναι έτοιμη. ", count: 5),
     ])
-    func transcriptsInAnotherLanguageOrWithChineseDoNotReadAsEnglish(text: String) {
-        #expect(!EnglishStretchRouting.transcriptReadsAsEnglish(text))
+    func europeanTranscriptsSuitParakeet(text: String) {
+        #expect(EnglishStretchRouting.transcriptSuitsParakeet(text))
+    }
+
+    /// Chinese or Japanese anywhere, or a language Parakeet lacks, stays with Qwen3-ASR.
+    @Test(arguments: [
+        englishMeeting + " 我们下周再看一下数字。",
+        englishMeeting + " 来週もう一度数字を見ましょう。",
+        "Thanks everyone. " + String(repeating: turkishSentence + " ", count: 10),
+        String(repeating: "Chúng ta nên dời bản phát hành sang tuần sau vì bản dựng chưa sẵn sàng. ", count: 5),
+    ])
+    func transcriptsParakeetCannotWriteStayWithQwen(text: String) {
+        #expect(!EnglishStretchRouting.transcriptSuitsParakeet(text))
     }
 
     /// Keeps a background task alive while Parakeet loads and converts audio,

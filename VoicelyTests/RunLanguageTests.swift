@@ -65,18 +65,18 @@ struct RunLanguageTests {
             == Entry(key: "english", source: .setting))
         #expect(TranscriptionService.noteLanguage(transcriptionModelIdentifier: "openai_whisper-large-v3", settingKey: nil)
             == Entry(key: "auto", source: .setting))
-        // Text that reads as English goes to English whoever wrote it; other text to Auto Detect.
+        // Text in languages Parakeet knows goes to English & European whoever wrote it; other text to Auto Detect.
         #expect(TranscriptionService.noteLanguage(
             transcriptionModelIdentifier: "qwen3-asr-0.6b-coreml" + EnglishStretchRouting.parakeetModelSuffix,
-            transcriptReadsAsEnglish: true, settingKey: "auto")
+            transcriptSuitsParakeet: true, settingKey: "auto")
             == Entry(key: "english", source: .noteLanguage))
         #expect(TranscriptionService.noteLanguage(
-            transcriptionModelIdentifier: "openai_whisper-small", transcriptReadsAsEnglish: false, settingKey: "english")
+            transcriptionModelIdentifier: "openai_whisper-small", transcriptSuitsParakeet: false, settingKey: "english")
             == Entry(key: "auto", source: .noteLanguage))
-        // All Parakeet stays English even when its text does not read as English.
+        // All Parakeet stays English & European whatever its text reads as.
         #expect(TranscriptionService.noteLanguage(
             transcriptionModelIdentifier: EnglishStretchRouting.parakeetOnlyModelIdentifier,
-            transcriptReadsAsEnglish: false, settingKey: "auto")
+            transcriptSuitsParakeet: false, settingKey: "auto")
             == Entry(key: "english", source: .noteLanguage))
     }
 

@@ -168,8 +168,15 @@ enum EnglishStretchRouting {
 
     /// `stretches(in:mode:)` off the main actor: the text check takes a few
     /// milliseconds a slice, which adds up on a long recording.
-    static func stretchesInBackground(in slices: [LanguageTaggedSlice], mode: Mode) async -> [ClosedRange<Int>] {
-        await Task.detached(priority: .utility) { stretches(in: slices, mode: mode) }.value
+    /// None while Parakeet is not on the device yet (`EnglishModelAssetPack`):
+    /// Qwen3-ASR's text stays.
+    static func stretchesInBackground(
+        in slices: [LanguageTaggedSlice],
+        mode: Mode,
+        englishModelIsReady: Bool = ParakeetEnglishEngine.isAvailable
+    ) async -> [ClosedRange<Int>] {
+        guard englishModelIsReady else { return [] }
+        return await Task.detached(priority: .utility) { stretches(in: slices, mode: mode) }.value
     }
 
     /// False when the slice's tag or its text points to a language Parakeet lacks.

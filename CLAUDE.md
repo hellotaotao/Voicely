@@ -10,6 +10,8 @@ Develop and verify on the Mac (Catalyst) build by default. Build, run unit tests
 
 The speech model ships inside the app. Run `scripts/fetch-speech-models.sh` once per machine: it puts the pinned models in `Models/` (not in git), and the "Embed Speech Model" build phase copies the MLX weights into the Mac app and the CoreML models into the iPhone/iPad app as `SpeechModel/`. Builds fail with a pointer to the script when `Models/` is missing.
 
+The English & European model (Parakeet Ultra, `EnglishSpeechModel/`) is embedded in the Mac app and in every Debug build, but iPhone/iPad Release builds leave it out: there it is an Apple-hosted asset pack the system downloads after install (`EnglishModelAssetPack`, `EnglishModelDownload`, the `VoicelyAssetDownloader` extension). `scripts/package-english-model-pack.sh` builds the pack (`build/asset-packs/EnglishSpeechModel.aar`), which is uploaded to App Store Connect separately from the app. Until it is on the device, Qwen3-ASR does Parakeet's work.
+
 ```bash
 # Build for Mac (Catalyst) — the default development target
 xcodebuild -scheme Voicely -configuration Debug -destination 'platform=macOS,variant=Mac Catalyst' build

@@ -64,5 +64,11 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>BAAppGroupID</key>
+	<string>group.com.hellotaotao.Voicely</string>
+	<key>BAHasManagedAssetPacks</key>
+	<true/>
+	<key>BAUsesAppleHosting</key>
+	<true/>
 </dict>
 </plist>

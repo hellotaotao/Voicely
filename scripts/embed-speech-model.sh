@@ -2,7 +2,10 @@
 # Xcode build phase: copies the speech models into the app's resources.
 #   SpeechModel/         Qwen3-ASR: the MLX weights in the Mac (Catalyst) app,
 #                        the CoreML models in the iPhone and iPad app
-#   EnglishSpeechModel/  Parakeet Ultra (CoreML), the same on every platform
+#   EnglishSpeechModel/  Parakeet Ultra (CoreML): in the Mac app and in Debug
+#                        builds; iPhone and iPad Release builds download it as
+#                        an Apple-hosted asset pack instead
+#                        (scripts/package-english-model-pack.sh)
 #   SpeakerDiarizationModel/  Nemotron 3 (CoreML), the same on every platform
 # The source folders come from scripts/fetch-speech-models.sh.
 set -euo pipefail
@@ -49,7 +52,22 @@ embed() {
 }
 
 embed "$VARIANT" SpeechModel
-embed parakeet EnglishSpeechModel
+# EMBED_ENGLISH_SPEECH_MODEL=YES or NO overrides the default, e.g. to try the
+# download on an iPhone with a Debug build.
+EMBED_ENGLISH="${EMBED_ENGLISH_SPEECH_MODEL:-}"
+if [[ -z "$EMBED_ENGLISH" ]]; then
+    if [[ "${IS_MACCATALYST:-NO}" == "YES" || "$CONFIGURATION" == "Debug" ]]; then
+        EMBED_ENGLISH=YES
+    else
+        EMBED_ENGLISH=NO
+    fi
+fi
+if [[ "$EMBED_ENGLISH" == "YES" ]]; then
+    embed parakeet EnglishSpeechModel
+else
+    rm -rf "$RESOURCES/EnglishSpeechModel" "$DERIVED_FILE_DIR/speech-model-parakeet.stamp"
+    echo "Left the English speech model out: it comes as an asset pack"
+fi
 embed nemotron SpeakerDiarizationModel
 if ! verify_nemotron "$RESOURCES/SpeakerDiarizationModel"; then
     echo "error: Bundled Nemotron model is invalid. Clean the build folder and rebuild."

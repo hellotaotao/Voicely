@@ -306,9 +306,8 @@ final class RecordingSession: ObservableObject {
     func startRecordingFromQuickAction() {
         guard !audioService.isRecording, !isStartingRecording else { return }
 
-        // A recording with English chosen runs on Parakeet alone.
-        let key = transcriptionService.languageSettingKey()
-        let needsQwen = EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)) != .english
+        // A recording with English chosen runs on Parakeet alone, once it is on the device.
+        let needsQwen = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: nil)) != .english
         if needsQwen && !isModelLoaded && !isModelLoading {
             Task {
                 _ = await transcriptionService.loadSpeechModel()

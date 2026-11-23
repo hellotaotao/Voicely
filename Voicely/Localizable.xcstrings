@@ -2578,6 +2578,296 @@
         }
       }
     },
+    "Download now": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jetzt laden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descargar ahora"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Télécharger maintenant"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐダウンロード"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 다운로드"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baixar agora"
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在下載"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在下载"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在下載"
+          }
+        }
+      }
+    },
+    "downloading %lld%%": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "wird geladen: %lld %%"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "descargando %lld %%"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "téléchargement : %lld %%"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ダウンロード中 %lld%%"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다운로드 중 %lld%%"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "baixando %lld%%"
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在下載 %lld%%"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在下载 %lld%%"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在下載 %lld%%"
+          }
+        }
+      }
+    },
+    "downloads on Wi‑Fi": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "wird über WLAN geladen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "se descargará con Wi‑Fi"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "téléchargement en Wi‑Fi"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wi‑Fi 接続時にダウンロード"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wi‑Fi에 연결되면 다운로드"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "será baixado no Wi‑Fi"
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連上 Wi‑Fi 後下載"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连上 Wi‑Fi 后下载"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連上 Wi‑Fi 後下載"
+          }
+        }
+      }
+    },
+    "English & European model · downloading %lld%%": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modell für Englisch & europäische Sprachen · wird geladen: %lld %%"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modelo de inglés e idiomas europeos · descargando %lld %%"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modèle anglais et langues européennes · téléchargement : %lld %%"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英語とヨーロッパの言語のモデル · ダウンロード中 %lld%%"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "영어 및 유럽 언어 모델 · 다운로드 중 %lld%%"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modelo de inglês e idiomas europeus · baixando %lld%%"
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英文和歐洲語言模型 · 正在下載 %lld%%"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英语和欧洲语言模型 · 正在下载 %lld%%"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英文和歐洲語言模型 · 正在下載 %lld%%"
+          }
+        }
+      }
+    },
+    "English & European model · downloads on Wi‑Fi (%@)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modell für Englisch & europäische Sprachen · wird über WLAN geladen (%@)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modelo de inglés e idiomas europeos · se descargará con Wi‑Fi (%@)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modèle anglais et langues européennes · téléchargement en Wi‑Fi (%@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英語とヨーロッパの言語のモデル · Wi‑Fi 接続時にダウンロード（%@）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "영어 및 유럽 언어 모델 · Wi‑Fi에 연결되면 다운로드(%@)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modelo de inglês e idiomas europeus · será baixado no Wi‑Fi (%@)"
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英文和歐洲語言模型 · 連上 Wi‑Fi 後下載（%@）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英语和欧洲语言模型 · 连上 Wi‑Fi 后下载（%@）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英文和歐洲語言模型 · 連上 Wi‑Fi 後下載（%@）"
+          }
+        }
+      }
+    },
     "Rename %@": {
       "localizations": {
         "zh-HK": {
@@ -20981,6 +21271,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "最多可以建立 %lld 個資料夾。名稱短一點，在資料夾列裡顯示得最好。"
+          }
+        }
+      }
+    },
+    "You can record and transcribe now. Once it's in, English & European languages get much faster and more accurate.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du kannst schon jetzt aufnehmen und transkribieren. Sobald es geladen ist, werden Englisch und europäische Sprachen viel schneller und genauer transkribiert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ya puedes grabar y transcribir. Cuando termine la descarga, el inglés y los idiomas europeos se transcribirán mucho más rápido y con más precisión."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous pouvez déjà enregistrer et transcrire. Une fois le modèle téléchargé, l’anglais et les langues européennes sont transcrits bien plus vite et plus précisément."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐ録音と文字起こしができます。ダウンロードが終わると、英語とヨーロッパの言語の文字起こしがずっと速く、より正確になります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 바로 녹음하고 받아쓸 수 있습니다. 다운로드가 끝나면 영어 및 유럽 언어를 훨씬 빠르고 더 정확하게 받아씁니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você já pode gravar e transcrever. Quando o download terminar, o inglês e os idiomas europeus serão transcritos muito mais rápido e com mais precisão."
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在就能錄音和轉寫。下載好後，英文和歐洲語言會轉得快很多，也更準。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就能录音和转写。下好后，英语和欧洲语言会转得快很多，也更准。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在就能錄音和轉寫。下載好後，英文和歐洲語言會轉得快很多，也更準。"
           }
         }
       }

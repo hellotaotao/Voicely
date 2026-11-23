@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import Combine
 import CoreML
 import os
 import SwiftData
@@ -181,12 +182,17 @@ struct ContentView: View {
                     await transcriptionService.resumeSavedTranscriptionsInForeground()
                     await processQueuedTranscriptionsIfReady()
                     resumePendingImports()
+                    EnglishModelDownload.shared.start()
                     startModelWarmUp()
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .modelLoadedNotification)) { _ in
             resumeWaitingWork()
+        }
+        .onReceive(EnglishModelDownload.shared.$isReady.removeDuplicates().dropFirst()) { isReady in
+            // A downloaded model is compiled for the Neural Engine ahead, as after an update.
+            if isReady && !AppRuntime.isIsolatedFromUserData { startModelWarmUp() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .transcriptionCanResumeNotification)) { _ in
             resumeWaitingWork()
@@ -902,6 +908,7 @@ struct ContentView: View {
         } else {
             await processQueuedTranscriptionsIfReady()
         }
+        EnglishModelDownload.shared.start()
         startModelWarmUp()
     }
 
@@ -1478,6 +1485,7 @@ struct RecordingControls: View {
     @ObservedObject var session: RecordingSession
     @ObservedObject var audioService: AudioRecordingService
     @ObservedObject var transcriptionService: TranscriptionService
+    @ObservedObject private var englishModel = EnglishModelDownload.shared
     let startRecordingQuickActionID: UUID
     let togglePauseQuickActionID: UUID
     let recordingInterruptionID: UUID
@@ -1516,9 +1524,10 @@ struct RecordingControls: View {
 
     private var statusTint: Color {
         if audioService.microphonePermission == .denied { return .orange }
-        // English goes to Parakeet, which loads when a recording needs it.
-        if nextRecordingLanguageName != nil {
-            return ParakeetEnglishEngine.isAvailable ? .green : .secondary
+        // English goes to Parakeet, which loads when a recording needs it;
+        // until it is on the device, Qwen3-ASR takes its work.
+        if nextRecordingLanguageName != nil && englishModel.isReady {
+            return .green
         }
         guard let modelManager else { return .secondary }
         switch modelManager.modelState {
@@ -1630,7 +1639,7 @@ struct RecordingControls: View {
     }
 
     private func languageLabel(for key: String) -> String {
-        SpeechLanguageCopy.name(for: key)
+        SpeechLanguageCopy.name(for: key, englishModel: englishModel.display)
     }
 
     private var languageChoice: Binding<String> {

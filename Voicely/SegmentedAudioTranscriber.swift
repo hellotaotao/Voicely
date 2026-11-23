@@ -663,7 +663,8 @@ final class SegmentedAudioTranscriber {
     ) async -> (slices: [LanguageTaggedSlice], replaced: [Int])? {
         guard !parakeetFirst else { return nil }
         let mode = EnglishStretchRouting.Mode(languageHint: transcriptionService.languageHint(for: note.id))
-        let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
+        let stretches = await EnglishStretchRouting.stretchesInBackground(
+            in: slices, mode: mode, englishModelIsReady: transcriptionService.englishModelIsReady())
         guard !stretches.isEmpty else { return nil }
         if let telemetrySession { transcriptionService.recordModel(.parakeet, session: telemetrySession) }
         await transcriptionService.releaseQwenBeforeEnglishStretches(of: note.id)

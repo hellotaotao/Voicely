@@ -239,7 +239,7 @@ struct FirstLaunchOnboardingView: View {
                     welcomeIntro(isWide: true)
                     HStack(spacing: m(22)) {
                         continueButton(fullWidth: false)
-                        statusLine
+                        statusLine(centered: false)
                     }
                     .padding(.top, m(56))
                 }
@@ -259,7 +259,7 @@ struct FirstLaunchOnboardingView: View {
                 welcomeIntro(isWide: false)
                 Spacer(minLength: m(40))
                 VStack(spacing: m(16)) {
-                    statusLine
+                    statusLine(centered: true)
                         .frame(maxWidth: .infinity)
                     continueButton(fullWidth: true)
                 }
@@ -332,7 +332,22 @@ struct FirstLaunchOnboardingView: View {
         .accessibilityIdentifier(AccessibilityIdentifiers.Onboarding.nextButton)
     }
 
-    private var statusLine: some View {
+    /// The speech model's status, and under it the English & European
+    /// model's download while it is not on the device.
+    private func statusLine(centered: Bool) -> some View {
+        VStack(alignment: centered ? .center : .leading, spacing: m(10)) {
+            modelStatusLine
+            EnglishModelDownloadStatusView(
+                font: font(15),
+                footnoteFont: font(13),
+                alignment: centered ? .center : .leading
+            )
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: m(420), alignment: centered ? .center : .leading)
+        }
+    }
+
+    private var modelStatusLine: some View {
         Group {
             switch modelSetupStatus.visualState {
             case .ready:

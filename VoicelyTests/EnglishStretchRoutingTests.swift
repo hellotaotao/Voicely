@@ -536,12 +536,14 @@ struct EnglishStretchTranscriptionTests {
         qwen: TranscriptionOutcome = .noSpeech,
         savedFrame: Int64? = nil,
         savedAuthors: (parakeet: Bool, qwen: Bool)? = nil,
+        englishModelIsReady: Bool = true,
         parakeet: @escaping () throws -> [TimedWord]
     ) async throws -> (note: VoiceNote, service: TranscriptionService, stretches: [(Int64, Int64)], qwenCalls: Int, released: Bool,
                        qwenCallsAtFirstRelease: Int?) {
         let url = try SegmentedAudioTestSupport.makeSilentCAF(seconds: seconds)
         defer { try? FileManager.default.removeItem(at: url) }
         let service = TranscriptionService()
+        service.englishModelIsReady = { englishModelIsReady }
         let store = SegmentedAudioTestSupport.makeStore()
         let transcriber = SegmentedAudioTestSupport.makeTranscriber(store: store, service: service)
         transcriber.nextCutFrame = { _, start, _ in start + 14 * 16_000 }
@@ -593,6 +595,21 @@ struct EnglishStretchTranscriptionTests {
         #expect(run.released)
         // The choice was for this run: a later Re-transcribe follows the setting.
         #expect(run.service.languageHint(for: run.note.id) == nil)
+    }
+
+    /// On an iPhone that has not downloaded Parakeet yet, English & European
+    /// goes to Qwen3-ASR, which names the language itself.
+    @Test(arguments: [10.0, 42.0])
+    @MainActor func englishChoiceGoesToQwenUntilParakeetIsDownloaded(seconds: Double) async throws {
+        let qwen = TranscriptionOutcome.transcribed(TranscriptionResult(text: "qwen", duration: 1, modelIdentifier: "qwen3-asr", language: "English"))
+        let run = try await Self.importWithEnglishChosen(seconds: seconds, qwen: qwen, englishModelIsReady: false) {
+            Self.wordsAt4And20And40
+        }
+
+        #expect(run.qwenCalls > 0)
+        #expect(run.stretches.isEmpty)
+        #expect(!run.note.transcribedByParakeetAlone)
+        #expect(run.note.transcription.contains("qwen"))
     }
 
     @Test @MainActor func aSliceParakeetHeardNothingInHasNoSpeech() async throws {

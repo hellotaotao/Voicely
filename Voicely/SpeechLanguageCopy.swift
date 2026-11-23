@@ -12,6 +12,15 @@ enum SpeechLanguageCopy {
             : String(localized: "All supported languages")
     }
 
+    /// The choice's name in a language menu, with the English & European
+    /// model's download beside it while it is not on the device.
+    static func name(for key: String, englishModel display: EnglishModelDownloadDisplay) -> String {
+        let name = name(for: key)
+        guard Qwen3ASRDefaults.languageKey(key) == "english",
+              let suffix = EnglishModelDownloadCopy.choiceSuffix(for: display) else { return name }
+        return "\(name) · \(suffix)"
+    }
+
     /// The choice's name where only one line fits: the language button next to
     /// the record button and the recording's language row. The full names do
     /// not fit there on a 6.1-inch iPhone in English, French or German.

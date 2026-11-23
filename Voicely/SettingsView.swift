@@ -10,6 +10,7 @@ import CoreML
 
 struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
+    @ObservedObject private var englishModel = EnglishModelDownload.shared
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "auto"
     @Environment(\.dismiss) private var dismiss
     /// Quitting to apply a new interface language is held off while recording.
@@ -209,6 +210,8 @@ struct SettingsView: View {
                     }
                 }
 
+                EnglishModelDownloadStatusView()
+
                 modelActionButtons
             }
         }
@@ -216,9 +219,11 @@ struct SettingsView: View {
     }
 
     /// With English & European chosen every recording is transcribed by Parakeet, so the
-    /// card names it instead of Qwen3-ASR, which then only waits unloaded.
+    /// card names it instead of Qwen3-ASR, which then only waits unloaded. Until
+    /// Parakeet is on the device, Qwen3-ASR does its work and the card says so.
     private var usesEnglishEngine: Bool {
         EnglishStretchRouting.Mode(languageHint: Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: selectedLanguage)) == .english
+            && englishModel.isReady
     }
 
     private var activeModelName: String {
@@ -390,7 +395,7 @@ struct SettingsView: View {
                 set: { selectedLanguage = $0 }
             )) {
                 ForEach(Qwen3ASRDefaults.languageKeys, id: \.self) { language in
-                    Text(SpeechLanguageCopy.name(for: language)).tag(language)
+                    Text(SpeechLanguageCopy.name(for: language, englishModel: englishModel.display)).tag(language)
                 }
             }
             .pickerStyle(.menu)

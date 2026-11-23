@@ -10,6 +10,7 @@
 		AD5EEC110000000000000001 /* Qwen3ASR in Frameworks */ = {isa = PBXBuildFile; productRef = AD5EEC110000000000000002 /* Qwen3ASR */; };
 		AD5EEC110000000000000004 /* AudioCommon in Frameworks */ = {isa = PBXBuildFile; productRef = AD5EEC110000000000000005 /* AudioCommon */; };
 		AD5EEC11000000000000000A /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = AD5EEC11000000000000000B /* FluidAudio */; };
+		BA5E0D0100000000000000A1 /* VoicelyAssetDownloader.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = BA5E0D0100000000000000A4 /* VoicelyAssetDownloader.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		F983507DB4F14F0485AB85C8 /* VoicelyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -27,6 +28,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 2B1821F52DEB579E00550CD1;
 			remoteInfo = Voicely;
+		};
+		BA5E0D0100000000000000A2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2B1821EE2DEB579E00550CD1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BA5E0D0100000000000000AA;
+			remoteInfo = VoicelyAssetDownloader;
 		};
 		C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -49,12 +57,24 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA5E0D0100000000000000A3 /* Embed ExtensionKit Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(EXTENSIONS_FOLDER_PATH)";
+			dstSubfolderSpec = 16;
+			files = (
+				BA5E0D0100000000000000A1 /* VoicelyAssetDownloader.appex in Embed ExtensionKit Extensions */,
+			);
+			name = "Embed ExtensionKit Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		2B1821F62DEB579E00550CD1 /* Voicely.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Voicely.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822072DEB579F00550CD1 /* VoicelyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoicelyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BA5E0D0100000000000000A4 /* VoicelyAssetDownloader.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = VoicelyAssetDownloader.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Version.xcconfig; sourceTree = "<group>"; };
 		FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoicelyWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -73,6 +93,13 @@
 				Info.plist,
 			);
 			target = B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */;
+		};
+		BA5E0D0100000000000000A5 /* Exceptions for "VoicelyAssetDownloader" folder in "VoicelyAssetDownloader" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = BA5E0D0100000000000000AA /* VoicelyAssetDownloader */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -101,6 +128,14 @@
 		2B1822142DEB579F00550CD1 /* VoicelyUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = VoicelyUITests;
+			sourceTree = "<group>";
+		};
+		BA5E0D0100000000000000A6 /* VoicelyAssetDownloader */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				BA5E0D0100000000000000A5 /* Exceptions for "VoicelyAssetDownloader" folder in "VoicelyAssetDownloader" target */,
+			);
+			path = VoicelyAssetDownloader;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -137,6 +172,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA5E0D0100000000000000A7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -145,6 +187,7 @@
 			children = (
 				CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */,
 				2B1821F82DEB579E00550CD1 /* Voicely */,
+				BA5E0D0100000000000000A6 /* VoicelyAssetDownloader */,
 				27DAE2FC170948BF866FF301 /* VoicelyWidgets */,
 				2B18220A2DEB579F00550CD1 /* VoicelyTests */,
 				2B1822142DEB579F00550CD1 /* VoicelyUITests */,
@@ -157,6 +200,7 @@
 			children = (
 				2B1821F62DEB579E00550CD1 /* Voicely.app */,
 				FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */,
+				BA5E0D0100000000000000A4 /* VoicelyAssetDownloader.appex */,
 				2B1822072DEB579F00550CD1 /* VoicelyTests.xctest */,
 				2B1822112DEB579F00550CD1 /* VoicelyUITests.xctest */,
 			);
@@ -175,11 +219,13 @@
 				2B1821F42DEB579E00550CD1 /* Resources */,
 				AD5EEC110000000000000010 /* Embed Speech Model */,
 				8F8DDF41F0D64D8FB6CBA76B /* Embed Foundation Extensions */,
+				BA5E0D0100000000000000A3 /* Embed ExtensionKit Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				583A88150FA644DAB2FD9261 /* PBXTargetDependency */,
+				BA5E0D0100000000000000AB /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				2B1821F82DEB579E00550CD1 /* Voicely */,
@@ -262,6 +308,28 @@
 			productReference = FECB2EB41BD641798B6E019F /* VoicelyWidgets.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		BA5E0D0100000000000000AA /* VoicelyAssetDownloader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BA5E0D0100000000000000AE /* Build configuration list for PBXNativeTarget "VoicelyAssetDownloader" */;
+			buildPhases = (
+				BA5E0D0100000000000000A8 /* Sources */,
+				BA5E0D0100000000000000A7 /* Frameworks */,
+				BA5E0D0100000000000000A9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				BA5E0D0100000000000000A6 /* VoicelyAssetDownloader */,
+			);
+			name = VoicelyAssetDownloader;
+			packageProductDependencies = (
+			);
+			productName = VoicelyAssetDownloader;
+			productReference = BA5E0D0100000000000000A4 /* VoicelyAssetDownloader.appex */;
+			productType = "com.apple.product-type.extensionkit-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -285,6 +353,9 @@
 					};
 					B10F64286FD94C19AA7AA7E6 = {
 						CreatedOnToolsVersion = 16.4;
+					};
+					BA5E0D0100000000000000AA = {
+						CreatedOnToolsVersion = 27.2;
 					};
 				};
 			};
@@ -316,6 +387,7 @@
 			projectRoot = "";
 			targets = (
 				2B1821F52DEB579E00550CD1 /* Voicely */,
+				BA5E0D0100000000000000AA /* VoicelyAssetDownloader */,
 				B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */,
 				2B1822062DEB579F00550CD1 /* VoicelyTests */,
 				2B1822102DEB579F00550CD1 /* VoicelyUITests */,
@@ -339,6 +411,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		2B18220F2DEB579F00550CD1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BA5E0D0100000000000000A9 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -406,6 +485,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA5E0D0100000000000000A8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -423,6 +509,12 @@
 			isa = PBXTargetDependency;
 			target = B10F64286FD94C19AA7AA7E6 /* VoicelyWidgets */;
 			targetProxy = C29568E2CAE1404C8D0EE02F /* PBXContainerItemProxy */;
+		};
+		BA5E0D0100000000000000AB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = BA5E0D0100000000000000AA /* VoicelyAssetDownloader */;
+			targetProxy = BA5E0D0100000000000000A2 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -762,6 +854,62 @@
 			};
 			name = Release;
 		};
+		BA5E0D0100000000000000AC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = VoicelyAssetDownloader/VoicelyAssetDownloader.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = CU3VTR9MRH;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VoicelyAssetDownloader/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = VoicelyAssetDownloader;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.AssetDownloader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BA5E0D0100000000000000AD /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = CF91DEAD0000BEEF0000CAFE /* Config/Version.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = VoicelyAssetDownloader/VoicelyAssetDownloader.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = CU3VTR9MRH;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VoicelyAssetDownloader/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = VoicelyAssetDownloader;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.hellotaotao.Voicely.AssetDownloader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -806,6 +954,15 @@
 			buildConfigurations = (
 				1A530520BF4945668009DCAC /* Debug */,
 				B58C5CE205944E2AA656F1FB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BA5E0D0100000000000000AE /* Build configuration list for PBXNativeTarget "VoicelyAssetDownloader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BA5E0D0100000000000000AC /* Debug */,
+				BA5E0D0100000000000000AD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

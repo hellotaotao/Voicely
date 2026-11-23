@@ -1,0 +1,21 @@
+{
+	"assetPackID": "EnglishSpeechModel",
+	"downloadPolicy": {
+		"prefetch": {
+			"installationEventTypes": [
+				"firstInstallation",
+				"subsequentUpdate"
+			]
+		}
+	},
+	"fileSelectors": [
+		{
+			"directorySource": "Models/parakeet",
+			"directoryDestination": "EnglishSpeechModel"
+		}
+	],
+	"platforms": [
+		"iOS"
+	],
+	"sourceRoot": ".."
+}

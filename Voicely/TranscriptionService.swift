@@ -149,8 +149,18 @@ class TranscriptionService: ObservableObject {
     /// language, else the setting. Nil is auto-detect.
     func languageHint(for noteID: UUID?) -> String? {
         let key = noteID.flatMap { languageByNoteID[$0]?.key } ?? languageSettingKey()
-        return Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)
+        let hint = Qwen3ASRDefaults.languageHint(forSelectedLanguageKey: key)
+        // English & European before Parakeet is on the device (iPhone and iPad
+        // download it after install): Qwen3-ASR transcribes in its stead, on
+        // its own judgement of the language, and nothing goes to Parakeet.
+        if EnglishStretchRouting.Mode(languageHint: hint) == .english && !englishModelIsReady() {
+            return nil
+        }
+        return hint
     }
+
+    /// Whether Parakeet is on the device. Tests replace it.
+    var englishModelIsReady: () -> Bool = { ParakeetEnglishEngine.isAvailable }
 
     /// The language a new run of `note` uses unless the user picks another:
     /// the one it was last transcribed in, so a Chinese meeting is not run
@@ -1848,7 +1858,8 @@ private extension TranscriptionService {
         let duration = Double(info.totalFrames) / info.sampleRate
         let slices = [outcome.map { EnglishStretchRouting.onePassSlice($0, duration: duration) }
             ?? LanguageTaggedSlice(start: 0, end: duration, text: nil, language: nil)]
-        let stretches = await EnglishStretchRouting.stretchesInBackground(in: slices, mode: mode)
+        let stretches = await EnglishStretchRouting.stretchesInBackground(
+            in: slices, mode: mode, englishModelIsReady: englishModelIsReady())
         guard !stretches.isEmpty else { return nil }
         recordModel(.parakeet, session: session)
         await releaseQwenBeforeEnglishStretches(of: session.noteID)

@@ -7,7 +7,9 @@ import os
 /// post-training of Parakeet TDT 0.6B v3: transcribes
 /// the English stretches of a recording again after Qwen3-ASR has run, see
 /// `EnglishStretchRouting`, and recordings and files with English chosen,
-/// which skip Qwen3-ASR. It ships inside the app like Qwen3-ASR, is loaded
+/// which skip Qwen3-ASR. The Mac app carries it; iPhone and iPad download it
+/// after install (`EnglishModelAssetPack`), and until it is in, Qwen3-ASR
+/// does its work (`TranscriptionService.languageHint(for:)`). It is loaded
 /// only while it works, or while a recording with English chosen goes on, and
 /// unloaded afterwards, and runs on every platform the same way, so the phone
 /// can use it while locked.
@@ -37,13 +39,20 @@ actor ParakeetEnglishEngine {
     /// by scripts/embed-speech-model.sh.
     nonisolated static let bundledDirectoryName = "EnglishSpeechModel"
 
-    /// Where the model is read from. `VOICELY_PARAKEET_DIRECTORY` replaces the
-    /// bundled folder for tests.
+    nonisolated static var vocabularyFileName: String { ModelNames.ASR.vocabularyFile }
+
+    /// Where the model is read from: the folder in the app's resources (the
+    /// Mac app and Debug builds), else the downloaded asset pack (iPhone and
+    /// iPad, see `EnglishModelAssetPack`). Before the pack is in, the bundled
+    /// path, which the error then names. `VOICELY_PARAKEET_DIRECTORY` replaces
+    /// both for tests.
     nonisolated static func defaultModelDirectory(bundle: Bundle = .main) -> URL? {
         if let override = ProcessInfo.processInfo.environment["VOICELY_PARAKEET_DIRECTORY"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        return bundle.resourceURL?.appendingPathComponent(bundledDirectoryName, isDirectory: true)
+        let bundled = bundle.resourceURL?.appendingPathComponent(bundledDirectoryName, isDirectory: true)
+        if let bundled, isComplete(bundled) { return bundled }
+        return EnglishModelAssetPack.localDirectory() ?? bundled
     }
 
     nonisolated static func isComplete(_ directory: URL, fileManager: FileManager = .default) -> Bool {

@@ -11,6 +11,9 @@ enum EnglishModelDownloadDisplay: Equatable {
     case downloading(percent: Int)
     /// Waits for Wi‑Fi, with a button to download now over any network.
     case waitingForWiFi(bytes: Int64)
+    /// On Wi‑Fi, but the download stopped (the system broke it off), with a
+    /// button to try again.
+    case stopped(bytes: Int64)
 }
 
 /// The rules for the English & European model's download.
@@ -22,15 +25,20 @@ enum EnglishModelDownloadPolicy {
         isOnline && !isExpensive && !isConstrained
     }
 
-    /// `progress` is non-nil while a download runs.
-    static func display(isSupported: Bool, isReady: Bool, progress: Double?, downloadSize: Int64?) -> EnglishModelDownloadDisplay {
+    /// `progress` is non-nil while a download runs. `onAutomaticNetwork`:
+    /// the device is on a network automatic downloads take, so a model that
+    /// is not downloading stopped rather than waits for Wi‑Fi.
+    static func display(
+        isSupported: Bool, isReady: Bool, progress: Double?, downloadSize: Int64?, onAutomaticNetwork: Bool = false
+    ) -> EnglishModelDownloadDisplay {
         guard isSupported, !isReady else { return .hidden }
         if let progress {
             // Never 100% before the files are usable.
             let percent = Int((min(max(progress, 0), 1) * 100).rounded(.down))
             return .downloading(percent: min(percent, 99))
         }
-        return .waitingForWiFi(bytes: downloadSize ?? EnglishModelAssetPack.fallbackDownloadSize)
+        let bytes = downloadSize ?? EnglishModelAssetPack.fallbackDownloadSize
+        return onAutomaticNetwork ? .stopped(bytes: bytes) : .waitingForWiFi(bytes: bytes)
     }
 
     /// The download size the way the waiting line shows it: in tens of MB
@@ -58,6 +66,8 @@ final class EnglishModelDownload: ObservableObject {
     /// 0...1 while a download runs, nil otherwise.
     @Published private(set) var progress: Double?
     @Published private(set) var downloadSize: Int64?
+    /// On a network automatic downloads take (Wi‑Fi outside Low Data Mode).
+    @Published private(set) var onAutomaticNetwork = false
 
     let isSupported: Bool
     private let isModelAvailable: () -> Bool
@@ -76,7 +86,8 @@ final class EnglishModelDownload: ObservableObject {
 
     var display: EnglishModelDownloadDisplay {
         EnglishModelDownloadPolicy.display(
-            isSupported: isSupported, isReady: isReady, progress: progress, downloadSize: downloadSize)
+            isSupported: isSupported, isReady: isReady, progress: progress, downloadSize: downloadSize,
+            onAutomaticNetwork: onAutomaticNetwork)
     }
 
     init(
@@ -129,6 +140,8 @@ final class EnglishModelDownload: ObservableObject {
         self.isOnline = isOnline
         self.isExpensive = isExpensive
         self.isConstrained = isConstrained
+        onAutomaticNetwork = EnglishModelDownloadPolicy.allowsAutomaticDownload(
+            isOnline: isOnline, isExpensive: isExpensive, isConstrained: isConstrained)
         if changed { automaticAttemptFailed = false }
         requestAutomaticallyIfAllowed()
     }

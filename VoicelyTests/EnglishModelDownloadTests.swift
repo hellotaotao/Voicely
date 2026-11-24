@@ -38,6 +38,32 @@ struct EnglishModelDownloadTests {
                 == .waitingForWiFi(bytes: EnglishModelAssetPack.fallbackDownloadSize))
     }
 
+    @Test func onWiFiANotDownloadingModelStoppedRatherThanWaits() {
+        #expect(EnglishModelDownloadPolicy.display(
+            isSupported: true, isReady: false, progress: nil, downloadSize: 700_000_000, onAutomaticNetwork: true)
+                == .stopped(bytes: 700_000_000))
+        #expect(EnglishModelDownloadPolicy.display(
+            isSupported: true, isReady: false, progress: 0.3, downloadSize: nil, onAutomaticNetwork: true)
+                == .downloading(percent: 30))
+        #expect(EnglishModelDownloadCopy.line(for: .stopped(bytes: 632_000_000))
+                == "English & European model · download stopped (630 MB)")
+        #expect(SpeechLanguageCopy.name(for: "english", englishModel: .stopped(bytes: 1))
+                == "English & European (faster) · download stopped")
+        #expect(EnglishModelDownloadDisplay.stopped(bytes: 1).offersDownloadNow)
+        #expect(!EnglishModelDownloadDisplay.downloading(percent: 3).offersDownloadNow)
+    }
+
+    /// Until the English & European model is in, Qwen3-ASR does its work, and
+    /// the re-transcribe hint says so.
+    @Test @MainActor func theRetranscribeHintNamesTheModelThatWillRun() {
+        #expect(VoiceNoteDetailView.engineDisplayName(languageKey: "english", englishModelReady: false)
+                == Qwen3ASRDefaults.modelDisplayName)
+        #expect(VoiceNoteDetailView.engineDisplayName(languageKey: "english", englishModelReady: true)
+                == SpeechModelKind.parakeet.displayName)
+        #expect(VoiceNoteDetailView.engineDisplayName(languageKey: "auto", englishModelReady: true)
+                == Qwen3ASRDefaults.modelDisplayName)
+    }
+
     @Test func theSizeReadsInTensOfMegabytes() {
         #expect(EnglishModelDownloadPolicy.sizeText(bytes: 632_200_000) == "630 MB")
         #expect(EnglishModelDownloadPolicy.sizeText(bytes: 636_000_000) == "640 MB")
@@ -123,7 +149,8 @@ struct EnglishModelDownloadTests {
         await download.waitForRequest()
         #expect(fake.requests == 1)
         #expect(!download.isReady)
-        #expect(download.display == .waitingForWiFi(bytes: EnglishModelAssetPack.fallbackDownloadSize))
+        // On Wi‑Fi it says the download stopped, not that it waits for Wi‑Fi.
+        #expect(download.display == .stopped(bytes: EnglishModelAssetPack.fallbackDownloadSize))
 
         // The same network again does not retry.
         download.networkChanged(isOnline: true, isExpensive: false, isConstrained: false)

@@ -2065,7 +2065,8 @@ struct VoiceNoteDetailView: View {
               let current = note.transcriptionModelDisplayName else {
             return nil
         }
-        let next = Self.engineDisplayName(languageKey: retranscribeLanguage.key)
+        let next = Self.engineDisplayName(
+            languageKey: retranscribeLanguage.key, englishModelReady: EnglishModelDownload.shared.isReady)
         guard next != current else { return nil }
         return String(localized: "Re-transcribe will use \(next)")
     }
@@ -2086,9 +2087,11 @@ struct VoiceNoteDetailView: View {
         SpeechLanguageCopy.retranscribeTitle(for: languageKey)
     }
 
-    /// The engine that writes the text for `languageKey`.
-    static func engineDisplayName(languageKey: String) -> String {
-        languageKey == "english" ? SpeechModelKind.parakeet.displayName : Qwen3ASRDefaults.modelDisplayName
+    /// The engine that writes the text for `languageKey`: Qwen3-ASR takes
+    /// English & European too until that model is on the device.
+    static func engineDisplayName(languageKey: String, englishModelReady: Bool) -> String {
+        languageKey == "english" && englishModelReady
+            ? SpeechModelKind.parakeet.displayName : Qwen3ASRDefaults.modelDisplayName
     }
 
     private var retranscribeConfirmationMessage: String {

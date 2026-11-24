@@ -46,12 +46,21 @@ enum EnglishModelAssetPack {
         if let cached = resolvedDirectory.withLock({ $0 }) { return cached }
         #if canImport(BackgroundAssets) && !targetEnvironment(macCatalyst)
         guard #available(iOS 26, *) else { return nil }
-        // The system lays the pack's files out under one root; asking for one
-        // file gives the folder the rest sit in.
-        guard let vocabulary = try? AssetPackManager.shared.url(
-            for: FilePath("\(folderName)/\(ParakeetEnglishEngine.vocabularyFileName)")) else { return nil }
-        let directory = vocabulary.deletingLastPathComponent()
-        guard ParakeetEnglishEngine.isComplete(directory) else { return nil }
+        // The system hands the app only the items it asks for: asking for
+        // one file of the folder stages that file alone (seen on an iPhone,
+        // 1.3.0 build 14), so ask for the whole folder.
+        let directory: URL
+        do {
+            directory = try AssetPackManager.shared.url(for: FilePath(folderName))
+        } catch {
+            log.notice("event=localDirectoryMissing error=\(String(describing: error), privacy: .public)")
+            return nil
+        }
+        guard ParakeetEnglishEngine.isComplete(directory) else {
+            let present = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            log.error("event=localDirectoryIncomplete path=\(directory.path, privacy: .public) items=\(present.sorted().joined(separator: ","), privacy: .public)")
+            return nil
+        }
         resolvedDirectory.withLock { $0 = directory }
         return directory
         #else

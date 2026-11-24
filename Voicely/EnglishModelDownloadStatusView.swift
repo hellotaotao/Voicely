@@ -14,6 +14,9 @@ enum EnglishModelDownloadCopy {
         case .waitingForWiFi(let bytes):
             let size = EnglishModelDownloadPolicy.sizeText(bytes: bytes)
             return String(localized: "English & European model · downloads on Wi‑Fi (\(size))")
+        case .stopped(let bytes):
+            let size = EnglishModelDownloadPolicy.sizeText(bytes: bytes)
+            return String(localized: "English & European model · download stopped (\(size))")
         }
     }
 
@@ -26,11 +29,23 @@ enum EnglishModelDownloadCopy {
             return String(localized: "downloading \(percent)%")
         case .waitingForWiFi:
             return String(localized: "downloads on Wi‑Fi")
+        case .stopped:
+            return String(localized: "download stopped")
         }
     }
 
     static var footnote: String {
         String(localized: "You can record and transcribe now. Once it's in, English & European languages get much faster and more accurate.")
+    }
+}
+
+extension EnglishModelDownloadDisplay {
+    /// Whether the status line carries a Download now button.
+    var offersDownloadNow: Bool {
+        switch self {
+        case .waitingForWiFi, .stopped: return true
+        case .hidden, .downloading: return false
+        }
     }
 }
 
@@ -58,7 +73,7 @@ struct EnglishModelDownloadStatusView: View {
                     Text(line)
                         .monospacedDigit()
                         .fixedSize(horizontal: false, vertical: true)
-                    if case .waitingForWiFi = display {
+                    if display.offersDownloadNow {
                         Button(String(localized: "Download now")) {
                             download.downloadNow()
                         }

@@ -2694,6 +2694,64 @@
         }
       }
     },
+    "download stopped": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download angehalten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "descarga detenida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "téléchargement interrompu"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ダウンロードが止まりました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다운로드 중단됨"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "download interrompido"
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下載中斷"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载中断"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下載中斷"
+          }
+        }
+      }
+    },
     "downloads on Wi‑Fi": {
       "localizations": {
         "de": {
@@ -2806,6 +2864,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "英文和歐洲語言模型 · 正在下載 %lld%%"
+          }
+        }
+      }
+    },
+    "English & European model · download stopped (%@)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modell für Englisch & europäische Sprachen · Download angehalten (%@)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modelo de inglés e idiomas europeos · descarga detenida (%@)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modèle anglais et langues européennes · téléchargement interrompu (%@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英語とヨーロッパの言語のモデル · ダウンロードが止まりました（%@）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "영어 및 유럽 언어 모델 · 다운로드 중단됨(%@)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modelo de inglês e idiomas europeus · download interrompido (%@)"
+          }
+        },
+        "zh-HK": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英文和歐洲語言模型 · 下載中斷（%@）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英语和欧洲语言模型 · 下载中断（%@）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英文和歐洲語言模型 · 下載中斷（%@）"
           }
         }
       }
